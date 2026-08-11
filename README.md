@@ -1,0 +1,107 @@
+# Droplets efímeros en DigitalOcean
+
+Lanza un Droplet bajo demanda, trabaja en él y destrúyelo. Un único script sin
+dependencias: sólo Python 3.9+ y `ssh`.
+
+## El droplet que se crea
+
+`s-2vcpu-4gb` — **2 vCPU · 4 GB RAM · 80 GB SSD · $24/mes** ($0.036/hora).
+
+En DigitalOcean el disco **no se elige por separado**: viene fijo con el plan.
+Los 80 GB son el mínimo que acompaña a 4 GB de RAM en la gama Basic. La única
+opción de 4 GB con disco pequeño (`c-2`, 25 GB) es CPU-Optimized y cuesta
+$42/mes, así que pedir menos disco saldría más caro. Detalle en
+[docs/digitalocean/droplets-api.md](docs/digitalocean/droplets-api.md).
+
+## Puesta en marcha (esta máquina)
+
+```bash
+cp .env.example .env          # y pon tu token dentro
+python scripts/do_droplet.py keygen        # par de claves ed25519 dedicado
+python scripts/do_droplet.py register-key  # lo sube a tu cuenta de DO
+python scripts/do_droplet.py launch
+```
+
+`launch` crea el droplet, espera a que la acción termine, espera a que sshd
+acepte conexiones y te imprime la IP y el comando de conexión.
+
+## Acceso desde tu otra laptop
+
+Están contempladas las dos formas. **La segunda es la recomendada.**
+
+### Opción A — llevarte la misma clave
+
+Rápida, pero la clave privada viaja. Cópiala por un canal seguro (memoria USB,
+gestor de contraseñas; **nunca** por email o chat) y arregla los permisos:
+
+```bash
+# en la otra laptop
+mkdir -p ~/.ssh && cp /ruta/do_droplet ~/.ssh/
+chmod 600 ~/.ssh/do_droplet          # Linux / macOS
+```
+
+```powershell
+# en Windows, si SSH se queja de permisos "too open"
+icacls "$env:USERPROFILE\.ssh\do_droplet" /inheritance:r /grant:r "$env:USERNAME:R"
+```
+
+### Opción B — una clave propia por máquina (recomendada)
+
+Cada laptop genera su clave y la registra. La privada nunca se mueve de su
+máquina, y si pierdes una puedes revocarla sola sin afectar a la otra.
+
+```bash
+# en la otra laptop: clona el repo, crea su .env con el mismo token, y luego
+python scripts/do_droplet.py keygen
+python scripts/do_droplet.py register-key --name laptop-2
+```
+
+Con `DO_SSH_KEYS` vacío en `.env` (el valor por defecto), **cada droplet nuevo
+embebe todas las claves registradas en la cuenta**, así que a partir de ese
+momento ambas máquinas entran sin más.
+
+Si el droplet **ya estaba corriendo** cuando registraste la segunda clave, no la
+tiene: la lista de claves se fija en el arranque. Añádela en caliente desde la
+máquina que sí tiene acceso:
+
+```bash
+python scripts/do_droplet.py ssh --cmd "echo 'ssh-ed25519 AAAA... laptop-2' >> ~/.ssh/authorized_keys"
+```
+
+## Uso diario
+
+```bash
+python scripts/do_droplet.py launch            # crear y esperar
+python scripts/do_droplet.py list              # qué hay vivo
+python scripts/do_droplet.py ssh               # conectar
+python scripts/do_droplet.py ip                # sólo la IP
+python scripts/do_droplet.py destroy           # destruir (pide confirmación)
+python scripts/do_droplet.py destroy --tag ephemeral --yes   # limpieza total
+```
+
+Antes de gastar nada, comprueba qué se va a enviar:
+
+```bash
+python scripts/do_droplet.py launch --dry-run
+```
+
+Descubrir slugs vigentes en lugar de fiarte de los del `.env`:
+
+```bash
+python scripts/do_droplet.py sizes --region nyc1
+python scripts/do_droplet.py regions
+python scripts/do_droplet.py images --filter ubuntu
+```
+
+## Coste
+
+Se factura **por segundo mientras el droplet exista**, no por uso. Apagarlo no
+para el cobro: hay que **destruirlo**. Todos se crean con el tag `ephemeral`,
+así que un `destroy --tag ephemeral --yes` limpia cualquier resto olvidado.
+
+## Qué queda configurado dentro
+
+[cloud-init.yaml](cloud-init.yaml): usuario `deploy` con sudo y tus claves,
+autenticación por contraseña desactivada, `ufw` abierto sólo para SSH,
+`fail2ban`, y `git`/`curl` instalados. `/var/lib/cloud/READY` aparece cuando el
+arranque terminó de verdad (`cloud-init status --wait` para esperarlo).

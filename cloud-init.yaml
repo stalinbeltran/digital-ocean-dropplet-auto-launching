@@ -1,0 +1,37 @@
+#cloud-config
+# Configuración de primer arranque del droplet.
+# El lanzador sustituye la línea marcadora de más abajo por todas las claves
+# públicas seleccionadas, de modo que cada máquina desde la que trabajes pueda
+# entrar sin tocar nada dentro del droplet.
+
+users:
+  - name: deploy
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      # {{SSH_AUTHORIZED_KEYS}}
+
+# Sin contraseñas por SSH: sólo clave pública.
+ssh_pwauth: false
+disable_root: false
+
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - curl
+  - ca-certificates
+  - ufw
+  - fail2ban
+
+runcmd:
+  # Cortafuegos mínimo: sólo SSH.
+  - ufw allow OpenSSH
+  - ufw --force enable
+  - systemctl enable --now fail2ban
+  # Centinela: su existencia significa que el arranque terminó de verdad.
+  # Compruébalo con: ssh <droplet> 'cloud-init status --wait'
+  - touch /var/lib/cloud/READY
+
+final_message: "Droplet listo tras $UPTIME segundos."

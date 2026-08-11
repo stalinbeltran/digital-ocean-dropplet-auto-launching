@@ -8,6 +8,20 @@ Automatización del lanzamiento de **Droplets de DigitalOcean** bajo demanda: cr
 esperar a que esté operativa, usarla y destruirla. El repo está en fase inicial (aún sin código de
 aplicación); lo primero que existe es la documentación de la API.
 
+## Estructura
+
+- [scripts/do_droplet.py](scripts/do_droplet.py) — CLI de todo el ciclo de vida
+  (`keygen`, `register-key`, `sizes`, `launch`, `list`, `ssh`, `destroy`).
+  **Sólo stdlib a propósito**: debe correr en cualquier máquina con Python 3.9+
+  sin `pip install`. No introduzcas dependencias sin motivo fuerte.
+- [cloud-init.yaml](cloud-init.yaml) — configuración de primer arranque. El
+  lanzador sustituye la línea `# {{SSH_AUTHORIZED_KEYS}}` respetando su sangría.
+- [.env.example](.env.example) — plantilla de configuración; `.env` está ignorado.
+- [README.md](README.md) — uso, incluido el flujo multi-máquina.
+
+Droplet por defecto: `s-2vcpu-4gb` (2 vCPU / 4 GB / 80 GB SSD / $24 mes). El disco
+no se elige aparte en DigitalOcean; va fijo con el plan.
+
 ## Documentación de referencia
 
 **[docs/digitalocean/droplets-api.md](docs/digitalocean/droplets-api.md)** — referencia completa y
