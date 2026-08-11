@@ -1,0 +1,29 @@
+# Normaliza a LF en el repositorio para todo lo textual.
+* text=auto eol=lf
+
+# Ficheros que se ejecutan o se interpretan en Linux (droplets, cloud-init):
+# CRLF los rompe, así que se fuerza LF también en el working copy de Windows.
+*.sh      text eol=lf
+*.bash    text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.tf      text eol=lf
+*.tfvars  text eol=lf
+*.py      text eol=lf
+*.service text eol=lf
+Dockerfile text eol=lf
+.env.example text eol=lf
+
+# Scripts propios de Windows: CRLF.
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binarios: sin conversión.
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.gz  binary
+*.zip binary
