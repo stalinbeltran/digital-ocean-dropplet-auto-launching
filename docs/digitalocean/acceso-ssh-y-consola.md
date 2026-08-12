@@ -40,6 +40,23 @@ Contraprueba de red, por si acaso: si conectas al 443 de una **IP inexistente**
 (`198.51.100.77`), hay un proxy transparente interceptando el 443 y cualquier
 prueba contra ese puerto miente.
 
+### Cuidado: un proxy hace que un puerto cerrado parezca abierto
+
+La tabla de arriba se lee al revés si hay un proxy de por medio. Medido desde
+una red doméstica con proxy transparente, contra un droplet cuyo ufw **descarta**
+el 80:
+
+| puerto | TCP | banner | qué era |
+|---|---|---|---|
+| 22 | conecta en **0,1 s** | `SSH-2.0-OpenSSH_9.6p1 Ub` | conexión real |
+| 443, 80 | conectan en **0,0 s** | nada, luego timeout | el proxy, no el droplet |
+
+El delator es el **tiempo**: 0,0 s es físicamente imposible contra Nueva York,
+donde el RTT ronda los 100 ms. Una conexión instantánea la está contestando algo
+de tu propia red. Por eso el lanzador no da un puerto por bueno hasta recibir el
+banner `SSH-2.0-…`, y por eso conviene cronometrar las pruebas además de mirar
+si conectan.
+
 ## La consola web depende de sshd
 
 Es el error de concepto que más tiempo cuesta. Hay **dos** consolas y sólo una
