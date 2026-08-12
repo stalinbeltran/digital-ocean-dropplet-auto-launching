@@ -37,13 +37,68 @@ write_files:
       ListenStream=22
       ListenStream=443
 
+  # Los mismos puertos, también en sshd_config. Bajo activación por socket esto
+  # se ignora, pero hace falta por dos motivos:
+  #   - si una actualización de openssh-server devuelve el arranque al
+  #     ssh.service clásico, los puertos siguen siendo los correctos;
+  #   - el agente de DigitalOcean (el que da la consola del navegador) decide a
+  #     qué puerto conectarse leyendo el primer `Port` de sshd_config, no el
+  #     socket. Sin esto apunta al 22 por defecto y adivina.
+  - path: /etc/ssh/sshd_config.d/10-ports.conf
+    content: |
+      Port 22
+      Port 443
+
+  # Centinela: si sshd deja de escuchar, lo revive y deja constancia. El 24.04
+  # alterna entre activación por socket y servicio clásico, y una actualización
+  # de openssh-server por detrás puede dejarlo sin arrancar; sin esto el droplet
+  # se queda inaccesible incluso por la consola web, que también depende de sshd.
+  - path: /usr/local/sbin/ssh-watchdog
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      LOG=/var/log/ssh-watchdog.log
+      if ss -lnt '( sport = :22 )' | grep -q LISTEN; then
+        exit 0
+      fi
+      {
+        echo "=== $(date -Is): nadie escucha en el 22, reviviendo sshd"
+        systemctl daemon-reload
+        systemctl restart ssh.socket || systemctl restart ssh
+        systemctl --no-pager --lines=20 status ssh.socket ssh || true
+        ss -lnt || true
+      } >> "$LOG" 2>&1
+
+  - path: /etc/systemd/system/ssh-watchdog.service
+    content: |
+      [Unit]
+      Description=Revive sshd si deja de escuchar
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/ssh-watchdog
+
+  - path: /etc/systemd/system/ssh-watchdog.timer
+    content: |
+      [Unit]
+      Description=Comprueba cada minuto que sshd sigue escuchando
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=1min
+
+      [Install]
+      WantedBy=timers.target
+
 runcmd:
   # Cortafuegos mínimo: sólo SSH, en sus dos puertos.
   - ufw allow 22/tcp
   - ufw allow 443/tcp
   - ufw --force enable
   - systemctl daemon-reload
+  - systemctl enable ssh.socket
   - sh -c 'systemctl restart ssh.socket || systemctl restart ssh'
+  - systemctl enable --now ssh-watchdog.timer
   - systemctl enable --now fail2ban
   # Centinela: su existencia significa que el arranque terminó de verdad.
   # Compruébalo con: ssh <droplet> 'cloud-init status --wait'
