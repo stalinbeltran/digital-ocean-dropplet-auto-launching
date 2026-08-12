@@ -5,8 +5,39 @@ Contexto para Claude Code al trabajar en este repositorio.
 ## Qué es este proyecto
 
 Automatización del lanzamiento de **Droplets de DigitalOcean** bajo demanda: crear la máquina,
-esperar a que esté operativa, usarla y destruirla. El repo está en fase inicial (aún sin código de
-aplicación); lo primero que existe es la documentación de la API.
+esperar a que esté operativa, dejarla lista para trabajar y destruirla. Todo el ciclo vive en un
+único script de Python sin dependencias, más el `cloud-init.yaml` que configura el primer arranque.
+
+## Objetivos del proyecto
+
+Por qué existe esto y contra qué se juzga cualquier cambio. **Esta lista se amplía**: cuando
+aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conversación.
+
+1. **De cero a máquina usable en un comando.** `launch` tiene que dejar el droplet creado,
+   accesible, con las herramientas instaladas, las credenciales puestas y los repos clonados. Cada
+   paso manual que quede es una regresión. Medido hoy: unos 5 minutos.
+2. **Efímero de verdad, sin facturas olvidadas.** Todo camino de creación tiene su camino de
+   destrucción, incluido el fallo a mitad. Los droplets van etiquetados (`ephemeral`) para poder
+   barrerlos con una sola llamada aunque el proceso lanzador muera.
+3. **Poder seguir cualquier proyecto en una máquina que acaba de nacer.** El droplet llega con
+   Claude Code autenticado, `gh`, git configurado y `~/src` poblado, de modo que continuar un
+   trabajo empezado en otra parte no cueste preparación.
+4. **Cero fricción en la máquina lanzadora.** Sólo stdlib de Python 3.9+ y `ssh`: sin `pip
+   install`, sin entorno virtual, sin Docker. Tiene que arrancar igual en un Windows recién
+   formateado que en un Linux.
+5. **Ningún secreto en `user_data`.** El `user_data` lo sirve la API de metadatos a cualquier
+   usuario del droplet sin sudo. Los tokens viajan después, por SSH y por stdin, a ficheros 600.
+6. **El acceso no se puede perder.** Un droplet al que no se entra es un droplet muerto: no hay
+   puerta trasera real (la consola web también depende de sshd). De ahí el SSH en 22 y 443, la
+   espera al banner en vez de al TCP, el watchdog de sshd y la validación del `cloud-init.yaml`
+   antes de enviarlo.
+7. **Funcionar desde varias máquinas.** Cada laptop con su propia clave registrada; ninguna clave
+   privada viaja.
+8. **Documentación que sirve a quien no sabe nada del tema, y verificada.** El README explica de
+   dónde sale cada token y cada requisito, y sus comandos se ejecutan antes de darlos por buenos.
+9. **Aprendizajes caros, escritos.** Lo que nos ha mordido (el carácter no ASCII que silencia
+   cloud-init, el 403 del instalador nativo, el sshd por socket) queda anotado aquí y en `docs/`
+   para no volver a pagarlo.
 
 ## Estructura
 

@@ -13,33 +13,107 @@ opción de 4 GB con disco pequeño (`c-2`, 25 GB) es CPU-Optimized y cuesta
 $42/mes, así que pedir menos disco saldría más caro. Detalle en
 [docs/digitalocean/droplets-api.md](docs/digitalocean/droplets-api.md).
 
-## Puesta en marcha (esta máquina)
+## Antes de empezar
 
-```bash
-cp .env.example .env          # y pon tu token dentro
-python scripts/do_droplet.py keygen        # par de claves ed25519 dedicado
-python scripts/do_droplet.py register-key  # lo sube a tu cuenta de DO
-python scripts/do_droplet.py launch
+Cinco pasos, **todos una sola vez**: valen para todos los droplets que crees
+después. Cuentan con que no has hecho nunca nada de esto.
+
+1. [Herramientas en tu máquina](#1-herramientas-en-tu-máquina) — Python, `ssh`, git
+2. [Cuenta y token de DigitalOcean](#2-cuenta-y-token-de-digitalocean) — sin esto no se crea ninguna máquina
+3. [Token de tu suscripción de Claude](#3-token-de-tu-suscripción-de-claude) — para que Claude Code arranque ya autenticado
+4. [Token de GitHub](#4-token-de-github-pat-de-grano-fino) — para clonar tus repos y hacer push desde el droplet
+5. [Rellenar el `.env`](#5-el-fichero-env-variable-por-variable) — donde van los tres
+
+Los pasos 3 y 4 son opcionales en sentido estricto: sin ellos el droplet se crea
+igual, pero llega vacío de credenciales y tendrás que autenticarte a mano dentro.
+
+### 1. Herramientas en tu máquina
+
+Tres, y en Windows 11 dos suelen venir ya puestas. Nada de esto hace falta
+instalarlo *dentro* del droplet: allí lo pone cloud-init solo.
+
+| Necesitas | Para qué | Comprobar con |
+|---|---|---|
+| **Python 3.9 o superior** | ejecutar el script | `python --version` |
+| **Cliente OpenSSH** (`ssh`, `ssh-keygen`) | crear la clave y entrar al droplet | `ssh -V` |
+| **git** | clonar este repositorio | `git --version` |
+
+Probado aquí con Python 3.14.6, OpenSSH_for_Windows_9.5p1 y git 2.54.0.
+
+Si te falta alguna:
+
+- **Python** — <https://www.python.org/downloads/>. Marca **"Add python.exe to
+  PATH"** en la primera pantalla del instalador; sin eso el comando `python` no
+  existirá en la terminal. No hay nada más que instalar: el script usa sólo la
+  librería estándar, así que **no hay `pip install` ni entorno virtual**.
+- **OpenSSH en Windows** — viene de serie en Windows 10/11. Si `ssh -V` no
+  responde: *Configuración → Sistema → Características opcionales → Agregar una
+  característica → Cliente de OpenSSH*.
+- **git** — <https://git-scm.com/download/win> (en macOS/Linux ya suele estar).
+
+Y clona este repositorio, que es desde donde se ejecuta todo:
+
+```powershell
+git clone https://github.com/<usuario>/digital-ocean-dropplet-auto-launching.git
+cd digital-ocean-dropplet-auto-launching
 ```
 
-`launch` crea el droplet, espera a que la acción termine, espera a que sshd
-acepte conexiones y te imprime la IP y el comando de conexión.
+### 2. Cuenta y token de DigitalOcean
 
-## Continuar tus proyectos en el droplet
+**La cuenta.** Regístrate en <https://cloud.digitalocean.com/registrations/new>.
+Te pedirá un medio de pago (tarjeta o PayPal) antes de dejarte crear nada,
+aunque tengas crédito de bienvenida. Recuerda que se **factura por segundo
+mientras el droplet exista**: el gasto se corta destruyéndolo, no apagándolo.
 
-Cada droplet nuevo arranca con **Claude Code instalado, tu sesión iniciada y tus
-repos clonados**, sin tocar nada a mano. La preparación se hace **una sola vez**.
+**El token.** Es la contraseña con la que este script crea y destruye máquinas
+en tu cuenta. La ruta en el panel no es evidente:
 
-### Preparación (una vez en la vida, no por droplet)
+1. Barra lateral izquierda, **abajo del todo** → **API**
+2. Pestaña **Tokens** → botón **Generate New Token**
+   (atajo directo: <https://cloud.digitalocean.com/account/api/tokens>)
 
-Los dos tokens se sacan **una sola vez** y valen para todos los droplets que
-crees después. Si vuelves a esto dentro de unos meses, estos son los pasos
-completos.
+El formulario:
 
-#### 1. Token de tu suscripción de Claude
+| Campo | Qué poner |
+|---|---|
+| **Token name** | Algo que reconozcas dentro de seis meses, p. ej. `droplets-efimeros` |
+| **Expiration** | 90 días está bien; *No expiry* si no quieres renovarlo nunca |
+| **Scopes** | **Full Access** es lo simple y lo que menos sorpresas da |
 
-Necesitas Claude Code instalado en **tu máquina** (no en el droplet) y una
-suscripción activa. En una terminal:
+Si prefieres afinar, elige *Custom Scopes* y marca lo que este script usa:
+
+| Recurso | Permisos | Para qué |
+|---|---|---|
+| `droplet` | create, read, delete | `launch`, `list`, `ip`, `destroy` |
+| `ssh_key` | create, read | `register-key`, `keys`, y elegir qué claves embeber |
+| `actions` | read | esperar a que la creación termine |
+| `image`, `sizes`, `regions` | read | los comandos `images`, `sizes` y `regions` |
+
+No hemos probado cada combinación mínima una por una; si un comando te devuelve
+**403**, el script imprime la respuesta de la API, que dice qué scope falta.
+
+Pulsa **Generate Token**. El valor **empieza por `dop_v1_`** y DigitalOcean
+**sólo te lo enseña una vez**: si cierras la página sin copiarlo, tendrás que
+generar otro. Va en `.env` (paso 5) como:
+
+```
+DO_TOKEN=dop_v1_...
+```
+
+### 3. Token de tu suscripción de Claude
+
+Necesitas dos cosas en **tu máquina** (no en el droplet): una suscripción activa
+a Claude (Pro o Max, <https://claude.ai/upgrade>) y Claude Code instalado. Si no
+lo tienes:
+
+```powershell
+npm install -g @anthropic-ai/claude-code
+```
+
+(requiere Node.js, <https://nodejs.org>). Es exactamente lo mismo que el droplet
+instala solo por dentro; aquí lo necesitas únicamente para generar el token.
+
+Con eso, en una terminal:
 
 ```powershell
 claude setup-token
@@ -77,7 +151,12 @@ Responde JSON. `"authMethod":"oauth_token"` = suscripción;
 `"authMethod":"api_key"` = facturación por uso; `"loggedIn":false` = no llegó el
 token.
 
-#### 2. Token de GitHub (PAT de grano fino)
+### 4. Token de GitHub (PAT de grano fino)
+
+Sirve para que el droplet pueda clonar tus repos privados y hacer push sin que
+te pida usuario y contraseña. Necesitas una cuenta de GitHub
+(<https://github.com/signup>) y un PAT: una contraseña de un solo propósito, que
+tú limitas a los repos y permisos que quieras.
 
 Ruta exacta en la interfaz de GitHub, que no es evidente:
 
@@ -125,6 +204,106 @@ gh api user --jq .login
 
 Si el token es inválido o le faltan permisos, `provision` te avisa al
 inyectarlo y sigue con el resto, así que revisa su salida.
+
+### 5. El fichero `.env`, variable por variable
+
+Toda la configuración vive en un fichero `.env` en la raíz del repositorio. Se
+crea copiando la plantilla:
+
+```powershell
+Copy-Item .env.example .env      # PowerShell
+```
+
+```bash
+cp .env.example .env             # macOS / Linux / Git Bash
+```
+
+Ábrelo con cualquier editor de texto y rellénalo. El formato es
+`CLAVE=valor`, una por línea, **sin comillas y sin espacios alrededor del `=`**.
+`.env` está en `.gitignore`: no se commitea nunca, y ahí es donde viven tus tres
+tokens.
+
+De todo lo que hay dentro, **sólo `DO_TOKEN` es imprescindible** para crear un
+droplet. El resto tiene valores por defecto razonables:
+
+| Variable | ¿Hace falta? | Qué es |
+|---|---|---|
+| `DO_TOKEN` | **Sí** | El token de DigitalOcean del paso 2 |
+| `DO_SIZE` | No — `s-2vcpu-4gb` | Plan de la máquina. Míralos con `sizes` |
+| `DO_IMAGE` | No — `ubuntu-24-04-x64` | Sistema operativo. Míralos con `images` |
+| `DO_REGION` | No — `nyc1` | Centro de datos. Míralos con `regions` |
+| `DO_DROPLET_NAME` | No — `proyecto-01` | Nombre del droplet; también lo puedes pasar como argumento a `launch` |
+| `DO_TAG` | No — `ephemeral` | Etiqueta para poder limpiarlos todos de golpe |
+| `DO_SSH_KEY_FILE` | No — `~/.ssh/do_droplet` | Ruta de tu clave privada. La crea `keygen` |
+| `DO_SSH_KEYS` | No — vacío | Vacío = se autorizan **todas** las claves de tu cuenta de DO. Rellénalo sólo para restringir |
+| `DO_SSH_USER` | No — `deploy` | Con qué usuario aterrizas al hacer `ssh`. `deploy` es el que tiene tokens y repos |
+| `DO_SSH_PORTS` | No — `22,443` | Puertos que se prueban, en orden. El 443 salva las redes que filtran el 22 |
+| `DO_DEV_USER` | No — `deploy` | Usuario del droplet que recibe credenciales y repos |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Para Claude Code | El token del paso 3 |
+| `GITHUB_TOKEN` | Para clonar y hacer push | El PAT del paso 4 |
+| `GIT_USER_NAME`, `GIT_USER_EMAIL` | Para commitear dentro | Autoría de tus commits en el droplet |
+| `DO_REPOS` | No — vacío | Repos `owner/repo` separados por coma que se clonan solos en `~/src` |
+
+Un `.env` mínimo para empezar es literalmente una línea con `DO_TOKEN=`. Uno
+completo se parece a esto:
+
+```
+DO_TOKEN=dop_v1_...
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+GITHUB_TOKEN=github_pat_...
+GIT_USER_NAME=Tu Nombre
+GIT_USER_EMAIL=tu@email
+DO_REPOS=usuario/proyecto-a,usuario/proyecto-b
+```
+
+También puedes definir cualquiera de estas variables como variable de entorno
+del sistema: las del entorno tienen prioridad sobre el `.env`. Y para el token
+de DigitalOcean se aceptan además los nombres `DIGITALOCEAN_TOKEN` y
+`DIGITALOCEAN_ACCESS_TOKEN`, que son los que usan `doctl` y Terraform, por si ya
+los tienes puestos.
+
+## Puesta en marcha
+
+Con el `.env` relleno, tres comandos. Se ejecutan **desde la raíz del
+repositorio**:
+
+```powershell
+python scripts/do_droplet.py keygen        # par de claves ed25519 dedicado
+python scripts/do_droplet.py register-key  # lo sube a tu cuenta de DO
+python scripts/do_droplet.py launch
+```
+
+Qué hace cada uno:
+
+- **`keygen`** crea un par de claves SSH nuevo en `~/.ssh/do_droplet` (privada) y
+  `~/.ssh/do_droplet.pub` (pública), dedicado a esto y sin passphrase. Si el
+  fichero ya existe no lo toca. La privada **no sale nunca de tu máquina**.
+- **`register-key`** sube la pública a tu cuenta de DigitalOcean, que es lo que
+  permite que los droplets nuevos te dejen entrar. Si ya estaba subida, lo dice y
+  no duplica nada.
+- **`launch`** crea el droplet, espera a que la acción termine, espera a que sshd
+  acepte conexiones de verdad, espera a que cloud-init acabe de instalar las
+  herramientas, inyecta tus tokens y clona tus repos. Al final imprime la IP y el
+  comando de conexión. **Tarda unos 5 minutos**; casi todo es Ubuntu
+  actualizándose.
+
+Antes de gastar un céntimo puedes ver exactamente qué se enviaría, sin enviarlo:
+
+```powershell
+python scripts/do_droplet.py launch --dry-run
+```
+
+Y cuando termines, **destruye la máquina** — es lo único que corta la
+facturación:
+
+```powershell
+python scripts/do_droplet.py destroy
+```
+
+## Continuar tus proyectos en el droplet
+
+Cada droplet nuevo arranca con **Claude Code instalado, tu sesión iniciada y tus
+repos clonados**, sin tocar nada a mano.
 
 ### Uso
 
