@@ -453,6 +453,25 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         api("DELETE", f"/v2/droplets/{d['id']}")
         log(f"Destruido {d['name']}.")
 
+    wait_until_gone([d["id"] for d in droplets])
+
+
+def wait_until_gone(droplet_ids: list[int], timeout: int = 120) -> None:
+    """Espera a que los droplets dejen de aparecer en la cuenta.
+
+    El DELETE contesta 204 enseguida pero el borrado es asíncrono: durante unos
+    segundos siguen saliendo en `GET /v2/droplets`. Sin esta espera, destruir y
+    volver a crear con el mismo nombre falla con un 'ya existe' que es mentira.
+    """
+    pending = set(droplet_ids)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        alive = {d["id"] for d in find_droplets()} & pending
+        if not alive:
+            return
+        time.sleep(4)
+    log("Aviso: la cuenta todavía lista algún droplet recién destruido.")
+
 
 # ------------------------------------------------------------------------ parser
 
