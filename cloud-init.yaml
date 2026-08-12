@@ -25,10 +25,25 @@ packages:
   - ufw
   - fail2ban
 
+write_files:
+  # Muchas redes corporativas bloquean el puerto 22 saliente, así que sshd
+  # escucha además en el 443, que prácticamente nunca está filtrado.
+  # En Ubuntu 24.04 sshd va activado por socket: la directiva `Port` de
+  # sshd_config se ignora y hay que tocar ssh.socket.
+  - path: /etc/systemd/system/ssh.socket.d/10-extra-ports.conf
+    content: |
+      [Socket]
+      ListenStream=
+      ListenStream=22
+      ListenStream=443
+
 runcmd:
-  # Cortafuegos mínimo: sólo SSH.
-  - ufw allow OpenSSH
+  # Cortafuegos mínimo: sólo SSH, en sus dos puertos.
+  - ufw allow 22/tcp
+  - ufw allow 443/tcp
   - ufw --force enable
+  - systemctl daemon-reload
+  - sh -c 'systemctl restart ssh.socket || systemctl restart ssh'
   - systemctl enable --now fail2ban
   # Centinela: su existencia significa que el arranque terminó de verdad.
   # Compruébalo con: ssh <droplet> 'cloud-init status --wait'

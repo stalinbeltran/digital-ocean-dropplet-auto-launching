@@ -35,6 +35,9 @@ DEFAULTS = {
     "DO_SSH_KEY_FILE": str(Path.home() / ".ssh" / "do_droplet"),
     "DO_SSH_KEYS": "",  # nombres/fingerprints/IDs separados por coma; vacío = todas
     "DO_SSH_USER": "root",
+    # El droplet escucha en ambos; se prueba en este orden y se usa el primero
+    # que responda. Sirve para redes que bloquean el 22 saliente.
+    "DO_SSH_PORTS": "22,443",
 }
 
 
@@ -287,16 +290,40 @@ def public_ip(droplet: dict) -> str:
     )
 
 
-def wait_for_ssh(ip: str, timeout: int = 300) -> bool:
-    """`status: active` no implica que sshd escuche todavía."""
+def ssh_ports() -> list[int]:
+    return [int(p) for p in cfg("DO_SSH_PORTS").split(",") if p.strip()]
+
+
+def ssh_banner_ok(ip: str, port: int, timeout: int = 6) -> bool:
+    """¿Hay un sshd de verdad al otro lado?
+
+    No basta con que el TCP conecte: en redes con proxy transparente el
+    appliance acepta la conexión al 443 de *cualquier* destino, incluso de IPs
+    inexistentes, y luego corta lo que no sea TLS. El único indicio fiable es
+    que llegue el banner "SSH-2.0-…" del protocolo.
+    """
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            return sock.recv(16).startswith(b"SSH-")
+    except OSError:
+        return False
+
+
+def wait_for_ssh(ip: str, timeout: int = 300) -> int | None:
+    """Devuelve el primer puerto con un sshd que responde, o None.
+
+    `status: active` no implica que sshd escuche todavía. Y si tu red filtra el
+    22 saliente, el droplet puede estar perfecto y aun así no alcanzarse por ahí,
+    de modo que se prueba también el 443.
+    """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            with socket.create_connection((ip, 22), timeout=5):
-                return True
-        except OSError:
-            time.sleep(5)
-    return False
+        for port in ssh_ports():
+            if ssh_banner_ok(ip, port):
+                return port
+        time.sleep(5)
+    return None
 
 
 def find_droplets(name: str = "", tag: str = "") -> list[dict]:
@@ -344,16 +371,22 @@ def cmd_launch(args: argparse.Namespace) -> None:
         die("El droplet está activo pero no tiene IP pública asignada.")
     log(f"Activo. IP pública: {ip}")
 
-    log("Esperando a que SSH acepte conexiones…")
-    if wait_for_ssh(ip):
-        log("SSH listo.")
+    log(f"Esperando a que SSH acepte conexiones (puertos {cfg('DO_SSH_PORTS')})…")
+    port = wait_for_ssh(ip)
+    if port:
+        log(f"SSH listo en el puerto {port}.")
     else:
-        log("Aviso: SSH no respondió a tiempo. El droplet existe; reintenta la conexión.")
+        log(
+            "Aviso: SSH no respondió por ninguno de los puertos. El droplet existe.\n"
+            "  Si tu red bloquea el 22 y el 443 saliente, entra por la consola web:\n"
+            f"  https://cloud.digitalocean.com/droplets/{droplet_id}/console"
+        )
 
     key_file = Path(cfg("DO_SSH_KEY_FILE")).expanduser()
+    port_flag = f"-p {port} " if port and port != 22 else ""
     log("\n" + "=" * 62)
     log(f"  {name}  ·  {ip}")
-    log(f"  ssh -i {key_file} {cfg('DO_SSH_USER')}@{ip}")
+    log(f"  ssh {port_flag}-i {key_file} {cfg('DO_SSH_USER')}@{ip}")
     log(f"  o simplemente:  python scripts/do_droplet.py ssh {name}")
     log(f"\n  Al terminar:    python scripts/do_droplet.py destroy {name}")
     log("  (el droplet factura por segundo mientras exista)")
@@ -386,7 +419,14 @@ def cmd_ssh(args: argparse.Namespace) -> None:
         die("No encontré ese droplet. Míralos con: python scripts/do_droplet.py list")
     ip = public_ip(droplets[0])
     key_file = str(Path(cfg("DO_SSH_KEY_FILE")).expanduser())
-    cmd = ["ssh", "-i", key_file, f"{cfg('DO_SSH_USER')}@{ip}"]
+    port = args.port or wait_for_ssh(ip, timeout=15)
+    if not port:
+        die(
+            f"No se alcanza {ip} por ninguno de los puertos {cfg('DO_SSH_PORTS')}.\n"
+            "Si tu red los filtra, usa la consola web: "
+            "https://cloud.digitalocean.com/droplets"
+        )
+    cmd = ["ssh", "-p", str(port), "-i", key_file, f"{cfg('DO_SSH_USER')}@{ip}"]
     if args.cmd:
         cmd.append(args.cmd)
     log(f"$ {' '.join(cmd)}")
@@ -468,6 +508,7 @@ def main() -> None:
 
     p = sub.add_parser("ssh", help="conecta por SSH")
     p.add_argument("name", nargs="?")
+    p.add_argument("--port", type=int, help="fuerza un puerto en vez de autodetectarlo")
     p.add_argument("--cmd", help="ejecuta este comando en remoto en vez de abrir sesión")
     p.set_defaults(func=cmd_ssh)
 

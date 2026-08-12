@@ -68,6 +68,34 @@ máquina que sí tiene acceso:
 python scripts/do_droplet.py ssh --cmd "echo 'ssh-ed25519 AAAA... laptop-2' >> ~/.ssh/authorized_keys"
 ```
 
+## Si tu red bloquea SSH
+
+El droplet escucha SSH en el **22 y en el 443** (cloud-init configura
+`ssh.socket`; en Ubuntu 24.04 sshd va activado por socket y la directiva `Port`
+de `sshd_config` se ignora). `launch` prueba ambos y usa el primero que
+responda.
+
+Aun así hay redes corporativas donde **ninguno** sirve: un appliance de
+inspección TLS acepta el TCP del 443 de cualquier destino y luego corta todo lo
+que no sea TLS, con lo que SSH muere en el intercambio de claves
+(`kex_exchange_identification: Connection reset by peer`).
+
+Para saber si estás en ese caso:
+
+```bash
+python -c "import socket;s=socket.create_connection(('198.51.100.77',443),timeout=8);print('hay proxy transparente')"
+```
+
+Si eso "conecta" con una IP que no existe, tu red intercepta el 443 y el SSH
+directo no va a funcionar desde ahí. Alternativas:
+
+- **Consola web de DigitalOcean** — va por HTTPS, atraviesa el proxy:
+  `https://cloud.digitalocean.com/droplets/<id>/console`
+- Conectarte desde una red sin filtrar (casa, móvil compartido).
+
+Por eso `launch` no se fía de que el TCP conecte: espera el banner `SSH-2.0-…`
+antes de dar el puerto por bueno.
+
 ## Uso diario
 
 ```bash
