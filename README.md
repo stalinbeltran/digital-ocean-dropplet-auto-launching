@@ -32,32 +32,99 @@ repos clonados**, sin tocar nada a mano. La preparación se hace **una sola vez*
 
 ### Preparación (una vez en la vida, no por droplet)
 
-**1. Token de tu suscripción de Claude.** En tu máquina:
+Los dos tokens se sacan **una sola vez** y valen para todos los droplets que
+crees después. Si vuelves a esto dentro de unos meses, estos son los pasos
+completos.
 
-```bash
+#### 1. Token de tu suscripción de Claude
+
+Necesitas Claude Code instalado en **tu máquina** (no en el droplet) y una
+suscripción activa. En una terminal:
+
+```powershell
 claude setup-token
 ```
 
-Abre el navegador, apruebas, y te devuelve un token largo. Pégalo en `.env`:
+Qué pasa: se abre el navegador con la pantalla de autorización de Anthropic,
+apruebas, y la terminal imprime un token largo que **empieza por
+`sk-ant-oat01-`**. Cópialo y pégalo en `.env`:
 
 ```
-CLAUDE_CODE_OAUTH_TOKEN=<lo que te dio setup-token>
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
-Usa tu plan de Claude, no factura aparte. La alternativa es `ANTHROPIC_API_KEY`
-de la consola de Anthropic, que sí factura por uso; Claude Code acepta ambas.
+Detalles que importan:
 
-**2. Token de GitHub.** Crea uno de grano fino en
-<https://github.com/settings/personal-access-tokens> con permiso
-**Contents: Read and write** sobre los repos que quieras poder tocar, y ponlo en
-`.env` junto con tu autoría de commits:
+- Es un token **de larga duración**, no el de una sesión. Por eso basta con
+  generarlo una vez y no hay que repetirlo en cada droplet.
+- Consume tu **plan de Claude**, no factura aparte.
+- Si algún día deja de funcionar (lo revocaste, caducó), vuelve a ejecutar
+  `claude setup-token` y sustituye el valor en `.env`.
+- No lo commitees. `.env` está en `.gitignore` justamente por esto.
+
+**Alternativa: `ANTHROPIC_API_KEY`**, sacada de la consola de Anthropic
+(<https://console.anthropic.com/settings/keys>). Claude Code la acepta igual,
+pero **factura por uso aparte de tu suscripción**. Ponla en `.env` con ese
+nombre en lugar de `CLAUDE_CODE_OAUTH_TOKEN` y el resto del flujo es idéntico.
+
+Para comprobar cuál está activa dentro de un droplet:
+
+```bash
+claude auth status
+```
+
+Responde JSON. `"authMethod":"oauth_token"` = suscripción;
+`"authMethod":"api_key"` = facturación por uso; `"loggedIn":false` = no llegó el
+token.
+
+#### 2. Token de GitHub (PAT de grano fino)
+
+Ruta exacta en la interfaz de GitHub, que no es evidente:
+
+1. Tu foto de perfil (arriba a la derecha) → **Settings**
+2. Barra lateral izquierda, hasta abajo → **Developer settings**
+3. **Personal access tokens** → **Fine-grained tokens**
+4. Botón **Generate new token**
+
+Y el formulario:
+
+| Campo | Qué poner |
+|---|---|
+| **Token name** | Algo reconocible, p. ej. `droplets-efimeros` |
+| **Expiration** | Lo que quieras; recuerda que al caducar habrá que regenerarlo |
+| **Resource owner** | Tu usuario (o la organización dueña de los repos) |
+| **Repository access** | *Only select repositories* y eliges los que quieras poder tocar, o *All repositories* si prefieres no ir añadiéndolos |
+| **Permissions** → *Repository permissions* → **Contents** | **Read and write** |
+
+`Contents: Read and write` es lo único imprescindible: cubre clonar **y** hacer
+push. Escribir siempre incluye leer, así que no hace falta marcar nada más para
+el flujo normal. Si la interfaz añade sola `Metadata: Read-only`, déjala. Si
+además quieres que Claude Code pueda abrir *pull requests* desde el droplet,
+añade `Pull requests: Read and write`.
+
+Pulsa **Generate token**, copia el valor (GitHub **sólo lo enseña una vez**) y
+complétalo en `.env` junto con tu autoría de commits:
 
 ```
-GITHUB_TOKEN=<tu PAT>
+GITHUB_TOKEN=<el PAT que acabas de generar>
 GIT_USER_NAME=Tu Nombre
 GIT_USER_EMAIL=tu@email
 DO_REPOS=usuario/proyecto-a,usuario/proyecto-b
 ```
+
+`GIT_USER_NAME` y `GIT_USER_EMAIL` no son opcionales en la práctica: sin ellos
+el primer `git commit` dentro del droplet falla con *"Please tell me who you
+are"*.
+
+Para comprobar que el PAT llegó bien, desde dentro del droplet:
+
+```bash
+gh auth status        # y, más directo:
+gh api user --jq .login
+```
+
+Si el token es inválido o le faltan permisos, `provision` te avisa al
+inyectarlo y sigue con el resto, así que revisa su salida.
 
 ### Uso
 
