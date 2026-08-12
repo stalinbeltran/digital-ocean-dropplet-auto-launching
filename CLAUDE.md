@@ -35,7 +35,11 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
    privada viaja.
 8. **Documentación que sirve a quien no sabe nada del tema, y verificada.** El README explica de
    dónde sale cada token y cada requisito, y sus comandos se ejecutan antes de darlos por buenos.
-9. **Aprendizajes caros, escritos.** Lo que nos ha mordido (el carácter no ASCII que silencia
+9. **Servicios de larga vida, no sólo sesiones interactivas.** El droplet tiene que poder
+   alojar procesos que sigan vivos al cerrar el SSH (hoy: el bot de Telegram que permite
+   trabajar desde el móvil). El lanzador aloja **cualquier** servicio descrito en `services/`;
+   no debe aprenderse ningún proyecto concreto.
+10. **Aprendizajes caros, escritos.** Lo que nos ha mordido (el carácter no ASCII que silencia
    cloud-init, el 403 del instalador nativo, el sshd por socket) queda anotado aquí y en `docs/`
    para no volver a pagarlo.
 
@@ -47,6 +51,9 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
   sin `pip install`. No introduzcas dependencias sin motivo fuerte.
 - [cloud-init.yaml](cloud-init.yaml) — configuración de primer arranque. El
   lanzador sustituye la línea `# {{SSH_AUTHORIZED_KEYS}}` respetando su sangría.
+- [services/](services/) — un JSON por servicio de larga vida (`repo`, `install`, `start`,
+  `env_prefix`). Es **dato, no código**: añadir un servicio nunca debe requerir tocar
+  `do_droplet.py`. Se activan con `DO_SERVICES` o `--service`.
 - [.env.example](.env.example) — plantilla de configuración; `.env` está ignorado.
 - [README.md](README.md) — uso, incluido el flujo multi-máquina.
 
@@ -175,6 +182,31 @@ trabajo manual. cloud-init instala las herramientas; `do_droplet.py provision`
 - El testigo `/var/lib/cloud/DEV_READY` marca que las herramientas ya están;
   `DEV_FAILED` que la instalación falló, para no esperar en balde. Log en
   `/var/log/dev-tools-install.log`.
+
+## Servicios en el droplet
+
+Los instala `provision` como unidades de systemd, después de las credenciales y los repos.
+Lo que hay que respetar:
+
+- **`ExecStart` va con `bash -lc`, no directamente el comando.** El proceso necesita los
+  tokens de `~/.config/dev-secrets.env`, y systemd **no** puede leer ese fichero con
+  `EnvironmentFile`: sus líneas llevan `export`, que `EnvironmentFile` no admite. El shell
+  de login sourcea `.profile` → `.bashrc`, donde `provision` puso la línea que lo carga.
+  Sin esto el servicio arranca y `claude` responde "no autenticado", que despista mucho.
+- **`WorkingDirectory` es obligatorio.** Casi todo servicio busca su `.env` y sus datos
+  relativos al cwd (el coordinador de Telegram, sin ir más lejos). Se sustituye con `sed`
+  sobre `@DIR@` en vez de expandirlo en el heredoc, porque el home real sólo se conoce ya
+  en el droplet y expandir ahí afectaría también al comando de arranque del descriptor.
+- **Ningún fallo de un servicio aborta el aprovisionamiento.** Para cuando corren, las
+  credenciales y los repos ya están puestos; tumbar todo por un `npm ci` sale peor. Avisan y
+  siguen.
+- **La configuración del servicio no puede ir en su repo ni en cloud-init.** Suele ser
+  secreta (el token del bot lo es). Va por el puente `env_prefix`: `TG_BOT_TOKEN` aquí es
+  `BOT_TOKEN` allí, en modo 600, empujado por SSH como el resto.
+- **Un droplet con servicio es de larga vida**, lo que roza el objetivo 2: no lo barras con
+  `destroy --tag ephemeral` a ciegas.
+- Con el coordinador de Telegram, **sólo puede haber una instancia haciendo polling**: si
+  también corre en la laptop, Telegram devuelve 409 a una de las dos.
 
 ## Convenciones
 

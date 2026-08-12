@@ -243,6 +243,7 @@ droplet. El resto tiene valores por defecto razonables:
 | `GITHUB_TOKEN` | Para clonar y hacer push | El PAT del paso 4 |
 | `GIT_USER_NAME`, `GIT_USER_EMAIL` | Para commitear dentro | Autoría de tus commits en el droplet |
 | `DO_REPOS` | No — vacío | Repos `owner/repo` separados por coma que se clonan solos en `~/src` |
+| `DO_SERVICES` | No — vacío | Servicios que quedan corriendo. Ver [Servicios](#servicios-procesos-que-quedan-corriendo) |
 
 Un `.env` mínimo para empezar es literalmente una línea con `DO_TOKEN=`. Uno
 completo se parece a esto:
@@ -351,6 +352,92 @@ stdin — no como argumento, que aparecería en el `ps` del droplet. Acaban en
 Como son droplets efímeros, la forma de "revocar" es destruirlos. Si un token se
 te escapa, regenéralo en GitHub o con `claude setup-token` otra vez.
 
+## Servicios: procesos que quedan corriendo
+
+Todo lo anterior deja el droplet listo para **trabajar dentro**. Un servicio es
+lo otro: un proceso que sigue vivo aunque cierres el SSH, arranca solo si la
+máquina se reinicia y se levanta otra vez si se cae.
+
+Cada servicio es un fichero en [services/](services/). El lanzador no sabe nada
+de ningún proyecto en concreto: sabe clonar un repo, instalarlo y registrarlo
+como unidad de systemd. Lo que cambia va en el descriptor:
+
+```json
+{
+  "repo": "usuario/mi-servicio",
+  "install": "npm ci",
+  "start": "npm start",
+  "env_prefix": "MI_"
+}
+```
+
+| Campo | |
+|---|---|
+| `repo` | **Obligatorio.** `owner/repo`. Se clona solo en `~/src/<repo>`; no hace falta repetirlo en `DO_REPOS` |
+| `start` | **Obligatorio.** Comando de arranque, ejecutado dentro del repo |
+| `install` | Se ejecuta una vez antes de arrancar (`npm ci`, `pip install -r ...`) |
+| `env_prefix` | Puente de configuración: cada `MI_ALGO=x` del `.env` del lanzador se escribe como `ALGO=x` en el `.env` del servicio, dentro del droplet, en modo 600 |
+| `env_file` | Nombre de ese fichero. Por defecto `.env` |
+
+Se activan por nombre, en `.env` o en la línea de comandos:
+
+```bash
+DO_SERVICES=telegram-coordinator          # en .env, para todos los lanzamientos
+python scripts/do_droplet.py launch --service telegram-coordinator
+```
+
+Y se manejan sin recordar la sintaxis de systemd:
+
+```bash
+python scripts/do_droplet.py service status  telegram-coordinator
+python scripts/do_droplet.py service logs    telegram-coordinator --lines 100
+python scripts/do_droplet.py service follow  telegram-coordinator   # en vivo
+python scripts/do_droplet.py service restart telegram-coordinator
+```
+
+`env_prefix` existe porque la configuración de un servicio suele ser secreta y
+**no puede vivir en su repo ni en `cloud-init.yaml`**: el `user_data` lo lee
+cualquier usuario del droplet sin sudo. Viaja por el mismo canal que los tokens,
+por SSH y por stdin.
+
+### El servicio incluido: `telegram-coordinator`
+
+Un bot de Telegram que enruta tus mensajes al shell del droplet y a Claude Code,
+con una conversación independiente por cada tema del grupo. Es lo que convierte
+el droplet en algo que puedes seguir usando desde el móvil.
+
+Necesita dos cosas en el `.env` **de este** repositorio:
+
+```
+DO_SERVICES=telegram-coordinator
+TG_BOT_TOKEN=123456:ABC...        # te lo da @BotFather con /newbot
+TG_ALLOWED_USER_IDS=99887766      # tu id; escríbele /whoami al bot para saberlo
+TG_CLAUDE_PERMISSION_MODE=bypassPermissions
+```
+
+Con eso, `launch` deja el bot respondiendo. Tres cosas que conviene saber antes:
+
+- **`ALLOWED_USER_IDS` es la única protección.** El bot ejecuta comandos en el
+  droplet por diseño: quien esté en esa lista tiene shell. Con el id vacío no
+  atiende a nadie (es lo seguro); con el id equivocado atiende a otro.
+- **Sólo puede haber una instancia haciendo polling.** Si tienes el coordinador
+  corriendo en la laptop, párala antes o Telegram devolverá error 409 a una de
+  las dos.
+- **No hace falta abrir ningún puerto**: el bot usa *long polling*, sale él hacia
+  Telegram. `ufw` se queda como está, sólo SSH.
+
+Para llevar un cambio tuyo del coordinador al droplet, sin salir de Telegram:
+
+```
+cd ~/src/telegram-coordinator && git pull && sudo systemctl restart telegram-coordinator
+```
+
+Y ojo con esto al destruir: **los ejecutores que crees desde el móvil viven en el
+droplet**. Son ficheros JSON en `data/`, versionables — si quieres conservarlos,
+haz `git push` desde el droplet antes de destruirlo. Ten en cuenta también que un
+droplet con un servicio dentro es un droplet de larga vida: no lo barras con
+`destroy --tag ephemeral` sin mirar, y recuerda que factura mientras exista.
+
 ## Acceso desde tu otra laptop
 
 Están contempladas las dos formas. **La segunda es la recomendada.**
@@ -431,6 +518,7 @@ python scripts/do_droplet.py provision         # reinyectar credenciales y repos
 python scripts/do_droplet.py list              # qué hay vivo
 python scripts/do_droplet.py ssh               # conectar
 python scripts/do_droplet.py ip                # sólo la IP
+python scripts/do_droplet.py service logs telegram-coordinator  # log de un servicio
 python scripts/do_droplet.py destroy           # destruir (pide confirmación)
 python scripts/do_droplet.py destroy --tag ephemeral --yes   # limpieza total
 ```
