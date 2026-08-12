@@ -11,7 +11,7 @@ aplicación); lo primero que existe es la documentación de la API.
 ## Estructura
 
 - [scripts/do_droplet.py](scripts/do_droplet.py) — CLI de todo el ciclo de vida
-  (`keygen`, `register-key`, `sizes`, `launch`, `list`, `ssh`, `destroy`).
+  (`keygen`, `register-key`, `sizes`, `launch`, `provision`, `list`, `ssh`, `destroy`).
   **Sólo stdlib a propósito**: debe correr en cualquier máquina con Python 3.9+
   sin `pip install`. No introduzcas dependencias sin motivo fuerte.
 - [cloud-init.yaml](cloud-init.yaml) — configuración de primer arranque. El
@@ -70,6 +70,40 @@ Lo imprescindible:
 - **El borrado es asíncrono.** `DELETE /v2/droplets/{id}` contesta enseguida pero el droplet sigue
   saliendo en `GET /v2/droplets` unos segundos. Destruir y recrear con el mismo nombre sin esperar
   falla con un "ya existe" falso; `cmd_destroy` espera con `wait_until_gone()`.
+
+## Entorno de desarrollo dentro del droplet
+
+El objetivo es poder seguir cualquier proyecto en una máquina recién creada sin
+trabajo manual. cloud-init instala las herramientas; `do_droplet.py provision`
+(que `launch` llama solo) inyecta las credenciales después.
+
+- **Claude Code se instala por npm, no con el instalador nativo.**
+  `curl https://claude.ai/install.sh | bash` redirige a `downloads.claude.ai`
+  (Google Cloud Storage), que devuelve **403 AccessDenied** a la IP del droplet
+  tras las primeras descargas — medido: 5 intentos seguidos, 5 × 403. Por npm
+  (`npm i -g @anthropic-ai/claude-code`, global como root → `/usr/bin/claude`)
+  funciona y lo ven todos los usuarios sin tocar el PATH. Si vuelves a probar el
+  instalador nativo, hazlo en un droplet **recién creado**: uno que ya haya
+  descargado antes te dará un falso positivo.
+- **Ningún secreto puede ir en `cloud-init.yaml`.** El `user_data` lo sirve la
+  API de metadatos y lo lee cualquier usuario sin sudo:
+  `curl http://169.254.169.254/metadata/v1/user-data` devuelve el YAML entero.
+  Comprobado desde `deploy`. Los tokens van después, por SSH y **por stdin**
+  (no como argumento de `ssh`, que saldría en el `ps` del droplet), a ficheros
+  en modo 600 del usuario de desarrollo.
+- **La línea que carga los tokens se antepone a `.bashrc`**, por delante del
+  corte que Ubuntu pone para shells no interactivas. Sin eso,
+  `ssh droplet 'claude -p ...'` se queda sin token. Verificado en los tres
+  casos: sesión interactiva, shell de login y comando remoto.
+- **`provision` entra siempre como root**, sea cual sea `DO_SSH_USER`: tiene que
+  escribir en el home de otro usuario y hacer `chown`. Para el uso diario sí
+  conviene `DO_SSH_USER=deploy`, que es donde están las credenciales y `~/src`.
+- Autenticación: `CLAUDE_CODE_OAUTH_TOKEN` (suscripción, sale de
+  `claude setup-token` una vez) o `ANTHROPIC_API_KEY` (factura por uso). Se
+  comprueba cuál está activa con `claude auth status`, que responde JSON.
+- El testigo `/var/lib/cloud/DEV_READY` marca que las herramientas ya están;
+  `DEV_FAILED` que la instalación falló, para no esperar en balde. Log en
+  `/var/log/dev-tools-install.log`.
 
 ## Convenciones
 
