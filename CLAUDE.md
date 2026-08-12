@@ -44,6 +44,37 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
   (`DELETE /v2/droplets?tag_name=...`) aunque el proceso lanzador muera.
 - `private_networking` está deprecado; usa `vpc_uuid`.
 
+## cloud-init.yaml: cuidado con los caracteres no ASCII
+
+**Un solo carácter mal elegido en un comentario deja el droplet sin ninguna
+configuración, y sin avisar.** Nos pasó con un `x` de multiplicar (`5 × 403`).
+
+Por el camino hasta el droplet el `user_data` acaba releyéndose como latin-1. Un
+carácter cuya codificación UTF-8 lleve un byte entre **0x80 y 0x9F** se convierte
+entonces en un carácter de control C1, y el parser de YAML de cloud-init rechaza
+**el fichero entero**:
+
+```
+Failed loading yaml blob. unacceptable character #x0097
+Failed at merging in cloud config part from part-001: empty cloud config
+Skipping modules '...,runcmd' because no applicable config is provided
+```
+
+El droplet arranca igualmente, coge IP y deja entrar a root por SSH — o sea, que
+*parece* correcto — pero **sin usuario `deploy`, sin ufw, sin el 443 y sin el
+watchdog de sshd**, que es precisamente la avería de la que no se vuelve.
+
+- Las minúsculas acentuadas se salvan de casualidad: `á` es `0xC3 0xA1` y su
+  segundo byte pasa de 0x9F.
+- Las **mayúsculas acentuadas** (`Á` = `0xC3 0x81`, `Ñ` = `0xC3 0x91`) y la
+  **raya** (`—` = `0xE2 0x80 0x94`) sí rompen. Y este repo escribe rayas por
+  todas partes: en `cloud-init.yaml` usa guiones normales.
+- `build_user_data()` llama a `check_user_data_encoding()`, que comprueba esto
+  antes de enviar nada y se niega a lanzar indicando línea y carácter. **No
+  quites esa comprobación**: el fallo es silencioso y caro de encontrar.
+- Al depurar un droplet que "arrancó pero le falta todo", mira siempre
+  `grep -i "yaml blob" /var/log/cloud-init.log` antes que ninguna otra cosa.
+
 ## Acceso SSH: lo que ya nos ha mordido
 
 Detalle y reproducciones en
