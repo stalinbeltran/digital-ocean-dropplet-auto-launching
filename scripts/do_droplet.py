@@ -44,6 +44,9 @@ DEFAULTS = {
     "DO_DEV_USER": "deploy",
     # Repos que se clonan solos al aprovisionar: "owner/repo,owner/otro".
     "DO_REPOS": "",
+    # Servicios que quedan corriendo en el droplet, por nombre de descriptor en
+    # services/: "telegram-coordinator,otro". Su repo se clona solo.
+    "DO_SERVICES": "",
     "GIT_USER_NAME": "",
     "GIT_USER_EMAIL": "",
 }
@@ -438,7 +441,11 @@ def cmd_launch(args: argparse.Namespace) -> None:
         log("")
         cmd_provision(
             argparse.Namespace(
-                name=name, port=port, repo=args.repo, skip_wait=False
+                name=name,
+                port=port,
+                repo=args.repo,
+                service=args.service,
+                skip_wait=False,
             )
         )
 
@@ -457,6 +464,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
             # en el de root: hay que cambiar de usuario para encontrarlas.
             log(f"\n  Dentro:  su - {dev_user}   →   cd ~/src/<repo> && claude")
             log(f"  (o pon DO_SSH_USER={dev_user} en .env y entrarás ahí directamente)")
+        for svc in selected_services(args.service):
+            log(f"\n  Servicio '{svc['name']}' corriendo. Estado y logs:")
+            log(f"  python scripts/do_droplet.py service logs {svc['name']}")
     log(f"\n  Al terminar:    python scripts/do_droplet.py destroy {name}")
     log("  (el droplet factura por segundo mientras exista)")
     log("=" * 62)
@@ -489,6 +499,24 @@ def cmd_ssh(args: argparse.Namespace) -> None:
         cmd.append(args.cmd)
     log(f"$ {' '.join(cmd)}")
     raise SystemExit(subprocess.call(cmd))
+
+
+def cmd_service(args: argparse.Namespace) -> None:
+    """systemctl/journalctl del servicio, sin tener que recordar la sintaxis."""
+    unit = load_service(args.service)["name"]
+    remoto = {
+        "status": f"systemctl status {unit} --no-pager --lines=20",
+        "logs": f"journalctl -u {unit} -n {args.lines} --no-pager",
+        "follow": f"journalctl -u {unit} -f",
+        "restart": f"systemctl restart {unit} && systemctl is-active {unit}",
+        "stop": f"systemctl stop {unit}",
+        "start": f"systemctl start {unit} && systemctl is-active {unit}",
+    }[args.action]
+
+    _, ip, port = resolve_target(args.name or "", args.port or 0)
+    raise SystemExit(
+        subprocess.call(ssh_command(ip, port, user="root") + [remoto])
+    )
 
 
 def cmd_destroy(args: argparse.Namespace) -> None:
@@ -626,7 +654,157 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
     )
 
 
-def build_provision_script(repos: list[str]) -> str:
+# -------------------------------------------------------------------- servicios
+
+
+SERVICES_DIR = ROOT / "services"
+
+
+def load_service(name: str) -> dict:
+    """Lee services/<nombre>.json, el descriptor de un proceso de larga vida.
+
+    El lanzador no sabe nada de ningún proyecto en concreto: sabe clonar un repo,
+    instalarlo y dejarlo corriendo como unidad de systemd. Lo que cambia de un
+    servicio a otro vive en el descriptor, no aquí.
+    """
+    path = SERVICES_DIR / f"{name}.json"
+    if not path.exists():
+        disponibles = ", ".join(sorted(p.stem for p in SERVICES_DIR.glob("*.json")))
+        die(
+            f"No existe el servicio '{name}' (falta {path}).\n"
+            f"  Definidos: {disponibles or 'ninguno'}"
+        )
+    try:
+        svc = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"{path} no es JSON válido: {exc}")
+    for field in ("repo", "start"):
+        if not svc.get(field):
+            die(f"{path}: falta el campo obligatorio '{field}'.")
+    svc["name"] = name
+    # El repo se clona en ~/src/<nombre del repo>, igual que los de DO_REPOS.
+    svc.setdefault("dir", svc["repo"].rstrip("/").split("/")[-1].removesuffix(".git"))
+    svc.setdefault("install", "")
+    svc.setdefault("env_prefix", "")
+    svc.setdefault("env_file", ".env")
+    return svc
+
+
+def selected_services(extra: list[str]) -> list[dict]:
+    names: list[str] = []
+    for raw in (extra or cfg("DO_SERVICES").split(",")):
+        name = raw.strip()
+        if name and name not in names:
+            names.append(name)
+    return [load_service(n) for n in names]
+
+
+def service_env_lines(svc: dict) -> list[str]:
+    """Variables del .env del lanzador que se copian al .env del servicio.
+
+    `TG_BOT_TOKEN=xxx` aquí se convierte en `BOT_TOKEN=xxx` allí. Hace falta un
+    puente así porque estos valores son secretos: no pueden estar en el repo del
+    servicio, y menos aún en cloud-init, cuyo user_data lee cualquier usuario del
+    droplet sin sudo.
+    """
+    prefix = svc["env_prefix"]
+    if not prefix:
+        return []
+    out = []
+    for key, value in sorted(os.environ.items()):
+        if key.startswith(prefix) and len(key) > len(prefix) and value.strip():
+            out.append(f"{key[len(prefix):]}={value}")
+    return out
+
+
+def build_service_section(svc: dict, dev_user: str) -> list[str]:
+    """Trozo de script que instala un servicio y lo deja corriendo.
+
+    Nada de aquí es fatal: si un servicio falla, el droplet ya tiene credenciales
+    y repos, y se depura entrando. Abortar el aprovisionamiento entero sería peor.
+    """
+    unit = svc["name"]
+    env_file = svc["env_file"]
+    parts = [
+        "",
+        f"# --- servicio {unit}",
+        f'DIR="$H/src/{svc["dir"]}"',
+        'if [ ! -d "$DIR" ]; then',
+        f'  echo "  AVISO: {unit}: no existe $DIR, ¿falló el clonado? Me lo salto."',
+        "else",
+    ]
+
+    env_lines = service_env_lines(svc)
+    if env_lines:
+        parts += [
+            f'  cat > "$DIR/{env_file}" <<\'FIN_ENV\'',
+            "\n".join(env_lines),
+            "FIN_ENV",
+            f'  chmod 600 "$DIR/{env_file}"',
+            f'  chown "$DEV_USER:$DEV_USER" "$DIR/{env_file}"',
+        ]
+    elif svc["env_prefix"]:
+        parts.append(
+            f'  echo "  AVISO: {unit}: no hay ninguna variable {svc["env_prefix"]}* '
+            f'en el .env, arrancará sin configuración."'
+        )
+
+    if svc["install"]:
+        parts += [
+            f'  echo "  {unit}: instalando ({svc["install"]})…"',
+            f'  (cd "$DIR" && sudo -u "$DEV_USER" -H bash -lc {shq(svc["install"])}) '
+            f'|| echo "  AVISO: {unit}: falló la instalación."',
+        ]
+
+    # bash -l en el ExecStart no es adorno: el proceso necesita los tokens de
+    # ~/.config/dev-secrets.env, y systemd no puede leer ese fichero con
+    # EnvironmentFile porque sus líneas llevan `export`, que no admite. Con el
+    # shell de login se sourcea .profile -> .bashrc, donde provision puso la
+    # línea que lo carga.
+    unit_file = "\n".join(
+        [
+            "[Unit]",
+            f"Description={unit} (instalado por do_droplet.py provision)",
+            "After=network-online.target",
+            "Wants=network-online.target",
+            "",
+            "[Service]",
+            "Type=simple",
+            f"User={dev_user}",
+            "WorkingDirectory=@DIR@",
+            f"ExecStart=/bin/bash -lc {shq('exec ' + svc['start'])}",
+            "Restart=always",
+            "RestartSec=5",
+            "",
+            "[Install]",
+            "WantedBy=multi-user.target",
+        ]
+    )
+    parts += [
+        f"  cat > /etc/systemd/system/{unit}.service <<'FIN_UNIT'",
+        unit_file,
+        "FIN_UNIT",
+        # El home real no se conoce hasta ejecutar el script, así que la ruta se
+        # sustituye aquí en vez de expandirla en el heredoc (que expandiría
+        # también lo que traiga el comando de arranque).
+        f'  sed -i "s|@DIR@|$DIR|" /etc/systemd/system/{unit}.service',
+        "  systemctl daemon-reload",
+        f"  systemctl enable {unit}.service >/dev/null 2>&1 || true",
+        # restart y no start: al reaprovisionar hay que recoger el código nuevo.
+        f"  systemctl restart {unit}.service || true",
+        "  sleep 3",
+        f"  if systemctl is-active --quiet {unit}.service; then",
+        f'    echo "  {unit}: activo"',
+        "  else",
+        f'    echo "  AVISO: {unit} no arrancó. Últimas líneas del log:"',
+        f"    journalctl -u {unit}.service -n 15 --no-pager || true",
+        "  fi",
+        "fi",
+    ]
+    return parts
+
+
+def build_provision_script(repos: list[str], services: list[dict] | None = None) -> str:
     """Script que deja el droplet listo para trabajar.
 
     Todo lo secreto se escribe con umask 077 y acaba en modo 600 del usuario de
@@ -734,6 +912,9 @@ def build_provision_script(repos: list[str]) -> str:
                 "fi",
             ]
 
+    for svc in services or []:
+        parts += build_service_section(svc, dev_user)
+
     parts += [
         "",
         "# --- comprobación final",
@@ -753,6 +934,13 @@ def cmd_provision(args: argparse.Namespace) -> None:
         wait_for_dev_tools(ip, port)
 
     repos = args.repo or [r for r in cfg("DO_REPOS").split(",") if r.strip()]
+    services = selected_services(getattr(args, "service", []) or [])
+    # El repo de un servicio se clona aunque no esté en DO_REPOS: sin código no
+    # hay nada que instalar, y obligarte a listarlo dos veces sólo genera fallos.
+    for svc in services:
+        if svc["repo"] not in repos:
+            repos.append(svc["repo"])
+
     if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
         log(
             "  AVISO: no hay CLAUDE_CODE_OAUTH_TOKEN en el entorno ni en .env.\n"
@@ -765,7 +953,7 @@ def cmd_provision(args: argparse.Namespace) -> None:
             "  Créalo en https://github.com/settings/personal-access-tokens"
         )
 
-    code = run_remote_script(ip, port, build_provision_script(repos))
+    code = run_remote_script(ip, port, build_provision_script(repos, services))
     if code != 0:
         die(f"El aprovisionamiento falló (código {code}).")
     log("Aprovisionamiento terminado.")
@@ -817,6 +1005,12 @@ def main() -> None:
         "--repo", action="append", default=[], help="owner/repo a clonar (repetible)"
     )
     p.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        help="servicio de services/ que dejar corriendo (repetible)",
+    )
+    p.add_argument(
         "--no-provision",
         action="store_true",
         help="no inyectar credenciales ni clonar repos",
@@ -832,11 +1026,27 @@ def main() -> None:
         "--repo", action="append", default=[], help="owner/repo a clonar (repetible)"
     )
     p.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        help="servicio de services/ que dejar corriendo (repetible)",
+    )
+    p.add_argument(
         "--skip-wait",
         action="store_true",
         help="no esperar al testigo de instalación de cloud-init",
     )
     p.set_defaults(func=cmd_provision)
+
+    p = sub.add_parser("service", help="estado, logs y reinicio de un servicio")
+    p.add_argument(
+        "action", choices=["status", "logs", "follow", "restart", "start", "stop"]
+    )
+    p.add_argument("service", help="nombre del descriptor en services/")
+    p.add_argument("--name", help="droplet, si no es el de .env")
+    p.add_argument("--port", type=int)
+    p.add_argument("--lines", type=int, default=50, help="líneas de log (por defecto 50)")
+    p.set_defaults(func=cmd_service)
 
     p = sub.add_parser("list", help="lista los droplets de la cuenta")
     p.add_argument("--tag")

@@ -1,0 +1,7 @@
+{
+  "descripcion": "Bot de Telegram que enruta tus mensajes a claude y al shell del droplet.",
+  "repo": "stalinbeltran/telegram-coordinator",
+  "install": "npm ci",
+  "start": "npm start",
+  "env_prefix": "TG_"
+}
