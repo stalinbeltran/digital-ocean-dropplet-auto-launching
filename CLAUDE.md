@@ -73,6 +73,9 @@ Lo imprescindible:
 
 ## Convenciones
 
+- **Commitea cada cambio, en el momento.** Un cambio lógico, un commit, sin esperar a que el
+  usuario lo pida ni acumular varios en uno. Lo que no está commiteado se pierde entre sesiones y
+  entre máquinas, que es justo lo que este repo evita.
 - **Nunca** commitear tokens ni claves privadas. El token va en `.env` (gitignoreado) o en secrets del CI.
 - Variables de entorno: `DIGITALOCEAN_TOKEN` para código propio; `DIGITALOCEAN_ACCESS_TOKEN` es la que
   leen `doctl` y el provider de Terraform.
