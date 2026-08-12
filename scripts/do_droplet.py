@@ -263,6 +263,41 @@ def cmd_images(args: argparse.Namespace) -> None:
 # ------------------------------------------------------------------- ciclo de vida
 
 
+def check_user_data_encoding(text: str) -> None:
+    """Rechaza los caracteres que hacen que cloud-init tire el fichero entero.
+
+    Por el camino hasta el droplet, el user_data acaba releyéndose como latin-1.
+    Un carácter cuya codificación UTF-8 contenga un byte entre 0x80 y 0x9F se
+    convierte así en un carácter de control C1, y el parser de YAML de
+    cloud-init lo rechaza con:
+
+        Failed loading yaml blob. unacceptable character #x0097
+
+    Y no falla sólo esa línea: **descarta la configuración completa**. El droplet
+    arranca sin usuario deploy, sin ufw, sin el 443 y sin el watchdog de sshd,
+    pero con la IP puesta y SSH de root funcionando, así que parece correcto.
+    Nos pasó con un simple '×' en un comentario.
+
+    Las minúsculas acentuadas (á 0xC3 0xA1, ñ 0xC3 0xB1) se salvan porque su
+    segundo byte cae por encima de 0x9F. Las MAYÚSCULAS acentuadas (Á 0xC3 0x81,
+    Ñ 0xC3 0x91) y la raya (— 0xE2 0x80 0x94) no. De ahí que esto se compruebe
+    en vez de confiar en la vista.
+    """
+    for number, line in enumerate(text.splitlines(), start=1):
+        for char in line:
+            if any(0x80 <= byte <= 0x9F for byte in char.encode("utf-8")):
+                die(
+                    f"cloud-init.yaml tiene un carácter que rompería el arranque:\n"
+                    f"  línea {number}: {char!r} (U+{ord(char):04X})\n"
+                    f"  {line.strip()[:70]}\n\n"
+                    "Su codificación UTF-8 lleva un byte entre 0x80 y 0x9F, que al\n"
+                    "releerse como latin-1 se vuelve un carácter de control y hace que\n"
+                    "cloud-init DESCARTE TODA la configuración en silencio: el droplet\n"
+                    "arrancaría sin deploy, sin ufw y sin el watchdog de sshd.\n"
+                    "Cámbialo por ASCII ('x' en vez de '×', '-' en vez de '—')."
+                )
+
+
 def build_user_data(keys: list[dict]) -> str:
     """Inyecta las claves públicas en la plantilla de cloud-init.
 
@@ -281,7 +316,9 @@ def build_user_data(keys: list[dict]) -> str:
             out.extend(f"{indent}- {k['public_key'].strip()}" for k in keys)
         else:
             out.append(line)
-    return "\n".join(out) + "\n"
+    rendered = "\n".join(out) + "\n"
+    check_user_data_encoding(rendered)
+    return rendered
 
 
 def wait_for_action(action_id: int, timeout: int = 420) -> None:

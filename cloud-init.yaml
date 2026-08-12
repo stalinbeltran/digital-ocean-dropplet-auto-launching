@@ -122,7 +122,7 @@ write_files:
       # (curl https://claude.ai/install.sh). Ese instalador redirige a
       # downloads.claude.ai, que está en Google Cloud Storage y responde
       # 403 AccessDenied a las IPs de los droplets después de las primeras
-      # descargas. Comprobado: 5 intentos seguidos, 5 × 403. npm sí aguanta.
+      # descargas. Comprobado: 5 intentos seguidos, 5 x 403. npm sí aguanta.
       retry curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh
       retry bash /tmp/nodesource.sh
       retry apt-get install -y nodejs
