@@ -122,6 +122,13 @@ def api(method: str, path: str, body: dict | None = None) -> dict:
         except urllib.error.URLError as exc:
             last_error = str(exc.reason)
             time.sleep(2**attempt)
+        except OSError as exc:
+            # urlopen() puede volver bien y expirar luego, al leer el cuerpo:
+            # eso llega como TimeoutError, que NO es un URLError y se escapaba
+            # del bucle reventando el comando entero. Visto de verdad contra la
+            # API de DigitalOcean, dos veces en una misma sesión.
+            last_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(2**attempt)
     die(f"Sin respuesta de la API tras varios reintentos: {last_error}")
 
 
