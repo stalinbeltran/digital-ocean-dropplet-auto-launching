@@ -38,6 +38,14 @@ DEFAULTS = {
     # El droplet escucha en ambos; se prueba en este orden y se usa el primero
     # que responda. Sirve para redes que bloquean el 22 saliente.
     "DO_SSH_PORTS": "22,443",
+    # Usuario del droplet que acaba con las credenciales y los repos. Lo crea
+    # cloud-init. El aprovisionamiento entra siempre como root (hace falta para
+    # escribir en el home de otro usuario), pase lo que pase con DO_SSH_USER.
+    "DO_DEV_USER": "deploy",
+    # Repos que se clonan solos al aprovisionar: "owner/repo,owner/otro".
+    "DO_REPOS": "",
+    "GIT_USER_NAME": "",
+    "GIT_USER_EMAIL": "",
 }
 
 
@@ -389,12 +397,29 @@ def cmd_launch(args: argparse.Namespace) -> None:
             f"  https://cloud.digitalocean.com/droplets/{droplet_id}/console"
         )
 
+    if port and not args.no_provision:
+        log("")
+        cmd_provision(
+            argparse.Namespace(
+                name=name, port=port, repo=args.repo, skip_wait=False
+            )
+        )
+
     key_file = Path(cfg("DO_SSH_KEY_FILE")).expanduser()
     port_flag = f"-p {port} " if port and port != 22 else ""
     log("\n" + "=" * 62)
     log(f"  {name}  ·  {ip}")
     log(f"  ssh {port_flag}-i {key_file} {cfg('DO_SSH_USER')}@{ip}")
     log(f"  o simplemente:  python scripts/do_droplet.py ssh {name}")
+    if not args.no_provision:
+        dev_user = cfg("DO_DEV_USER")
+        if cfg("DO_SSH_USER") == dev_user:
+            log("\n  Dentro:  cd ~/src/<repo> && claude")
+        else:
+            # Las credenciales están en el home del usuario de desarrollo, no
+            # en el de root: hay que cambiar de usuario para encontrarlas.
+            log(f"\n  Dentro:  su - {dev_user}   →   cd ~/src/<repo> && claude")
+            log(f"  (o pon DO_SSH_USER={dev_user} en .env y entrarás ahí directamente)")
     log(f"\n  Al terminar:    python scripts/do_droplet.py destroy {name}")
     log("  (el droplet factura por segundo mientras exista)")
     log("=" * 62)
@@ -421,19 +446,8 @@ def cmd_ip(args: argparse.Namespace) -> None:
 
 
 def cmd_ssh(args: argparse.Namespace) -> None:
-    droplets = find_droplets(name=args.name or cfg("DO_DROPLET_NAME"))
-    if not droplets:
-        die("No encontré ese droplet. Míralos con: python scripts/do_droplet.py list")
-    ip = public_ip(droplets[0])
-    key_file = str(Path(cfg("DO_SSH_KEY_FILE")).expanduser())
-    port = args.port or wait_for_ssh(ip, timeout=15)
-    if not port:
-        die(
-            f"No se alcanza {ip} por ninguno de los puertos {cfg('DO_SSH_PORTS')}.\n"
-            "Si tu red los filtra, usa la consola web: "
-            "https://cloud.digitalocean.com/droplets"
-        )
-    cmd = ["ssh", "-p", str(port), "-i", key_file, f"{cfg('DO_SSH_USER')}@{ip}"]
+    _, ip, port = resolve_target(args.name or "", args.port or 0)
+    cmd = ssh_command(ip, port)
     if args.cmd:
         cmd.append(args.cmd)
     log(f"$ {' '.join(cmd)}")
@@ -480,6 +494,244 @@ def wait_until_gone(droplet_ids: list[int], timeout: int = 120) -> None:
     log("Aviso: la cuenta todavía lista algún droplet recién destruido.")
 
 
+# ------------------------------------------------------------- aprovisionamiento
+
+
+def shq(value: str) -> str:
+    """Entrecomilla para sh. Imprescindible: aquí viajan tokens."""
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def ssh_command(ip: str, port: int, user: str = "") -> list[str]:
+    key_file = str(Path(cfg("DO_SSH_KEY_FILE")).expanduser())
+    return [
+        "ssh",
+        "-p", str(port),
+        "-i", key_file,
+        "-o", "StrictHostKeyChecking=accept-new",
+        f"{user or cfg('DO_SSH_USER')}@{ip}",
+    ]
+
+
+def resolve_target(name: str, port_override: int = 0) -> tuple[dict, str, int]:
+    """Localiza el droplet y el puerto SSH por el que se le llega."""
+    droplets = find_droplets(name=name or cfg("DO_DROPLET_NAME"))
+    if not droplets:
+        die("No encontré ese droplet. Míralos con: python scripts/do_droplet.py list")
+    ip = public_ip(droplets[0])
+    if not ip:
+        die("El droplet no tiene IP pública.")
+    port = port_override or wait_for_ssh(ip, timeout=20) or 0
+    if not port:
+        die(
+            f"No se alcanza {ip} por ninguno de los puertos {cfg('DO_SSH_PORTS')}.\n"
+            "Si tu red los filtra, usa la consola web: "
+            "https://cloud.digitalocean.com/droplets"
+        )
+    return droplets[0], ip, port
+
+
+def run_remote_script(ip: str, port: int, script: str) -> int:
+    """Ejecuta un script en el droplet pasándolo por stdin.
+
+    Por stdin y no como argumento a propósito: lo que va en la línea de comandos
+    de ssh acaba en el `ps` del droplet, donde cualquier usuario lo vería, y este
+    script lleva tokens dentro.
+
+    Siempre como root, aunque DO_SSH_USER sea otro: hay que crear ficheros en el
+    home de otro usuario y hacer chown. DigitalOcean instala las claves de la
+    cuenta también para root, así que la conexión existe igualmente.
+    """
+    proc = subprocess.run(
+        ssh_command(ip, port, user="root") + ["bash -s"],
+        input=script.encode("utf-8"),
+    )
+    return proc.returncode
+
+
+def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
+    """Espera a que cloud-init termine de instalar Node, Claude Code y gh.
+
+    SSH responde bastante antes de que cloud-init acabe, así que inyectar los
+    secretos nada más conectar pillaría la máquina a medio hacer.
+    """
+    deadline = time.time() + timeout
+    warned = False
+    while time.time() < deadline:
+        probe = subprocess.run(
+            ssh_command(ip, port, user="root")
+            + [
+                "if [ -e /var/lib/cloud/DEV_READY ]; then echo READY; "
+                "elif [ -e /var/lib/cloud/DEV_FAILED ]; then echo FAILED; "
+                "else echo WAIT; fi"
+            ],
+            capture_output=True,
+            text=True,
+        )
+        state = probe.stdout.strip()
+        if state == "READY":
+            return
+        if state == "FAILED":
+            die(
+                "La instalación de herramientas falló en el droplet. Mira el log:\n"
+                "  python scripts/do_droplet.py ssh --cmd "
+                "'tail -40 /var/log/dev-tools-install.log'"
+            )
+        if not warned:
+            log("  instalando Node, Claude Code y gh en el droplet (2-4 min)…")
+            warned = True
+        time.sleep(10)
+    die(
+        "Se agotó la espera a que el droplet terminase de instalar las herramientas.\n"
+        "  python scripts/do_droplet.py ssh --cmd 'tail -40 /var/log/dev-tools-install.log'"
+    )
+
+
+def build_provision_script(repos: list[str]) -> str:
+    """Script que deja el droplet listo para trabajar.
+
+    Todo lo secreto se escribe con umask 077 y acaba en modo 600 del usuario de
+    desarrollo. Nada de esto puede ir en cloud-init: el user_data lo sirve la API
+    de metadatos y lo lee cualquier proceso del droplet sin privilegios.
+    """
+    dev_user = cfg("DO_DEV_USER")
+    claude_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
+
+    exports = ["# Generado por do_droplet.py provision. Modo 600, no lo copies."]
+    if claude_token:
+        exports.append(f"export CLAUDE_CODE_OAUTH_TOKEN={shq(claude_token)}")
+    if github_token:
+        # GH_TOKEN lo lee gh; GITHUB_TOKEN lo esperan casi todas las herramientas.
+        exports.append(f"export GITHUB_TOKEN={shq(github_token)}")
+        exports.append(f"export GH_TOKEN={shq(github_token)}")
+
+    parts = [
+        "set -eu",
+        "umask 077",
+        f"DEV_USER={shq(dev_user)}",
+        'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+        '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+        'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.config"',
+        "",
+        "# --- variables de entorno con los tokens",
+        'cat > "$H/.config/dev-secrets.env" <<\'FIN_SECRETOS\'',
+        "\n".join(exports),
+        "FIN_SECRETOS",
+        'chmod 600 "$H/.config/dev-secrets.env"',
+        'chown "$DEV_USER:$DEV_USER" "$H/.config/dev-secrets.env"',
+        "",
+        "# --- cargarlas en cada shell",
+        "# La línea va al PRINCIPIO de .bashrc, antes del corte que Ubuntu pone",
+        "# para shells no interactivas. Así el token existe en los tres casos:",
+        "# sesión interactiva, shell de login y `ssh droplet 'claude -p ...'`.",
+        'if ! grep -q dev-secrets.env "$H/.bashrc" 2>/dev/null; then',
+        "  TMP=$(mktemp)",
+        "  {",
+        "    echo '# Secretos de desarrollo (los inyecta do_droplet.py provision).'",
+        '    echo \'[ -f "$HOME/.config/dev-secrets.env" ] && . "$HOME/.config/dev-secrets.env"\'',
+        "    echo",
+        '    cat "$H/.bashrc" 2>/dev/null || true',
+        '  } > "$TMP"',
+        '  cat "$TMP" > "$H/.bashrc"',
+        '  rm -f "$TMP"',
+        '  chown "$DEV_USER:$DEV_USER" "$H/.bashrc"',
+        "fi",
+        "",
+        "# --- git",
+        'sudo -u "$DEV_USER" -H git config --global credential.helper store',
+        'sudo -u "$DEV_USER" -H git config --global init.defaultBranch main',
+    ]
+
+    if cfg("GIT_USER_NAME"):
+        parts.append(
+            f'sudo -u "$DEV_USER" -H git config --global user.name {shq(cfg("GIT_USER_NAME"))}'
+        )
+    if cfg("GIT_USER_EMAIL"):
+        parts.append(
+            f'sudo -u "$DEV_USER" -H git config --global user.email {shq(cfg("GIT_USER_EMAIL"))}'
+        )
+
+    if github_token:
+        parts += [
+            "",
+            "# --- credenciales de GitHub para git y para gh",
+            f'printf "https://x-access-token:%s@github.com\\n" {shq(github_token)} '
+            '> "$H/.git-credentials"',
+            'chmod 600 "$H/.git-credentials"',
+            'chown "$DEV_USER:$DEV_USER" "$H/.git-credentials"',
+            # Que un token caducado no tumbe el resto del aprovisionamiento:
+            # las credenciales de git ya están puestas y `gh` es un extra.
+            f'if printf "%s\\n" {shq(github_token)} | '
+            'sudo -u "$DEV_USER" -H gh auth login --with-token 2>/dev/null; then',
+            '  echo "  gh: $(sudo -u "$DEV_USER" -H gh api user --jq .login '
+            '2>/dev/null || echo "?")"',
+            "else",
+            '  echo "  AVISO: GitHub rechazó el token (¿caducado o sin permisos?)."',
+            '  echo "         Revísalo en https://github.com/settings/personal-access-tokens"',
+            "fi",
+        ]
+
+    if repos:
+        parts += [
+            "",
+            "# --- repos",
+            'install -d -m 755 -o "$DEV_USER" -g "$DEV_USER" "$H/src"',
+        ]
+        for repo in repos:
+            slug = repo.strip().rstrip("/")
+            if not slug:
+                continue
+            name = slug.split("/")[-1].removesuffix(".git")
+            parts += [
+                f'DEST="$H/src/{name}"',
+                'if [ -d "$DEST/.git" ]; then',
+                f'  echo "  {slug} ya estaba clonado"',
+                "else",
+                f'  echo "  clonando {slug}…"',
+                f'  sudo -u "$DEV_USER" -H git clone -q '
+                f'https://github.com/{slug}.git "$DEST" '
+                f'|| echo "  AVISO: no pude clonar {slug}"',
+                "fi",
+            ]
+
+    parts += [
+        "",
+        "# --- comprobación final",
+        'echo "  claude: $(claude --version 2>&1 | head -1)"',
+        'echo "  auth:   $(sudo -u "$DEV_USER" -H bash -lc '
+        "'claude auth status' 2>&1 | tr -d '\\n ' )\"",
+    ]
+    return "\n".join(parts) + "\n"
+
+
+def cmd_provision(args: argparse.Namespace) -> None:
+    name = args.name or cfg("DO_DROPLET_NAME")
+    _, ip, port = resolve_target(name, args.port or 0)
+    log(f"Aprovisionando '{name}' ({ip}:{port})…")
+
+    if not args.skip_wait:
+        wait_for_dev_tools(ip, port)
+
+    repos = args.repo or [r for r in cfg("DO_REPOS").split(",") if r.strip()]
+    if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+        log(
+            "  AVISO: no hay CLAUDE_CODE_OAUTH_TOKEN en el entorno ni en .env.\n"
+            "  Genéralo UNA vez en tu máquina con:  claude setup-token\n"
+            "  y pégalo en .env. Sin él, Claude Code pedirá login en el droplet."
+        )
+    if not os.environ.get("GITHUB_TOKEN", "").strip():
+        log(
+            "  AVISO: no hay GITHUB_TOKEN. No podrás clonar repos privados.\n"
+            "  Créalo en https://github.com/settings/personal-access-tokens"
+        )
+
+    code = run_remote_script(ip, port, build_provision_script(repos))
+    if code != 0:
+        die(f"El aprovisionamiento falló (código {code}).")
+    log("Aprovisionamiento terminado.")
+
+
 # ------------------------------------------------------------------------ parser
 
 
@@ -522,7 +774,30 @@ def main() -> None:
     p.add_argument("--size")
     p.add_argument("--image")
     p.add_argument("--dry-run", action="store_true", help="muestra la petición sin enviarla")
+    p.add_argument(
+        "--repo", action="append", default=[], help="owner/repo a clonar (repetible)"
+    )
+    p.add_argument(
+        "--no-provision",
+        action="store_true",
+        help="no inyectar credenciales ni clonar repos",
+    )
     p.set_defaults(func=cmd_launch)
+
+    p = sub.add_parser(
+        "provision", help="inyecta credenciales y clona repos en un droplet ya creado"
+    )
+    p.add_argument("name", nargs="?")
+    p.add_argument("--port", type=int)
+    p.add_argument(
+        "--repo", action="append", default=[], help="owner/repo a clonar (repetible)"
+    )
+    p.add_argument(
+        "--skip-wait",
+        action="store_true",
+        help="no esperar al testigo de instalación de cloud-init",
+    )
+    p.set_defaults(func=cmd_provision)
 
     p = sub.add_parser("list", help="lista los droplets de la cuenta")
     p.add_argument("--tag")

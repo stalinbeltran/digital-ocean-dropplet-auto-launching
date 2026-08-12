@@ -24,6 +24,11 @@ packages:
   - ca-certificates
   - ufw
   - fail2ban
+  # Para el instalador de herramientas de desarrollo de más abajo.
+  - jq
+  - unzip
+  - ripgrep
+  - build-essential
 
 write_files:
   # Muchas redes corporativas bloquean el puerto 22 saliente, así que sshd
@@ -78,6 +83,82 @@ write_files:
       Type=oneshot
       ExecStart=/usr/local/sbin/ssh-watchdog
 
+  # Herramientas de desarrollo: Node, Claude Code y gh.
+  #
+  # Aquí NO va ningún secreto. El `user_data` de cloud-init lo sirve la API de
+  # metadatos del droplet y lo puede leer cualquier usuario sin privilegios:
+  #   deploy$ curl http://169.254.169.254/metadata/v1/user-data   # devuelve todo
+  # Los tokens los empuja `do_droplet.py provision` por SSH cuando esto termina.
+  - path: /usr/local/sbin/dev-tools-install
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Instala el entorno de desarrollo. Idempotente: se puede volver a lanzar.
+      set -u
+      exec >>/var/log/dev-tools-install.log 2>&1
+      echo "=== $(date -Is): instalando herramientas de desarrollo"
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      # apt, npm y las descargas fallan de vez en cuando en una máquina recién
+      # creada (mirrors, DNS aún asentándose). Reintentar sale gratis; quedarse
+      # sin Claude Code en el droplet, no.
+      retry() {
+        n=0
+        until "$@"; do
+          n=$((n + 1))
+          if [ "$n" -ge 5 ]; then
+            echo "FALLO tras $n intentos: $*"
+            return 1
+          fi
+          echo "reintento $n de: $*"
+          sleep $((n * 10))
+        done
+      }
+
+      # Node 22 desde NodeSource.
+      #
+      # Claude Code se instala por npm y NO con el instalador nativo
+      # (curl https://claude.ai/install.sh). Ese instalador redirige a
+      # downloads.claude.ai, que está en Google Cloud Storage y responde
+      # 403 AccessDenied a las IPs de los droplets después de las primeras
+      # descargas. Comprobado: 5 intentos seguidos, 5 × 403. npm sí aguanta.
+      retry curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh
+      retry bash /tmp/nodesource.sh
+      retry apt-get install -y nodejs
+
+      # Instalación global como root: el binario queda en /usr/bin/claude y lo
+      # ve cualquier usuario sin tocar el PATH.
+      retry npm install -g @anthropic-ai/claude-code
+
+      # gh desde el .deb de releases. El repo apt oficial también vale, pero
+      # esto es una descarga y un dpkg, sin llavero ni sources.list que mantener.
+      GH_VER=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
+               | jq -r '.tag_name // empty' | tr -d v)
+      case "$GH_VER" in
+        [0-9]*) : ;;
+        *) GH_VER=2.63.2 ;;  # la API de GitHub limita por IP sin autenticar
+      esac
+      retry curl -fsSL -o /tmp/gh.deb \
+        "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.deb"
+      retry dpkg -i /tmp/gh.deb
+
+      echo "--- versiones instaladas"
+      node --version
+      claude --version
+      gh --version | head -1
+
+      # El testigo sólo se pone si está TODO. El lanzador espera este fichero
+      # antes de inyectar los secretos; si falla la instalación, deja el otro
+      # testigo para que falle rápido en vez de esperar en balde.
+      if command -v claude >/dev/null && command -v gh >/dev/null; then
+        touch /var/lib/cloud/DEV_READY
+        echo "=== $(date -Is): entorno de desarrollo listo"
+      else
+        touch /var/lib/cloud/DEV_FAILED
+        echo "=== $(date -Is): FALTAN HERRAMIENTAS, revisa este log"
+      fi
+
   - path: /etc/systemd/system/ssh-watchdog.timer
     content: |
       [Unit]
@@ -100,6 +181,9 @@ runcmd:
   - sh -c 'systemctl restart ssh.socket || systemctl restart ssh'
   - systemctl enable --now ssh-watchdog.timer
   - systemctl enable --now fail2ban
+  # Después de asegurar el acceso, nunca antes: si la instalación se atasca, el
+  # droplet ya es accesible y se puede mirar el log por SSH.
+  - /usr/local/sbin/dev-tools-install
   # Centinela: su existencia significa que el arranque terminó de verdad.
   # Compruébalo con: ssh <droplet> 'cloud-init status --wait'
   - touch /var/lib/cloud/READY
