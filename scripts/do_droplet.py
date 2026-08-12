@@ -22,7 +22,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-API = "https://api.digitalocean.com/v2"
+# Sin el /v2: las rutas lo llevan ya, igual que en la documentación de la API.
+API = "https://api.digitalocean.com"
 
 # Valores por defecto; cualquiera se puede sobrescribir desde .env
 DEFAULTS = {
@@ -76,6 +77,15 @@ def die(msg: str) -> "NoReturn":  # type: ignore[valid-type]
 
 def log(msg: str) -> None:
     print(msg, flush=True)
+
+
+def force_utf8_output() -> None:
+    """La consola de Windows usa cp1252 por defecto y peta con acentos y símbolos."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+        except (AttributeError, OSError):
+            pass
 
 
 # ------------------------------------------------------------------ cliente API
@@ -207,7 +217,7 @@ def cmd_register_key(args: argparse.Namespace) -> None:
 
 def cmd_sizes(args: argparse.Namespace) -> None:
     region = args.region or cfg("DO_REGION")
-    log(f"Tamaños disponibles en {region} (RAM ≥ {args.min_memory} MB):\n")
+    log(f"Tamaños disponibles en {region} (RAM >= {args.min_memory} MB):\n")
     log(f"{'SLUG':<26} {'vCPU':>4} {'RAM':>8} {'DISCO':>7} {'$/MES':>8}")
     for size in paged("/v2/sizes", "sizes"):
         if not size["available"] or region not in size["regions"]:
@@ -408,6 +418,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    force_utf8_output()
     load_env()
     parser = argparse.ArgumentParser(
         prog="do_droplet.py", description="Droplets efímeros en DigitalOcean."
