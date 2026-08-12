@@ -217,9 +217,21 @@ autenticación por contraseña desactivada, `ufw` abierto sólo para SSH,
 arranque terminó de verdad (`cloud-init status --wait` para esperarlo).
 
 Y el entorno de desarrollo: **Node 22, Claude Code y `gh`**, más `ripgrep`,
-`jq`, `unzip` y `build-essential`. Tarda 2–4 minutos sobre el arranque; el
-testigo `/var/lib/cloud/DEV_READY` marca el final y el log está en
-`/var/log/dev-tools-install.log`.
+`jq`, `unzip` y `build-essential`. El testigo `/var/lib/cloud/DEV_READY` marca el
+final y el log está en `/var/log/dev-tools-install.log`.
+
+Medido en un droplet recién creado: **de `launch` a máquina usable, unos 5
+minutos**. Cloud-init tarda 243 s en total, de los cuales 154 s son el
+`package_upgrade` de Ubuntu y sólo **30 s** instalar Node, Claude Code y `gh`. Si
+alguna vez te sobra ese tiempo, lo que hay que recortar es el `package_upgrade`,
+no las herramientas.
+
+Aviso para quien edite `cloud-init.yaml`: **no metas caracteres raros ahí**. Las
+minúsculas acentuadas valen; las mayúsculas acentuadas, la raya `—`, las comillas
+tipográficas o un `×` hacen que cloud-init descarte el fichero **entero** y el
+droplet arranque sin ufw y sin el watchdog de sshd, aparentando estar bien. El
+lanzador lo comprueba y se niega a lanzar, pero mejor no llegar ahí. El detalle
+está en [CLAUDE.md](CLAUDE.md).
 
 Claude Code se instala **por npm**, no con el instalador nativo
 (`curl https://claude.ai/install.sh | bash`). Ese instalador redirige a

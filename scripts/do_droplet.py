@@ -615,7 +615,9 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
                 "'tail -40 /var/log/dev-tools-install.log'"
             )
         if not warned:
-            log("  instalando Node, Claude Code y gh en el droplet (2-4 min)…")
+            # La espera larga no son las herramientas (30 s medidos), sino el
+            # package_upgrade de Ubuntu que corre antes: 154 s en la medición.
+            log("  esperando a que cloud-init termine de instalar (unos 4 min)…")
             warned = True
         time.sleep(10)
     die(

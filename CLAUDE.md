@@ -64,11 +64,20 @@ El droplet arranca igualmente, coge IP y deja entrar a root por SSH — o sea, q
 *parece* correcto — pero **sin usuario `deploy`, sin ufw, sin el 443 y sin el
 watchdog de sshd**, que es precisamente la avería de la que no se vuelve.
 
-- Las minúsculas acentuadas se salvan de casualidad: `á` es `0xC3 0xA1` y su
-  segundo byte pasa de 0x9F.
-- Las **mayúsculas acentuadas** (`Á` = `0xC3 0x81`, `Ñ` = `0xC3 0x91`) y la
-  **raya** (`—` = `0xE2 0x80 0x94`) sí rompen. Y este repo escribe rayas por
-  todas partes: en `cloud-init.yaml` usa guiones normales.
+**Esto aplica sólo a `cloud-init.yaml`**, que es lo único que viaja como
+`user_data`. En el README, en este fichero, en el código Python y en los mensajes
+de commit escribe lo que quieras: no pasan por ese camino.
+
+Dentro de `cloud-init.yaml`:
+
+| | |
+|---|---|
+| **Seguro** | ASCII; minúsculas acentuadas `á é í ó ú ñ ü`; `¿ ¡ º ª` |
+| **Rompe** | MAYÚSCULAS acentuadas `Á É Í Ó Ú Ñ`; `×`; raya `—` y `–`; comillas tipográficas `“ ” ‘ ’`; `…`; flechas `→`; emoji |
+
+La regla real es "ningún byte entre 0x80 y 0x9F en la codificación UTF-8", pero
+en la práctica basta con recordar que **las minúsculas acentuadas valen y casi
+todo lo demás no ASCII, no**. Si dudas, escribe ASCII y ya.
 - `build_user_data()` llama a `check_user_data_encoding()`, que comprueba esto
   antes de enviar nada y se niega a lanzar indicando línea y carácter. **No
   quites esa comprobación**: el fallo es silencioso y caro de encontrar.
