@@ -44,6 +44,33 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
   (`DELETE /v2/droplets?tag_name=...`) aunque el proceso lanzador muera.
 - `private_networking` está deprecado; usa `vpc_uuid`.
 
+## Acceso SSH: lo que ya nos ha mordido
+
+Detalle y reproducciones en
+[docs/digitalocean/acceso-ssh-y-consola.md](docs/digitalocean/acceso-ssh-y-consola.md).
+Lo imprescindible:
+
+- **Antes de culpar a la red, compara un puerto permitido con uno denegado.** ufw deja pasar el 22
+  y el 443 y tira el resto. Si el 22 contesta **RST** y el 80 se queda en **timeout**, el paquete
+  llega al droplet y lo que pasa es que **nadie escucha**: sshd está caído, no hay bloqueo de red.
+  Si *todos* los puertos se comportan igual, entonces sí mira la red. Un RST con ~2,6 s de retardo
+  parece un appliance y no lo es.
+- **La consola web de DigitalOcean no es una puerta trasera: va por encima de sshd.** Si sshd no
+  escucha, tampoco entras por ahí. La única vía sin sshd es la *Recovery Console* (VNC), y **exige
+  contraseña**, que estas imágenes no tienen: hay que resetear la de root desde el panel.
+- **El agente de DO elige el puerto leyendo el primer `Port` de `/etc/ssh/sshd_config`**, no
+  `ssh.socket`. Si cambias puertos, cámbialos en los dos sitios o la consola web apuntará al 22 a
+  ciegas.
+- **En Ubuntu 24.04 sshd va por socket** (`ssh.socket`), así que `Port` de `sshd_config` se ignora
+  para escuchar; los puertos reales salen de `ListenStream`. Una actualización de `openssh-server`
+  puede devolverlo al `ssh.service` clásico, y en ese vaivén se ha quedado sin arrancar. Por eso
+  `cloud-init.yaml` instala el timer `ssh-watchdog`, que cada minuto comprueba que algo escucha en
+  el 22 y revive sshd dejando traza en `/var/log/ssh-watchdog.log`. **Si tocas el arranque de sshd,
+  no quites el watchdog**: sin él un droplet sin sshd es irrecuperable salvo a mano por VNC.
+- **El borrado es asíncrono.** `DELETE /v2/droplets/{id}` contesta enseguida pero el droplet sigue
+  saliendo en `GET /v2/droplets` unos segundos. Destruir y recrear con el mismo nombre sin esperar
+  falla con un "ya existe" falso; `cmd_destroy` espera con `wait_until_gone()`.
+
 ## Convenciones
 
 - **Nunca** commitear tokens ni claves privadas. El token va en `.env` (gitignoreado) o en secrets del CI.

@@ -133,3 +133,27 @@ así que un `destroy --tag ephemeral --yes` limpia cualquier resto olvidado.
 autenticación por contraseña desactivada, `ufw` abierto sólo para SSH,
 `fail2ban`, y `git`/`curl` instalados. `/var/lib/cloud/READY` aparece cuando el
 arranque terminó de verdad (`cloud-init status --wait` para esperarlo).
+
+Además va un **watchdog de sshd**: un timer de systemd que cada minuto comprueba
+que alguien escucha en el 22 y, si no, revive `ssh.socket` y lo apunta en
+`/var/log/ssh-watchdog.log`. No es paranoia — nos pasó: en Ubuntu 24.04 sshd
+arranca por socket, una actualización de `openssh-server` puede devolverlo al
+`ssh.service` clásico y en ese cambio se quedó sin arrancar. Un droplet sin sshd
+**no se rescata ni por la consola web** (ver abajo).
+
+## Si no puedes entrar
+
+Antes de culpar a tu red, mira **qué puerto responde y cómo**. `ufw` deja pasar
+el 22 y el 443 y descarta el resto, y esa asimetría lo delata todo:
+
+| lo que ves | qué significa |
+|---|---|
+| 22 da **RST** ("conexión rechazada") y el 80 da **timeout** | el paquete llega al droplet: **sshd está caído** |
+| todos los puertos igual (todos timeout, o todos RST) | ahí sí, mira la red |
+
+Y ojo con la consola del navegador: **también depende de sshd**, porque el agente
+de DigitalOcean se conecta al sshd del propio droplet. Si sshd no escucha, la
+única vía es la *Recovery Console* (VNC), que exige contraseña de root — y estas
+imágenes se crean sólo con claves, así que hay que resetearla antes desde el
+panel. Todo el detalle en
+[docs/digitalocean/acceso-ssh-y-consola.md](docs/digitalocean/acceso-ssh-y-consola.md).
