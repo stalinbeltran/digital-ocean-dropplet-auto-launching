@@ -29,6 +29,13 @@ packages:
   - unzip
   - ripgrep
   - build-essential
+  # Python. El sistema ya trae el intérprete, pero no con qué instalar nada:
+  # sin python3-venv, `python3 -m venv` falla aunque `python3` exista.
+  # Ojo: en Ubuntu 24.04 `pip install` FUERA de un venv se niega a funcionar
+  # (externally-managed-environment, PEP 668). Hay que usar venv o uv.
+  - python3-venv
+  - python3-pip
+  - python3-dev
 
 write_files:
   # Muchas redes corporativas bloquean el puerto 22 saliente, así que sshd
@@ -143,15 +150,36 @@ write_files:
         "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.deb"
       retry dpkg -i /tmp/gh.deb
 
+      # uv: instalador de paquetes y gestor de entornos de Python, un binario
+      # estatico sin dependencias. Va a /usr/local/bin y no al home de root,
+      # que es donde lo dejaria el instalador oficial (curl astral.sh | sh):
+      # ahi no lo veria el usuario de trabajo.
+      #
+      # Para que sirve, ademas de ir rapido: en Ubuntu 24.04 `pip install`
+      # fuera de un entorno virtual se niega a funcionar (PEP 668,
+      # externally-managed-environment), y uv se salta ese problema entero.
+      # Tambien sabe instalar otras versiones de Python si un proyecto pide
+      # una que no es la del sistema.
+      UV_TGZ=uv-x86_64-unknown-linux-gnu
+      retry curl -fsSL -o /tmp/uv.tar.gz \
+        "https://github.com/astral-sh/uv/releases/latest/download/${UV_TGZ}.tar.gz"
+      tar -xzf /tmp/uv.tar.gz -C /tmp
+      install -m 0755 "/tmp/${UV_TGZ}/uv" /usr/local/bin/uv
+      install -m 0755 "/tmp/${UV_TGZ}/uvx" /usr/local/bin/uvx
+
       echo "--- versiones instaladas"
       node --version
       claude --version
       gh --version | head -1
+      python3 --version
+      uv --version
 
       # El testigo sólo se pone si está TODO. El lanzador espera este fichero
       # antes de inyectar los secretos; si falla la instalación, deja el otro
       # testigo para que falle rápido en vez de esperar en balde.
-      if command -v claude >/dev/null && command -v gh >/dev/null; then
+      if command -v claude >/dev/null && command -v gh >/dev/null \
+         && command -v uv >/dev/null \
+         && python3 -m venv --help >/dev/null 2>&1; then
         touch /var/lib/cloud/DEV_READY
         echo "=== $(date -Is): entorno de desarrollo listo"
       else
