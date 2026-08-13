@@ -510,8 +510,20 @@ python scripts/do_droplet.py launch mini `
   --tag control `
   --service telegram-launcher `
   --repo stalinbeltran/digital-ocean-dropplet-auto-launching `
-  --push-do-token
+  --push-do-token `
+  --push-env DO_SIZE,DO_IMAGE,DO_REGION,DO_TAG,DO_SSH_USER,DO_SSH_PORTS,DO_DEV_USER `
+  --push-env DO_REPOS,DO_SERVICES,GIT_USER_NAME,GIT_USER_EMAIL `
+  --push-env TG_BOT_TOKEN,TG_ALLOWED_USER_IDS,TG_CLAUDE_PERMISSION_MODE
 ```
+
+`--push-env` copia al mini las variables que le nombres. **Sin ellas lanza
+droplets peores que los tuyos y no te enteras hasta que entras en uno**: su copia
+del lanzador no tiene `.env` (está gitignorado), así que sin esto crearía máquinas
+sin tus repos, sin autoría de git y sin el bot Coordinador. Se puede repetir y
+admite comas; una variable que aquí esté vacía se avisa y no se envía.
+
+`--repo` limita el clonado a este repo. Si lo omites, el mini se clonaría también
+lo que tengas en `DO_REPOS`, que en una máquina de 512 MB no pinta nada.
 
 `--push-do-token` es lo que la convierte en lanzador: envía tu token de
 DigitalOcean a `~deploy/.config/dev-secrets.env`, junto a los demás secretos.
@@ -554,6 +566,63 @@ Y a partir de ahí, desde el móvil:
 launch proyecto-05
 list
 destroy proyecto-05 --yes
+```
+
+### Actualizar su configuración sin recrearla
+
+Cuando cambies el `.env` de tu laptop, **el mini no se entera**: su configuración
+es la copia que le dejaste en `~deploy/.config/dev-secrets.env` la última vez.
+Los droplets que cree seguirán saliendo con los valores viejos.
+
+No hay que destruirla ni volver a lanzarla. Se re-aprovisiona, que reescribe esa
+copia y reinicia el bot:
+
+```powershell
+python scripts/do_droplet.py provision mini `
+  --service telegram-launcher `
+  --repo stalinbeltran/digital-ocean-dropplet-auto-launching `
+  --push-do-token `
+  --push-env DO_SIZE,DO_IMAGE,DO_REGION,DO_TAG,DO_SSH_USER,DO_SSH_PORTS,DO_DEV_USER `
+  --push-env DO_REPOS,DO_SERVICES,GIT_USER_NAME,GIT_USER_EMAIL `
+  --push-env TG_BOT_TOKEN,TG_ALLOWED_USER_IDS,TG_CLAUDE_PERMISSION_MODE
+```
+
+Es el mismo bloque de opciones que el `launch`, sin las que sólo valen al crear
+la máquina (`--size`, `--cloud-init`, `--tag`). Tarda menos de un minuto: los
+repos ya están clonados y sólo rehace credenciales, el `.env` del bot y la unidad
+de systemd.
+
+#### Para cambiar un solo parámetro, el comando es el mismo
+
+**No existe un "empujar sólo esta variable", y no es un olvido:**
+`dev-secrets.env` se escribe entero de una vez (`cat >`), no se va añadiendo. Lo
+que no venga en el comando **desaparece del mini**. Si quieres cambiar sólo
+`DO_SIZE`, el procedimiento es:
+
+1. editas `DO_SIZE` en tu `.env`,
+2. ejecutas **el comando completo de arriba**, tal cual, sin quitar nada.
+
+Quitar `--push-do-token` porque "el token no ha cambiado" deja al mini sin
+`DO_TOKEN`, y acortar la lista de `--push-env` borra las que falten. El fichero
+final es exactamente lo que diga ese comando.
+
+Dos consecuencias más de lo mismo:
+
+- **Un `TGL_*` cambiado necesita `--service telegram-launcher`** en el comando:
+  es lo que reescribe el `.env` del bot y hace `systemctl restart`. Sin esa
+  opción el bot sigue con el token o la allowlist anteriores.
+- **`provision` no hace `git pull`.** Si el cambio está en el código del lanzador
+  y no en el `.env`, el mini se queda con su versión: hay que tirar del repo a
+  mano, `ssh mini --cmd "cd ~/src/digital-ocean-dropplet-auto-launching && git pull"`.
+
+Y los **droplets de trabajo que el mini ya había creado no cambian**: la
+configuración se aplica en el momento del `launch`. A los que sigan vivos,
+`provision <nombre>` uno a uno.
+
+Para comprobar qué quedó dentro sin sacar ningún secreto a la pantalla:
+
+```powershell
+python scripts/do_droplet.py ssh mini --cmd "sed -n 's/^export \([A-Z_]*\)=.*/  \1/p' ~/.config/dev-secrets.env"
 ```
 
 ## Acceso desde tu otra laptop
