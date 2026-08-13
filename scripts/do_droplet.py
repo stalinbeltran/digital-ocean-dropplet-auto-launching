@@ -574,6 +574,13 @@ def ssh_command(ip: str, port: int, user: str = "") -> list[str]:
         "-p", str(port),
         "-i", key_file,
         "-o", "StrictHostKeyChecking=accept-new",
+        # Los keepalives no son un lujo: cloud-init reinicia ssh.socket en pleno
+        # arranque y deja medio abierta cualquier conexión de ese momento. Sin
+        # esto, ssh se queda esperando para siempre a un servidor que ya no
+        # está, y con él el proceso que lo llamó. Nos colgó un launch 20 minutos.
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
+        "-o", "ConnectTimeout=15",
         f"{user or cfg('DO_SSH_USER')}@{ip}",
     ]
 
@@ -623,16 +630,24 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
     deadline = time.time() + timeout
     warned = False
     while time.time() < deadline:
-        probe = subprocess.run(
-            ssh_command(ip, port, user="root")
-            + [
-                "if [ -e /var/lib/cloud/DEV_READY ]; then echo READY; "
-                "elif [ -e /var/lib/cloud/DEV_FAILED ]; then echo FAILED; "
-                "else echo WAIT; fi"
-            ],
-            capture_output=True,
-            text=True,
-        )
+        try:
+            probe = subprocess.run(
+                ssh_command(ip, port, user="root")
+                + [
+                    "if [ -e /var/lib/cloud/DEV_READY ]; then echo READY; "
+                    "elif [ -e /var/lib/cloud/DEV_FAILED ]; then echo FAILED; "
+                    "else echo WAIT; fi"
+                ],
+                capture_output=True,
+                text=True,
+                # Cinturón además de los keepalives: si una sonda se atasca, se
+                # corta y se vuelve a intentar. Antes bloqueaba el bucle entero
+                # y el deadline de aquí abajo no se comprobaba nunca.
+                timeout=90,
+            )
+        except subprocess.TimeoutExpired:
+            log("  (la comprobación se atascó, reintentando)")
+            continue
         state = probe.stdout.strip()
         if state == "READY":
             return

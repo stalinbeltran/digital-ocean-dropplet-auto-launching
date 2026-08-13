@@ -145,6 +145,14 @@ Lo imprescindible:
   `cloud-init.yaml` instala el timer `ssh-watchdog`, que cada minuto comprueba que algo escucha en
   el 22 y revive sshd dejando traza en `/var/log/ssh-watchdog.log`. **Si tocas el arranque de sshd,
   no quites el watchdog**: sin él un droplet sin sshd es irrecuperable salvo a mano por VNC.
+- **Todo `ssh` del lanzador va con keepalives, y toda espera con `timeout=`.** `runcmd`
+  reinicia `ssh.socket` en pleno arranque, así que una conexión abierta en ese momento se
+  queda medio abierta: el cliente espera para siempre a un servidor que ya no está. Nos
+  colgó un `launch` 20 minutos con el droplet perfectamente listo — `DEV_READY` puesto y la
+  sonda de `wait_for_dev_tools` esperando a un `ssh` muerto. Como `subprocess.run` no
+  llevaba `timeout`, el `deadline` de la propia función no llegaba a comprobarse nunca.
+  De ahí `ServerAliveInterval`/`ConnectTimeout` en `ssh_command()` y el `timeout=` en la
+  sonda. **No los quites**: el síntoma es "se quedó pensando" y no aparece en ningún log.
 - **El borrado es asíncrono.** `DELETE /v2/droplets/{id}` contesta enseguida pero el droplet sigue
   saliendo en `GET /v2/droplets` unos segundos. Destruir y recrear con el mismo nombre sin esperar
   falla con un "ya existe" falso; `cmd_destroy` espera con `wait_until_gone()`.
