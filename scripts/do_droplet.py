@@ -461,6 +461,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 repo=args.repo,
                 service=args.service,
                 push_do_token=args.push_do_token,
+                push_env=args.push_env,
                 skip_wait=False,
             )
         )
@@ -851,8 +852,22 @@ def build_service_section(svc: dict, dev_user: str) -> list[str]:
     return parts
 
 
+def push_env_names(valores: list[str]) -> list[str]:
+    """Nombres de variables a copiar, aceptando repetición y comas."""
+    nombres: list[str] = []
+    for bruto in valores:
+        for nombre in bruto.split(","):
+            nombre = nombre.strip()
+            if nombre and nombre not in nombres:
+                nombres.append(nombre)
+    return nombres
+
+
 def build_provision_script(
-    repos: list[str], services: list[dict] | None = None, push_do_token: bool = False
+    repos: list[str],
+    services: list[dict] | None = None,
+    push_do_token: bool = False,
+    push_env: list[str] | None = None,
 ) -> str:
     """Script que deja el droplet listo para trabajar.
 
@@ -878,6 +893,17 @@ def build_provision_script(
         # lo tengan las sesiones de la máquina; si no, `register-key` desde
         # dentro falla con un "falta el token" que despista.
         exports.append(f"export DO_TOKEN={shq(token())}")
+
+    # Config del lanzador que se lleva la máquina de control, para que los
+    # droplets que cree ella salgan iguales que los que creas tú: mismos repos,
+    # misma autoría de git, mismos servicios. Sin esto lanza máquinas peores y
+    # no se nota hasta que entras en una.
+    for nombre in push_env_names(push_env or []):
+        valor = os.environ.get(nombre, "").strip()
+        if not valor:
+            log(f"  AVISO: --push-env {nombre} no tiene valor aquí, no se envía.")
+            continue
+        exports.append(f"export {nombre}={shq(valor)}")
 
     parts = [
         "set -eu",
@@ -1029,7 +1055,12 @@ def cmd_provision(args: argparse.Namespace) -> None:
     code = run_remote_script(
         ip,
         port,
-        build_provision_script(repos, services, getattr(args, "push_do_token", False)),
+        build_provision_script(
+            repos,
+            services,
+            getattr(args, "push_do_token", False),
+            getattr(args, "push_env", []),
+        ),
     )
     if code != 0:
         die(f"El aprovisionamiento falló (código {code}).")
@@ -1098,6 +1129,15 @@ def main() -> None:
         help="servicio de services/ que dejar corriendo (repetible)",
     )
     p.add_argument(
+        "--push-env",
+        action="append",
+        default=[],
+        metavar="VARS",
+        help="variables de tu .env que copiar al droplet, separadas por coma. "
+        "Para la máquina de control: sin ellas lanzaría droplets sin tus repos "
+        "ni tus servicios",
+    )
+    p.add_argument(
         "--push-do-token",
         action="store_true",
         help="envía también el DO_TOKEN al droplet, para que pueda lanzar otros. "
@@ -1123,6 +1163,15 @@ def main() -> None:
         action="append",
         default=[],
         help="servicio de services/ que dejar corriendo (repetible)",
+    )
+    p.add_argument(
+        "--push-env",
+        action="append",
+        default=[],
+        metavar="VARS",
+        help="variables de tu .env que copiar al droplet, separadas por coma. "
+        "Para la máquina de control: sin ellas lanzaría droplets sin tus repos "
+        "ni tus servicios",
     )
     p.add_argument(
         "--push-do-token",
