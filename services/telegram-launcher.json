@@ -1,0 +1,7 @@
+{
+  "descripcion": "El mismo coordinador, pero con el bot Lanzador: crea y destruye droplets desde el movil.",
+  "repo": "stalinbeltran/telegram-coordinator",
+  "install": "npm ci",
+  "start": "npm start",
+  "env_prefix": "TGL_"
+}

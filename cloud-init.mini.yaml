@@ -1,0 +1,181 @@
+#cloud-config
+# Primer arranque de la maquina de CONTROL: la pequena que se queda encendida
+# para poder lanzar droplets grandes desde el movil.
+#
+# Diferencias con cloud-init.yaml, y por que:
+#   - Sin Claude Code. Es una app de Node que en marcha ocupa cientos de MB y
+#     los droplets vienen sin swap; en 512 MB el kernel la mata. El trabajo de
+#     verdad se hace en los droplets que esta maquina lanza.
+#   - Sin build-essential ni herramientas de Python. Aqui solo corre el bot y
+#     do_droplet.py, que es stdlib pura.
+#   - Con swap. 512 MB sin swap es una maquina que se muere sola en el primer
+#     pico; el swapfile es el unico seguro que se puede poner.
+#   - Con Node, que es lo que necesita el bot de Telegram.
+#
+# El acceso se cuida igual o mas que en la otra plantilla: esta maquina es de
+# larga vida y perderla significa quedarse sin lanzador.
+#
+# OJO con los caracteres no ASCII en este fichero: un byte entre 0x80 y 0x9F
+# hace que cloud-init descarte la configuracion ENTERA en silencio. Ver CLAUDE.md.
+
+users:
+  - name: deploy
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      # {{SSH_AUTHORIZED_KEYS}}
+
+ssh_pwauth: false
+disable_root: false
+
+# 1 GB de swap. Con 512 MB de RAM, un `npm ci` o una actualizacion de apt se
+# comen la memoria y sin esto el kernel empieza a matar procesos, el bot entre
+# ellos. Es la diferencia entre una maquina que aguanta meses y una que no.
+swap:
+  filename: /swapfile
+  size: 1073741824
+  maxsize: 1073741824
+
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - curl
+  - ca-certificates
+  - ufw
+  - fail2ban
+  - jq
+
+write_files:
+  # Mismo doble puerto que en la plantilla normal: muchas redes bloquean el 22
+  # saliente. En Ubuntu 24.04 sshd va por socket y `Port` de sshd_config se
+  # ignora, asi que los puertos reales salen de ListenStream.
+  - path: /etc/systemd/system/ssh.socket.d/10-extra-ports.conf
+    content: |
+      [Socket]
+      ListenStream=
+      ListenStream=22
+      ListenStream=443
+
+  # Ignorado bajo activacion por socket, pero necesario si una actualizacion de
+  # openssh-server devuelve el arranque al ssh.service clasico, y porque el
+  # agente de DigitalOcean lee de aqui a que puerto conecta la consola web.
+  - path: /etc/ssh/sshd_config.d/10-ports.conf
+    content: |
+      Port 22
+      Port 443
+
+  - path: /usr/local/sbin/ssh-watchdog
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      LOG=/var/log/ssh-watchdog.log
+      if ss -lnt '( sport = :22 )' | grep -q LISTEN; then
+        exit 0
+      fi
+      {
+        echo "=== $(date -Is): nadie escucha en el 22, reviviendo sshd"
+        systemctl daemon-reload
+        systemctl restart ssh.socket || systemctl restart ssh
+        systemctl --no-pager --lines=20 status ssh.socket ssh || true
+        ss -lnt || true
+      } >> "$LOG" 2>&1
+
+  - path: /etc/systemd/system/ssh-watchdog.service
+    content: |
+      [Unit]
+      Description=Revive sshd si deja de escuchar
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/ssh-watchdog
+
+  - path: /etc/systemd/system/ssh-watchdog.timer
+    content: |
+      [Unit]
+      Description=Comprueba cada minuto que sshd sigue escuchando
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=1min
+
+      [Install]
+      WantedBy=timers.target
+
+  # Herramientas: Node (para el bot) y gh. Nada mas.
+  #
+  # Aqui NO va ningun secreto: el user_data lo sirve la API de metadatos del
+  # droplet y lo lee cualquier usuario sin sudo. Los tokens, incluido el de
+  # DigitalOcean que esta maquina necesita para crear droplets, los empuja
+  # do_droplet.py provision por SSH cuando esto termina.
+  - path: /usr/local/sbin/dev-tools-install
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Idempotente: se puede volver a lanzar.
+      set -u
+      exec >>/var/log/dev-tools-install.log 2>&1
+      echo "=== $(date -Is): instalando herramientas de la maquina de control"
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      retry() {
+        n=0
+        until "$@"; do
+          n=$((n + 1))
+          if [ "$n" -ge 5 ]; then
+            echo "FALLO tras $n intentos: $*"
+            return 1
+          fi
+          echo "reintento $n de: $*"
+          sleep $((n * 10))
+        done
+      }
+
+      # Node 22 desde NodeSource, para el coordinador de Telegram.
+      retry curl -fsSL https://deb.nodesource.com/setup_22.x -o /tmp/nodesource.sh
+      retry bash /tmp/nodesource.sh
+      retry apt-get install -y nodejs
+
+      # gh desde el .deb de releases, igual que en la plantilla normal.
+      GH_VER=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
+               | jq -r '.tag_name // empty' | tr -d v)
+      case "$GH_VER" in
+        [0-9]*) : ;;
+        *) GH_VER=2.63.2 ;;
+      esac
+      retry curl -fsSL -o /tmp/gh.deb \
+        "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_amd64.deb"
+      retry dpkg -i /tmp/gh.deb
+
+      echo "--- versiones instaladas"
+      node --version
+      gh --version | head -1
+      python3 --version
+      free -m
+
+      # do_droplet.py solo necesita python3 y ssh, que ya vienen en la imagen.
+      # El testigo se pone si esta lo que esta maquina si necesita.
+      if command -v node >/dev/null && command -v git >/dev/null \
+         && command -v python3 >/dev/null; then
+        touch /var/lib/cloud/DEV_READY
+        echo "=== $(date -Is): maquina de control lista"
+      else
+        touch /var/lib/cloud/DEV_FAILED
+        echo "=== $(date -Is): FALTAN HERRAMIENTAS, revisa este log"
+      fi
+
+runcmd:
+  - ufw allow 22/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl daemon-reload
+  - systemctl enable ssh.socket
+  - sh -c 'systemctl restart ssh.socket || systemctl restart ssh'
+  - systemctl enable --now ssh-watchdog.timer
+  - systemctl enable --now fail2ban
+  - /usr/local/sbin/dev-tools-install
+  - touch /var/lib/cloud/READY
+
+final_message: "Maquina de control lista tras $UPTIME segundos."

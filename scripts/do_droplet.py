@@ -32,6 +32,10 @@ DEFAULTS = {
     "DO_IMAGE": "ubuntu-24-04-x64",
     "DO_DROPLET_NAME": "proyecto-01",
     "DO_TAG": "ephemeral",
+    # Plantilla de primer arranque. Hay más de una porque no todas las máquinas
+    # quieren lo mismo: cloud-init.mini.yaml es para el control, que con 512 MB
+    # no puede con Claude Code pero sí lanza droplets grandes.
+    "DO_CLOUD_INIT": "cloud-init.yaml",
     "DO_SSH_KEY_FILE": str(Path.home() / ".ssh" / "do_droplet"),
     "DO_SSH_KEYS": "",  # nombres/fingerprints/IDs separados por coma; vacío = todas
     "DO_SSH_USER": "root",
@@ -301,15 +305,21 @@ def check_user_data_encoding(text: str) -> None:
                 )
 
 
-def build_user_data(keys: list[dict]) -> str:
+def build_user_data(keys: list[dict], perfil: str = "") -> str:
     """Inyecta las claves públicas en la plantilla de cloud-init.
 
     Sustituye la línea marcadora respetando su sangría, que en YAML es lo que
     determina si el fichero es válido.
+
+    El perfil elige la plantilla: no todas las máquinas quieren lo mismo. Una de
+    512 MB no puede con Claude Code (es Node, y los droplets vienen sin swap:
+    el kernel mata el proceso), pero sí le sobra para lanzar droplets grandes.
     """
-    template = ROOT / "cloud-init.yaml"
+    nombre = perfil or cfg("DO_CLOUD_INIT")
+    template = ROOT / nombre
     if not template.exists():
-        return ""
+        disponibles = ", ".join(sorted(p.name for p in ROOT.glob("cloud-init*.yaml")))
+        die(f"No existe la plantilla '{nombre}'.\n  Disponibles: {disponibles}")
     out: list[str] = []
     for line in template.read_text(encoding="utf-8").splitlines():
         # Coincidencia exacta: así una mención del marcador en un comentario
@@ -399,15 +409,20 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "size": args.size or cfg("DO_SIZE"),
         "image": args.image or cfg("DO_IMAGE"),
         "ssh_keys": [k["id"] for k in keys],
-        "tags": [cfg("DO_TAG")],
+        # El tag decide qué se barre con `destroy --tag`. Una máquina de control
+        # no puede llevar el de los efímeros: se la llevaría por delante.
+        "tags": [args.tag or cfg("DO_TAG")],
         "monitoring": True,
         "ipv6": True,
     }
-    user_data = build_user_data(keys)
+    user_data = build_user_data(keys, args.cloud_init or "")
     if user_data:
         body["user_data"] = user_data
 
-    log(f"Creando '{name}': {body['size']} · {body['image']} · {body['region']}")
+    log(
+        f"Creando '{name}': {body['size']} · {body['image']} · {body['region']}"
+        f" · tag {body['tags'][0]} · {args.cloud_init or cfg('DO_CLOUD_INIT')}"
+    )
     log(f"Claves SSH autorizadas: {', '.join(k['name'] for k in keys)}")
     if args.dry_run:
         log("\n--dry-run, no se envía nada. Cuerpo de la petición:\n")
@@ -711,7 +726,23 @@ def selected_services(extra: list[str]) -> list[dict]:
         name = raw.strip()
         if name and name not in names:
             names.append(name)
-    return [load_service(n) for n in names]
+    servicios = [load_service(n) for n in names]
+    # Dos servicios del mismo repo comparten directorio, y con él el .env y los
+    # datos: el segundo pisaría al primero. Pasa con telegram-coordinator y
+    # telegram-launcher, que son el mismo programa con distinto bot y por eso
+    # van en máquinas distintas, nunca juntos.
+    por_dir: dict[str, str] = {}
+    for svc in servicios:
+        otro = por_dir.get(svc["dir"])
+        if otro:
+            die(
+                f"Los servicios '{otro}' y '{svc['name']}' usan el mismo directorio "
+                f"(~/src/{svc['dir']}).\n"
+                "  Comparten .env y datos, así que no pueden convivir en un droplet.\n"
+                "  Pon cada uno en una máquina."
+            )
+        por_dir[svc["dir"]] = svc["name"]
+    return servicios
 
 
 def service_env_lines(svc: dict) -> list[str]:
@@ -894,7 +925,11 @@ def build_provision_script(repos: list[str], services: list[dict] | None = None)
             'chown "$DEV_USER:$DEV_USER" "$H/.git-credentials"',
             # Que un token caducado no tumbe el resto del aprovisionamiento:
             # las credenciales de git ya están puestas y `gh` es un extra.
-            f'if printf "%s\\n" {shq(github_token)} | '
+            # Y si no hay gh (la máquina de control no lo lleva), no se avisa de
+            # un rechazo que no ha ocurrido.
+            'if ! command -v gh >/dev/null; then',
+            '  echo "  gh: no instalado en esta máquina, git sí tiene el token"',
+            f'elif printf "%s\\n" {shq(github_token)} | '
             'sudo -u "$DEV_USER" -H gh auth login --with-token 2>/dev/null; then',
             '  echo "  gh: $(sudo -u "$DEV_USER" -H gh api user --jq .login '
             '2>/dev/null || echo "?")"',
@@ -933,21 +968,24 @@ def build_provision_script(repos: list[str], services: list[dict] | None = None)
     parts += [
         "",
         "# --- comprobación final",
-        'echo "  claude: $(claude --version 2>&1 | head -1)"',
-        'echo "  auth:   $(sudo -u "$DEV_USER" -H bash -lc '
+        # La máquina de control no lleva Claude Code (no cabe en 512 MB), así
+        # que preguntarle por su versión sólo produciría un error confuso.
+        "if command -v claude >/dev/null; then",
+        '  echo "  claude: $(claude --version 2>&1 | head -1)"',
+        '  echo "  auth:   $(sudo -u "$DEV_USER" -H bash -lc '
         "'claude auth status' 2>&1 | tr -d '\\n ' )\"",
+        "else",
+        '  echo "  claude: no instalado en esta máquina"',
+        "fi",
     ]
     return "\n".join(parts) + "\n"
 
 
 def cmd_provision(args: argparse.Namespace) -> None:
     name = args.name or cfg("DO_DROPLET_NAME")
-    _, ip, port = resolve_target(name, args.port or 0)
-    log(f"Aprovisionando '{name}' ({ip}:{port})…")
 
-    if not args.skip_wait:
-        wait_for_dev_tools(ip, port)
-
+    # La configuración se valida antes de ir a buscar el droplet: un servicio mal
+    # escrito debe fallar al instante y no tras esperar a que arranque la máquina.
     repos = args.repo or [r for r in cfg("DO_REPOS").split(",") if r.strip()]
     services = selected_services(getattr(args, "service", []) or [])
     # El repo de un servicio se clona aunque no esté en DO_REPOS: sin código no
@@ -955,6 +993,12 @@ def cmd_provision(args: argparse.Namespace) -> None:
     for svc in services:
         if svc["repo"] not in repos:
             repos.append(svc["repo"])
+
+    _, ip, port = resolve_target(name, args.port or 0)
+    log(f"Aprovisionando '{name}' ({ip}:{port})…")
+
+    if not args.skip_wait:
+        wait_for_dev_tools(ip, port)
 
     if not os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
         log(
@@ -1015,6 +1059,16 @@ def main() -> None:
     p.add_argument("--region")
     p.add_argument("--size")
     p.add_argument("--image")
+    p.add_argument(
+        "--cloud-init",
+        help="plantilla de primer arranque (por defecto cloud-init.yaml; "
+        "cloud-init.mini.yaml para la máquina de control)",
+    )
+    p.add_argument(
+        "--tag",
+        help="etiqueta del droplet (por defecto DO_TAG). Usa otra para las "
+        "máquinas que no quieras barrer con destroy --tag",
+    )
     p.add_argument("--dry-run", action="store_true", help="muestra la petición sin enviarla")
     p.add_argument(
         "--repo", action="append", default=[], help="owner/repo a clonar (repetible)"

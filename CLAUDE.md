@@ -51,6 +51,10 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
   sin `pip install`. No introduzcas dependencias sin motivo fuerte.
 - [cloud-init.yaml](cloud-init.yaml) — configuración de primer arranque. El
   lanzador sustituye la línea `# {{SSH_AUTHORIZED_KEYS}}` respetando su sangría.
+- [cloud-init.mini.yaml](cloud-init.mini.yaml) — arranque de la **máquina de control** de
+  512 MB ($4/mes) que lanza droplets desde el móvil. Sin Claude Code a propósito: es Node y
+  ocupa cientos de MB, y los droplets vienen sin swap, así que en 512 MB el kernel lo mata.
+  Lleva swapfile de 1 GB. Se elige con `--cloud-init` o `DO_CLOUD_INIT`.
 - [services/](services/) — un JSON por servicio de larga vida (`repo`, `install`, `start`,
   `env_prefix`). Es **dato, no código**: añadir un servicio nunca debe requerir tocar
   `do_droplet.py`. Se activan con `DO_SERVICES` o `--service`.
@@ -214,7 +218,17 @@ Lo que hay que respetar:
 - **Un droplet con servicio es de larga vida**, lo que roza el objetivo 2: no lo barras con
   `destroy --tag ephemeral` a ciegas.
 - Con el coordinador de Telegram, **sólo puede haber una instancia haciendo polling**: si
-  también corre en la laptop, Telegram devuelve 409 a una de las dos.
+  también corre en la laptop, Telegram devuelve 409 a una de las dos. Por eso la máquina de
+  control lleva un **bot distinto** (`telegram-launcher`, prefijo `TGL_`) y no el mismo: no
+  es una cuestión de comodidad, con un solo token uno de los dos se queda fuera. Y por eso
+  `selected_services()` se niega a instalar juntos dos servicios del mismo repo.
+- **El `DO_TOKEN` del mini no necesita mecanismo nuevo**: viaja como `TGL_DO_TOKEN` al
+  `.env` del bot, el coordinador pasa su entorno a cada comando que ejecuta
+  (`runner.ts`: `{...process.env}`) y `do_droplet.py` lee `DO_TOKEN` del entorno antes que
+  del fichero. Con ello, quien pueda hablarle a ese bot puede gastar dinero en la cuenta:
+  la allowlist es la única barrera.
+- **Las máquinas de larga vida no llevan el tag de los efímeros.** El mini se crea con
+  `--tag control` justamente para que `destroy --tag ephemeral --yes` no se lo lleve.
 
 ## Convenciones
 

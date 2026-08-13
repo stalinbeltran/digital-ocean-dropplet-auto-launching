@@ -234,6 +234,7 @@ droplet. El resto tiene valores por defecto razonables:
 | `DO_REGION` | No — `nyc1` | Centro de datos. Míralos con `regions` |
 | `DO_DROPLET_NAME` | No — `proyecto-01` | Nombre del droplet; también lo puedes pasar como argumento a `launch` |
 | `DO_TAG` | No — `ephemeral` | Etiqueta para poder limpiarlos todos de golpe |
+| `DO_CLOUD_INIT` | No — `cloud-init.yaml` | Plantilla de primer arranque. Ver [La máquina de control](#la-máquina-de-control-lanzar-droplets-desde-el-móvil) |
 | `DO_SSH_KEY_FILE` | No — `~/.ssh/do_droplet` | Ruta de tu clave privada. La crea `keygen` |
 | `DO_SSH_KEYS` | No — vacío | Vacío = se autorizan **todas** las claves de tu cuenta de DO. Rellénalo sólo para restringir |
 | `DO_SSH_USER` | No — `deploy` | Con qué usuario aterrizas al hacer `ssh`. `deploy` es el que tiene tokens y repos |
@@ -437,6 +438,97 @@ droplet**. Son ficheros JSON en `data/`, versionables — si quieres conservarlo
 haz `git push` desde el droplet antes de destruirlo. Ten en cuenta también que un
 droplet con un servicio dentro es un droplet de larga vida: no lo barras con
 `destroy --tag ephemeral` sin mirar, y recuerda que factura mientras exista.
+
+## La máquina de control: lanzar droplets desde el móvil
+
+La idea: una máquina pequeña y **siempre encendida** cuyo único trabajo es crear
+y destruir las grandes. Le escribes por Telegram desde el móvil, ella lanza un
+droplet de trabajo, y cuando terminas lo destruye. Cuesta **$4/mes**
+(`s-1vcpu-512mb-10gb`) frente a los $24/mes de una de trabajo, que ya sólo pagas
+mientras la usas.
+
+### Por qué necesita su propio arranque
+
+Con 512 MB **no cabe Claude Code**. Es una aplicación de Node que en marcha ocupa
+cientos de MB, y los droplets vienen **sin swap**: no es que vaya lento, es que
+el kernel mata el proceso. Por eso hay dos plantillas:
+
+| | |
+|---|---|
+| `cloud-init.yaml` | Droplets de trabajo: Node, Claude Code, `gh`, Python, `uv` |
+| `cloud-init.mini.yaml` | Control: Node (para el bot), `git`, `gh`, **1 GB de swap** y nada más |
+
+Se elige con `--cloud-init` o con `DO_CLOUD_INIT` en el `.env`.
+
+### Y su propio bot
+
+**Tiene que ser un bot distinto del que corre en los droplets de trabajo.**
+Telegram sólo admite **un** proceso haciendo long polling por token: el segundo
+recibe un `409` y se queda fuera. Créalo en [@BotFather](https://t.me/BotFather)
+con `/newbot` y ponle un nombre que distingas — *Lanzador* frente a
+*Coordinador*. En el móvil son dos chats separados, y la división es la natural:
+**al Lanzador le pides máquinas, al Coordinador le pides trabajo**.
+
+En el `.env`:
+
+```
+TGL_BOT_TOKEN=<el del bot Lanzador>
+TGL_ALLOWED_USER_IDS=<tu id de Telegram>
+TGL_DO_TOKEN=<tu token de DigitalOcean>
+```
+
+`TGL_DO_TOKEN` es lo que convierte al mini en lanzador. Llega al `.env` del bot y
+de ahí al entorno de los comandos que ejecuta, así que `do_droplet.py` lo
+encuentra sin configuración extra.
+
+> **Quien pueda hablarle a ese bot puede crear y destruir máquinas en tu cuenta**,
+> es decir, gastar tu dinero. `TGL_ALLOWED_USER_IDS` es la única barrera. No la
+> dejes vacía y no metas a nadie que no seas tú.
+
+### Crearla
+
+```powershell
+python scripts/do_droplet.py launch mini `
+  --size s-1vcpu-512mb-10gb `
+  --cloud-init cloud-init.mini.yaml `
+  --tag control `
+  --service telegram-launcher `
+  --repo stalinbeltran/digital-ocean-dropplet-auto-launching
+```
+
+El `--tag control` no es decorativo: si llevara el tag `ephemeral`, un
+`destroy --tag ephemeral --yes` se llevaría por delante tu lanzador.
+
+### Dos pasos que quedan dentro de la máquina
+
+**1. Su propia clave SSH.** Sin esto crea droplets en los que luego no puede
+entrar a aprovisionar. Es el mismo flujo multi-máquina de más abajo, pero
+ejecutado en el mini:
+
+```bash
+python scripts/do_droplet.py ssh mini --cmd "sudo -u deploy -H bash -lc '
+  cd ~/src/digital-ocean-dropplet-auto-launching &&
+  python3 scripts/do_droplet.py keygen &&
+  python3 scripts/do_droplet.py register-key --name mini'"
+```
+
+**2. Un ejecutor sin límite de tiempo.** El coordinador corta los comandos a los
+30 s y un `launch` tarda unos 5 minutos, así que con el ejecutor `shell` normal
+el lanzamiento moriría a medias. Desde Telegram, con `/use definer`:
+
+```
+exec lanzar echo timeout=0
+cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py {{input}}
+```
+
+Y a partir de ahí, desde el móvil:
+
+```
+/use lanzar
+launch proyecto-05
+list
+destroy proyecto-05 --yes
+```
 
 ## Acceso desde tu otra laptop
 
