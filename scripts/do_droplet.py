@@ -719,6 +719,12 @@ def load_service(name: str) -> dict:
     svc.setdefault("install", "")
     svc.setdefault("env_prefix", "")
     svc.setdefault("env_file", ".env")
+    # Ficheros que el servicio necesita y que no están en su repo. Sin esto hay
+    # configuración que sólo vive dentro del droplet y se pierde al destruirlo,
+    # que es justo lo contrario de poder tirar y rehacer una máquina.
+    svc.setdefault("files", {})
+    if not isinstance(svc["files"], dict):
+        die(f"{path}: 'files' tiene que ser un objeto de ruta -> contenido.")
     return svc
 
 
@@ -796,6 +802,23 @@ def build_service_section(svc: dict, dev_user: str) -> list[str]:
             f'  echo "  AVISO: {unit}: no hay ninguna variable {svc["env_prefix"]}* '
             f'en el .env, arrancará sin configuración."'
         )
+
+    for ruta, contenido in svc["files"].items():
+        if ruta.startswith("/") or ".." in ruta:
+            die(f"{unit}: la ruta '{ruta}' de 'files' tiene que ser relativa al repo.")
+        texto = (
+            contenido
+            if isinstance(contenido, str)
+            else json.dumps(contenido, indent=2, ensure_ascii=False) + "\n"
+        )
+        parts += [
+            f'  install -d -o "$DEV_USER" -g "$DEV_USER" "$(dirname "$DIR/{ruta}")"',
+            f'  cat > "$DIR/{ruta}" <<\'FIN_FICHERO\'',
+            texto.rstrip("\n"),
+            "FIN_FICHERO",
+            f'  chown "$DEV_USER:$DEV_USER" "$DIR/{ruta}"',
+            f'  echo "  {unit}: escrito {ruta}"',
+        ]
 
     if svc["install"]:
         parts += [

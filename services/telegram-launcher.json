@@ -3,5 +3,15 @@
   "repo": "stalinbeltran/telegram-coordinator",
   "install": "npm ci",
   "start": "npm start",
-  "env_prefix": "TGL_"
+  "env_prefix": "TGL_",
+  "files": {
+    "data/executors/lanzar.json": {
+      "name": "lanzar",
+      "command": "cd \"$HOME/src/digital-ocean-dropplet-auto-launching\" && python3 scripts/do_droplet.py {{input}}",
+      "encargados": [
+        "echo"
+      ],
+      "timeoutMs": 0
+    }
+  }
 }
