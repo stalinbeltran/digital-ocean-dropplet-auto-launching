@@ -232,6 +232,13 @@ Lo que hay que respetar:
   máquina puede gastar dinero en la cuenta: la allowlist es la única barrera.
 - **Las máquinas de larga vida no llevan el tag de los efímeros.** El mini se crea con
   `--tag control` justamente para que `destroy --tag ephemeral --yes` no se lo lleve.
+- **NUNCA destruyas el droplet `mini` en una limpieza.** "Borra todos los droplets",
+  "limpia lo que quede" o cualquier barrido significan **las máquinas de trabajo**, nunca la
+  de control. El mini sólo se destruye si el usuario lo pide **por su nombre y a propósito**
+  (`destroy mini`). Si te lo encuentras en una lista que ibas a barrer, exclúyelo y dilo; si
+  crees que hay que tocarlo, pregunta antes. Es la máquina desde la que el usuario lanza
+  todo cuando no tiene la laptop delante: borrarla estando fuera de casa lo deja sin ninguna
+  vía de crear ni destruir droplets, y rehacerla exige volver a la laptop.
 
 ## Convenciones
 

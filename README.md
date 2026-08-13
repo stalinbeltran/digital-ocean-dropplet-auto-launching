@@ -441,6 +441,22 @@ droplet con un servicio dentro es un droplet de larga vida: no lo barras con
 
 ## La máquina de control: lanzar droplets desde el móvil
 
+> ### El mini no se destruye nunca en una limpieza
+>
+> **`mini` está excluido de cualquier borrado masivo.** "Borra todos los
+> droplets", "limpia lo que haya quedado" o `destroy --tag ephemeral` **no le
+> afectan**: significan *todas las máquinas de trabajo*, nunca la de control.
+>
+> Sólo se destruye cuando lo pidas **por su nombre y a propósito**
+> (`destroy mini`). Si estás automatizando una limpieza, exclúyelo; y ante la
+> duda, pregunta antes de tocarlo.
+>
+> El motivo es práctico: es la máquina desde la que lanzas todo lo demás cuando
+> no tienes la laptop delante. Perderla estando fuera de casa te deja sin
+> ninguna forma de crear ni destruir droplets desde el móvil, y rehacerla exige
+> volver a la laptop. Cuesta $4/mes; borrarla por error sale mucho más caro que
+> mantenerla.
+
 La idea: una máquina pequeña y **siempre encendida** cuyo único trabajo es crear
 y destruir las grandes. Le escribes por Telegram desde el móvil, ella lanza un
 droplet de trabajo, y cuando terminas lo destruye. Cuesta **$4/mes**
@@ -622,8 +638,11 @@ python scripts/do_droplet.py ssh               # conectar
 python scripts/do_droplet.py ip                # sólo la IP
 python scripts/do_droplet.py service logs telegram-coordinator  # log de un servicio
 python scripts/do_droplet.py destroy           # destruir (pide confirmación)
-python scripts/do_droplet.py destroy --tag ephemeral --yes   # limpieza total
+python scripts/do_droplet.py destroy --tag ephemeral --yes   # limpieza de las de trabajo
 ```
+
+La "limpieza total" es total **para las máquinas de trabajo**. El mini de
+control no lleva ese tag y no debe borrarse en una limpieza: sólo por su nombre.
 
 Antes de gastar nada, comprueba qué se va a enviar:
 
@@ -642,8 +661,14 @@ python scripts/do_droplet.py images --filter ubuntu
 ## Coste
 
 Se factura **por segundo mientras el droplet exista**, no por uso. Apagarlo no
-para el cobro: hay que **destruirlo**. Todos se crean con el tag `ephemeral`,
-así que un `destroy --tag ephemeral --yes` limpia cualquier resto olvidado.
+para el cobro: hay que **destruirlo**. Los droplets de trabajo se crean con el
+tag `ephemeral`, así que un `destroy --tag ephemeral --yes` limpia cualquier
+resto olvidado.
+
+Esa limpieza **no toca la máquina de control**, que lleva el tag `control`
+justamente para eso, y **así debe seguir siendo**: el mini sólo se destruye
+pidiéndolo por su nombre. Ver
+[El mini no se destruye nunca en una limpieza](#la-máquina-de-control-lanzar-droplets-desde-el-móvil).
 
 ## Qué queda configurado dentro
 
