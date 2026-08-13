@@ -493,8 +493,18 @@ python scripts/do_droplet.py launch mini `
   --cloud-init cloud-init.mini.yaml `
   --tag control `
   --service telegram-launcher `
-  --repo stalinbeltran/digital-ocean-dropplet-auto-launching
+  --repo stalinbeltran/digital-ocean-dropplet-auto-launching `
+  --push-do-token
 ```
+
+`--push-do-token` es lo que la convierte en lanzador: envía tu token de
+DigitalOcean a `~deploy/.config/dev-secrets.env`, junto a los demás secretos.
+**Es una opción de línea de comandos y no una variable del `.env` a propósito**,
+para que no se te cuele en todos los droplets sin darte cuenta. Úsala sólo aquí.
+
+Sin ella el bot funcionaría igual — lee el token de su propio `.env` — pero
+cualquier comando que lances entrando por SSH a la máquina fallaría con un
+"falta el token", incluido el `register-key` de aquí abajo.
 
 El `--tag control` no es decorativo: si llevara el tag `ephemeral`, un
 `destroy --tag ephemeral --yes` se llevaría por delante tu lanzador.

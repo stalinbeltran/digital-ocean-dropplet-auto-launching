@@ -460,6 +460,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 port=port,
                 repo=args.repo,
                 service=args.service,
+                push_do_token=args.push_do_token,
                 skip_wait=False,
             )
         )
@@ -850,7 +851,9 @@ def build_service_section(svc: dict, dev_user: str) -> list[str]:
     return parts
 
 
-def build_provision_script(repos: list[str], services: list[dict] | None = None) -> str:
+def build_provision_script(
+    repos: list[str], services: list[dict] | None = None, push_do_token: bool = False
+) -> str:
     """Script que deja el droplet listo para trabajar.
 
     Todo lo secreto se escribe con umask 077 y acaba en modo 600 del usuario de
@@ -868,6 +871,13 @@ def build_provision_script(repos: list[str], services: list[dict] | None = None)
         # GH_TOKEN lo lee gh; GITHUB_TOKEN lo esperan casi todas las herramientas.
         exports.append(f"export GITHUB_TOKEN={shq(github_token)}")
         exports.append(f"export GH_TOKEN={shq(github_token)}")
+    if push_do_token:
+        # Sólo para la máquina de control, y sólo pidiéndolo a mano: con este
+        # token el droplet puede crear y destruir máquinas en la cuenta, o sea
+        # gastar dinero. Va aquí y no sólo en el .env del bot para que también
+        # lo tengan las sesiones de la máquina; si no, `register-key` desde
+        # dentro falla con un "falta el token" que despista.
+        exports.append(f"export DO_TOKEN={shq(token())}")
 
     parts = [
         "set -eu",
@@ -1012,7 +1022,15 @@ def cmd_provision(args: argparse.Namespace) -> None:
             "  Créalo en https://github.com/settings/personal-access-tokens"
         )
 
-    code = run_remote_script(ip, port, build_provision_script(repos, services))
+    if getattr(args, "push_do_token", False):
+        log("  AVISO: se envía también el DO_TOKEN. Quien tenga acceso a esta")
+        log("         máquina podrá crear y destruir droplets en tu cuenta.")
+
+    code = run_remote_script(
+        ip,
+        port,
+        build_provision_script(repos, services, getattr(args, "push_do_token", False)),
+    )
     if code != 0:
         die(f"El aprovisionamiento falló (código {code}).")
     log("Aprovisionamiento terminado.")
@@ -1080,6 +1098,12 @@ def main() -> None:
         help="servicio de services/ que dejar corriendo (repetible)",
     )
     p.add_argument(
+        "--push-do-token",
+        action="store_true",
+        help="envía también el DO_TOKEN al droplet, para que pueda lanzar otros. "
+        "Sólo para la máquina de control: quien entre ahí podrá gastar tu dinero",
+    )
+    p.add_argument(
         "--no-provision",
         action="store_true",
         help="no inyectar credenciales ni clonar repos",
@@ -1099,6 +1123,12 @@ def main() -> None:
         action="append",
         default=[],
         help="servicio de services/ que dejar corriendo (repetible)",
+    )
+    p.add_argument(
+        "--push-do-token",
+        action="store_true",
+        help="envía también el DO_TOKEN al droplet, para que pueda lanzar otros. "
+        "Sólo para la máquina de control: quien entre ahí podrá gastar tu dinero",
     )
     p.add_argument(
         "--skip-wait",

@@ -222,11 +222,14 @@ Lo que hay que respetar:
   control lleva un **bot distinto** (`telegram-launcher`, prefijo `TGL_`) y no el mismo: no
   es una cuestión de comodidad, con un solo token uno de los dos se queda fuera. Y por eso
   `selected_services()` se niega a instalar juntos dos servicios del mismo repo.
-- **El `DO_TOKEN` del mini no necesita mecanismo nuevo**: viaja como `TGL_DO_TOKEN` al
-  `.env` del bot, el coordinador pasa su entorno a cada comando que ejecuta
-  (`runner.ts`: `{...process.env}`) y `do_droplet.py` lee `DO_TOKEN` del entorno antes que
-  del fichero. Con ello, quien pueda hablarle a ese bot puede gastar dinero en la cuenta:
-  la allowlist es la única barrera.
+- **El `DO_TOKEN` del mini va por `--push-do-token`**, que lo escribe en
+  `~/.config/dev-secrets.env` con el resto de secretos. Es una opción de línea de comandos
+  y **no** una variable del `.env` a propósito: así no se cuela en todos los droplets.
+  El `TGL_DO_TOKEN` del `.env` del bot también funciona (el coordinador pasa su entorno a
+  cada comando, `runner.ts`: `{...process.env}`), pero **sólo alcanza al bot**: entrando por
+  SSH a la máquina, `do_droplet.py` no veía el token y `register-key` fallaba con un "falta
+  el token" que no se entiende. Con ello, quien pueda hablarle a ese bot o entrar a esa
+  máquina puede gastar dinero en la cuenta: la allowlist es la única barrera.
 - **Las máquinas de larga vida no llevan el tag de los efímeros.** El mini se crea con
   `--tag control` justamente para que `destroy --tag ephemeral --yes` no se lo lleve.
 
