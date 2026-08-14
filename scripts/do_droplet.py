@@ -1106,6 +1106,258 @@ def cmd_provision(args: argparse.Namespace) -> None:
     log("Aprovisionamiento terminado.")
 
 
+# ----------------------------------------------------- actualizar desde dentro
+
+
+# Marca que build_service_section deja en la Description de cada unidad. Con
+# ella se reconocen luego los servicios que instaló este script, sin tener que
+# guardar una lista aparte que se desincronizaría.
+PROVISION_MARK = "instalado por do_droplet.py provision"
+
+
+def dentro_del_droplet() -> Path:
+    """Comprueba que corremos en el droplet y devuelve el ~/src a actualizar.
+
+    `update` es el único comando que actúa sobre la máquina donde se ejecuta en
+    vez de sobre la API: se lanza dentro del droplet, por SSH o desde el bot.
+    Ejecutarlo por error en la laptop haría `git pull` en repos que estás
+    tocando a mano y reiniciaría servicios; de ahí la comprobación.
+    """
+    if sys.platform != "linux" or not Path("/var/lib/cloud").exists():
+        die(
+            "`update` se ejecuta DENTRO del droplet, no en la máquina lanzadora.\n"
+            "  Desde aquí:  python scripts/do_droplet.py ssh mini --cmd \\\n"
+            "    'cd ~/src/digital-ocean-dropplet-auto-launching && "
+            "python3 scripts/do_droplet.py update'"
+        )
+
+    candidatos = [Path.home() / "src"]
+    if cfg("DO_DEV_USER"):
+        # Entrando como root el home es /root y ahí no hay nada: los repos son
+        # del usuario de desarrollo.
+        try:
+            import pwd
+
+            candidatos.append(Path(pwd.getpwnam(cfg("DO_DEV_USER")).pw_dir) / "src")
+        except (ImportError, KeyError):
+            pass
+    for base in candidatos:
+        if base.is_dir():
+            return base
+    die(f"No existe {candidatos[0]}: aquí no hay repos que actualizar.")
+
+
+def owner_of(path: Path) -> str:
+    try:
+        import pwd
+
+        return pwd.getpwuid(path.stat().st_uid).pw_name
+    except (ImportError, KeyError, OSError):
+        return ""
+
+
+def run_local(
+    cmd: list[str], cwd: Path | None = None, timeout: int = 180, owner: str = ""
+) -> tuple[int, str]:
+    """Ejecuta un comando de la máquina y devuelve (código, salida completa).
+
+    Con `owner` y siendo root se ejecuta como ese usuario: los repos son del
+    usuario de desarrollo y git se niega a trabajar en el repo de otro
+    ("detected dubious ownership"). El `timeout` no es opcional por costumbre de
+    esta casa: un `git` o un `npm` colgado dejaría al bot esperando en silencio.
+    """
+    if owner and owner != "root" and os.geteuid() == 0:
+        cmd = ["sudo", "-u", owner, "-H", *cmd]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, f"se agotó el tiempo ({timeout}s) en: {' '.join(cmd)}"
+    except OSError as exc:
+        return 127, str(exc)
+    return proc.returncode, (proc.stdout + proc.stderr).strip()
+
+
+def pull_repo(repo: Path) -> dict:
+    """`git pull --ff-only` en un repo, contando qué cambió.
+
+    --ff-only y no merge: si el repo del droplet tiene commits propios, lo que
+    hace falta es enterarse, no fabricar un merge a ciegas desde un bot.
+    """
+    owner = owner_of(repo)
+
+    def git(*args: str, timeout: int = 180) -> tuple[int, str]:
+        return run_local(["git", *args], cwd=repo, timeout=timeout, owner=owner)
+
+    code, antes = git("rev-parse", "HEAD")
+    if code != 0:
+        return {"changed": False, "msg": f"{repo.name}: no pude leer HEAD ({antes})"}
+
+    code, salida = git("pull", "--ff-only", timeout=300)
+    if code != 0:
+        detalle = (salida.splitlines() or ["sin salida"])[-1]
+        return {"changed": False, "msg": f"{repo.name}: FALLO el pull -> {detalle}"}
+
+    _, despues = git("rev-parse", "HEAD")
+    if antes == despues:
+        return {"changed": False, "msg": f"{repo.name}: ya estaba al día ({antes[:7]})"}
+
+    _, cuantos = git("rev-list", "--count", f"{antes}..{despues}")
+    _, ficheros = git("diff", "--name-only", antes, despues)
+    return {
+        "changed": True,
+        "files": ficheros.split(),
+        "msg": f"{repo.name}: {antes[:7]} -> {despues[:7]} "
+        f"({cuantos.strip() or '?'} commits)",
+    }
+
+
+def reinstalar_dependencias(repo: Path, ficheros: list[str]) -> str:
+    """Reinstala los paquetes de Node si el pull tocó el manifiesto.
+
+    Sólo cuando cambió package.json o el lock: un `npm ci` innecesario tarda
+    minutos en una máquina de 512 MB y deja el servicio parado mientras tanto.
+    """
+    if not (repo / "package.json").exists():
+        return ""
+    if not any(Path(f).name in ("package.json", "package-lock.json") for f in ficheros):
+        return ""
+
+    cmd = ["npm", "ci"] if (repo / "package-lock.json").exists() else ["npm", "install"]
+    code, salida = run_local(cmd, cwd=repo, timeout=900, owner=owner_of(repo))
+    if code != 0:
+        detalle = (salida.splitlines() or ["sin salida"])[-1]
+        return f"AVISO: `{' '.join(cmd)}` falló -> {detalle}"
+    return f"dependencias reinstaladas ({' '.join(cmd)})"
+
+
+def unidades_de_provision() -> list[tuple[str, Path | None]]:
+    """Servicios instalados por `provision`, con el repo del que viven."""
+    fuera = []
+    for fichero in sorted(Path("/etc/systemd/system").glob("*.service")):
+        try:
+            texto = fichero.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if PROVISION_MARK not in texto:
+            continue
+        directorio = None
+        for linea in texto.splitlines():
+            if linea.startswith("WorkingDirectory="):
+                directorio = Path(linea.split("=", 1)[1].strip())
+        fuera.append((fichero.stem, directorio))
+    return fuera
+
+
+def unidad_propia() -> str:
+    """Unidad de systemd dentro de la que corre este proceso, si es que hay una.
+
+    Cuando el update lo pide el bot, el bot es quien lo está ejecutando: al
+    reiniciar su unidad, systemd mata el cgroup entero y con él este proceso y
+    la respuesta que aún no ha salido hacia Telegram. Hay que saberlo para
+    tratar ese caso aparte.
+    """
+    try:
+        cgroup = Path("/proc/self/cgroup").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    for trozo in cgroup.replace("/", " ").split():
+        if trozo.endswith(".service"):
+            return trozo[: -len(".service")]
+    return ""
+
+
+def reiniciar_unidad(unit: str, propia: bool) -> str:
+    if propia:
+        # systemd-run crea una unidad transitoria, fuera de nuestro cgroup: así
+        # el reinicio sobrevive a que systemd nos mate a nosotros. Un `sleep &
+        # systemctl restart` normal moriría con el propio servicio y el bot se
+        # quedaría con el código viejo corriendo.
+        code, salida = run_local(
+            [
+                "sudo",
+                "systemd-run",
+                "--on-active=3",
+                "--collect",
+                "--quiet",
+                "/bin/systemctl",
+                "restart",
+                f"{unit}.service",
+            ],
+            timeout=60,
+        )
+        if code != 0:
+            return f"{unit}: NO pude programar el reinicio -> {salida.strip()}"
+        return f"{unit}: se reinicia en 3 s (es quien está ejecutando esto)"
+
+    code, salida = run_local(
+        ["sudo", "systemctl", "restart", f"{unit}.service"], timeout=180
+    )
+    if code != 0:
+        return f"{unit}: FALLO al reiniciar -> {salida.strip()}"
+    time.sleep(3)
+    code, estado = run_local(["systemctl", "is-active", f"{unit}.service"], timeout=30)
+    if estado.strip() != "active":
+        _, log_unit = run_local(
+            ["journalctl", "-u", f"{unit}.service", "-n", "10", "--no-pager"],
+            timeout=60,
+        )
+        return f"{unit}: NO arrancó ({estado.strip() or '?'})\n{log_unit}"
+    return f"{unit}: reiniciado y activo"
+
+
+def cmd_update(args: argparse.Namespace) -> None:
+    """Trae el código nuevo de GitHub a esta máquina y reinicia lo que lo usa.
+
+    Es lo que se dispara desde el bot con el ejecutor `actualizar`: sin esto,
+    corregir algo en la laptop no cambiaba nada en el droplet hasta entrar por
+    SSH a hacer el pull a mano, y el servicio seguía con el código viejo cargado
+    sin que nada lo delatase.
+    """
+    base = dentro_del_droplet()
+    repos = sorted(p for p in base.iterdir() if (p / ".git").is_dir())
+    if not repos:
+        die(f"No hay ningún repo en {base}.")
+
+    log(f"Actualizando {socket.gethostname()} ({base}):")
+    cambiados: set[Path] = set()
+    for repo in repos:
+        info = pull_repo(repo)
+        log(f"  {info['msg']}")
+        if info["changed"]:
+            cambiados.add(repo.resolve())
+            aviso = reinstalar_dependencias(repo, info.get("files", []))
+            if aviso:
+                log(f"    {aviso}")
+
+    unidades = unidades_de_provision()
+    if not unidades:
+        log("Servicios: ninguno instalado por provision en esta máquina.")
+        return
+
+    propia = unidad_propia()
+    pendientes = [
+        unit
+        for unit, directorio in unidades
+        if args.restart_all or (directorio and directorio.resolve() in cambiados)
+    ]
+    if not pendientes:
+        log("Servicios: sin cambios, no hace falta reiniciar nada.")
+        return
+
+    log("Servicios:")
+    # El propio el último: en cuanto se programe su reinicio, a este proceso le
+    # quedan segundos de vida.
+    for unit in sorted(pendientes, key=lambda u: u == propia):
+        log(f"  {reiniciar_unidad(unit, propia=unit == propia)}")
+
+
 # ------------------------------------------------------------------------ parser
 
 
@@ -1224,6 +1476,18 @@ def main() -> None:
         help="no esperar al testigo de instalación de cloud-init",
     )
     p.set_defaults(func=cmd_provision)
+
+    p = sub.add_parser(
+        "update",
+        help="DENTRO del droplet: trae el código nuevo de GitHub y reinicia los "
+        "servicios afectados",
+    )
+    p.add_argument(
+        "--restart-all",
+        action="store_true",
+        help="reinicia los servicios aunque su repo no haya cambiado",
+    )
+    p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("service", help="estado, logs y reinicio de un servicio")
     p.add_argument(

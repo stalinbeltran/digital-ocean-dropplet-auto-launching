@@ -12,6 +12,14 @@
         "echo"
       ],
       "timeoutMs": 0
+    },
+    "data/executors/actualizar.json": {
+      "name": "actualizar",
+      "command": "cd \"$HOME/src/digital-ocean-dropplet-auto-launching\" && python3 scripts/do_droplet.py update",
+      "encargados": [
+        "echo"
+      ],
+      "timeoutMs": 0
     }
   }
 }
