@@ -556,6 +556,10 @@ list
 destroy proyecto-05 --yes
 ```
 
+El `--yes` de `destroy` **no es opcional aquí**: el coordinador le cierra el stdin
+al comando, así que no hay teclado donde escribir la confirmación. Sin él, el
+comando se niega a destruir nada y te lo dice.
+
 ## Acceso desde tu otra laptop
 
 Están contempladas las dos formas. **La segunda es la recomendada.**

@@ -97,6 +97,22 @@ def log(msg: str) -> None:
     print(msg, flush=True)
 
 
+def confirmar(pregunta: str) -> bool:
+    """Pregunta por teclado; True sólo si contestan 'si'.
+
+    Donde no hay terminal no se puede confirmar nada, y a `destroy` se le llama
+    también desde ahí: el bot de Telegram que opera el lanzador desde el móvil le
+    cierra el stdin al comando, igual que `ssh maquina 'comando'` o cron. En esos
+    sitios `input()` levanta EOFError y suelta un traceback que no dice qué hacer.
+    Se exige `--yes` explícito en vez de dar por buena una confirmación que nadie
+    ha escrito. Un stdin con datos (`echo si | ... destroy`) sigue valiendo.
+    """
+    try:
+        return input(pregunta).strip().lower() == "si"
+    except EOFError:
+        die("No hay terminal donde confirmar. Repite el comando con --yes.")
+
+
 def force_utf8_output() -> None:
     """La consola de Windows usa cp1252 por defecto y peta con acentos y símbolos."""
     for stream in (sys.stdout, sys.stderr):
@@ -548,7 +564,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
     log("Se van a DESTRUIR estos droplets (irreversible):")
     for d in droplets:
         log(f"  - {d['name']} (id {d['id']}, {public_ip(d) or 'sin IP'})")
-    if not args.yes and input("\nEscribe 'si' para confirmar: ").strip().lower() != "si":
+    if not args.yes and not confirmar("\nEscribe 'si' para confirmar: "):
         log("Cancelado.")
         return
 
@@ -1236,7 +1252,12 @@ def main() -> None:
     p = sub.add_parser("destroy", help="destruye el droplet")
     p.add_argument("name", nargs="?")
     p.add_argument("--tag", help="destruye todos los que lleven este tag")
-    p.add_argument("--yes", action="store_true", help="sin confirmación interactiva")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        help="sin confirmación interactiva; obligatorio donde no hay terminal "
+        "(Telegram, cron, ssh no interactivo)",
+    )
     p.set_defaults(func=cmd_destroy)
 
     args = parser.parse_args()
