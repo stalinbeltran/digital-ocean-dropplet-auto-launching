@@ -611,66 +611,9 @@ Dos consecuencias más de lo mismo:
 - **Un `TGL_*` cambiado necesita `--service telegram-launcher`** en el comando:
   es lo que reescribe el `.env` del bot y hace `systemctl restart`. Sin esa
   opción el bot sigue con el token o la allowlist anteriores.
-- **`provision` no hace `git pull`.** Si el cambio está en el código del lanzador
-  y no en el `.env`, el mini se queda con su versión: hay que tirar del repo a
-  mano, `ssh mini --cmd "cd ~/src/digital-ocean-dropplet-auto-launching && git pull"`.
-
-Y los **droplets de trabajo que el mini ya había creado no cambian**: la
-configuración se aplica en el momento del `launch`. A los que sigan vivos,
-`provision <nombre>` uno a uno.
-
-Para comprobar qué quedó dentro sin sacar ningún secreto a la pantalla:
-
-```powershell
-python scripts/do_droplet.py ssh mini --cmd "sed -n 's/^export \([A-Z_]*\)=.*/  \1/p' ~/.config/dev-secrets.env"
-```
-
-### Actualizar su configuración sin recrearla
-
-Cuando cambies el `.env` de tu laptop, **el mini no se entera**: su configuración
-es la copia que le dejaste en `~deploy/.config/dev-secrets.env` la última vez.
-Los droplets que cree seguirán saliendo con los valores viejos.
-
-No hay que destruirla ni volver a lanzarla. Se re-aprovisiona, que reescribe esa
-copia y reinicia el bot:
-
-```powershell
-python scripts/do_droplet.py provision mini `
-  --service telegram-launcher `
-  --repo stalinbeltran/digital-ocean-dropplet-auto-launching `
-  --push-do-token `
-  --push-env DO_SIZE,DO_IMAGE,DO_REGION,DO_TAG,DO_SSH_USER,DO_SSH_PORTS,DO_DEV_USER `
-  --push-env DO_REPOS,DO_SERVICES,GIT_USER_NAME,GIT_USER_EMAIL `
-  --push-env TG_BOT_TOKEN,TG_ALLOWED_USER_IDS,TG_CLAUDE_PERMISSION_MODE
-```
-
-Es el mismo bloque de opciones que el `launch`, sin las que sólo valen al crear
-la máquina (`--size`, `--cloud-init`, `--tag`). Tarda menos de un minuto: los
-repos ya están clonados y sólo rehace credenciales, el `.env` del bot y la unidad
-de systemd.
-
-#### Para cambiar un solo parámetro, el comando es el mismo
-
-**No existe un "empujar sólo esta variable", y no es un olvido:**
-`dev-secrets.env` se escribe entero de una vez (`cat >`), no se va añadiendo. Lo
-que no venga en el comando **desaparece del mini**. Si quieres cambiar sólo
-`DO_SIZE`, el procedimiento es:
-
-1. editas `DO_SIZE` en tu `.env`,
-2. ejecutas **el comando completo de arriba**, tal cual, sin quitar nada.
-
-Quitar `--push-do-token` porque "el token no ha cambiado" deja al mini sin
-`DO_TOKEN`, y acortar la lista de `--push-env` borra las que falten. El fichero
-final es exactamente lo que diga ese comando.
-
-Dos consecuencias más de lo mismo:
-
-- **Un `TGL_*` cambiado necesita `--service telegram-launcher`** en el comando:
-  es lo que reescribe el `.env` del bot y hace `systemctl restart`. Sin esa
-  opción el bot sigue con el token o la allowlist anteriores.
-- **`provision` no hace `git pull`.** Si el cambio está en el código del lanzador
-  y no en el `.env`, el mini se queda con su versión: hay que tirar del repo a
-  mano, `ssh mini --cmd "cd ~/src/digital-ocean-dropplet-auto-launching && git pull"`.
+- **`provision` no hace `git pull`.** Si el cambio está en el código y no en el
+  `.env`, esto no lo trae: para eso está
+  [actualizar el código](#actualizar-el-código-desde-el-móvil), aquí debajo.
 
 Y los **droplets de trabajo que el mini ya había creado no cambian**: la
 configuración se aplica en el momento del `launch`. A los que sigan vivos,
@@ -685,6 +628,66 @@ python scripts/do_droplet.py ssh mini --cmd "sed -n 's/^export \([A-Z_]*\)=.*/  
 El `--yes` de `destroy` **no es opcional aquí**: el coordinador le cierra el stdin
 al comando, así que no hay teclado donde escribir la confirmación. Sin él, el
 comando se niega a destruir nada y te lo dice.
+
+### Actualizar el código desde el móvil
+
+Lo anterior mueve **configuración**. Esto mueve **código**: lo que corriges en la
+laptop y subes a GitHub no llega solo al mini, y el bot además tiene ya cargado
+en memoria el que había al arrancar, así que aunque el repo se actualice **sigue
+ejecutando el viejo sin que nada lo delate**.
+
+Desde Telegram, con el ejecutor `actualizar`:
+
+```
+/use actualizar
+ya
+```
+
+Sirve cualquier texto: el ejecutor ignora lo que escribas. Contesta algo así:
+
+```
+Actualizando mini (/home/deploy/src):
+  digital-ocean-dropplet-auto-launching: ya estaba al día (76b327e)
+  telegram-coordinator: 185a567 -> d78a11b (3 commits)
+Servicios:
+  telegram-launcher: se reinicia en 3 s (es quien está ejecutando esto)
+```
+
+Qué hace, en este orden:
+
+1. `git pull --ff-only` en **cada** repo de `~/src`. Con `--ff-only` a propósito:
+   si la copia del droplet tiene commits propios, lo que hace falta es enterarse,
+   no fabricar un merge a ciegas desde un bot.
+2. `npm ci` **sólo** si el pull tocó `package.json` o el lock. Uno de más son
+   minutos en una máquina de 512 MB, con el servicio parado mientras tanto.
+3. `systemctl restart` de los servicios cuyo repo ha cambiado, y sólo de ésos.
+
+**El bot se reinicia a sí mismo, y por eso el mensaje llega igual.** Cuando el
+update lo pides tú por Telegram, el proceso que lo ejecuta es hijo del bot: al
+parar su unidad, systemd mata el cgroup entero, ese proceso incluido, con la
+respuesta todavía sin enviar. Su reinicio se programa con
+`systemd-run --on-active=3`, que vive fuera del cgroup, así que el bot tiene esos
+segundos para contestarte antes de irse. Vuelve solo en un par de segundos.
+
+Lo mismo desde la laptop, sin Telegram de por medio, o en cualquier droplet de
+trabajo (`ssh <nombre>` en vez de `ssh mini`):
+
+```powershell
+python scripts/do_droplet.py ssh mini --cmd "cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py update"
+```
+
+`update` es el único subcomando que actúa sobre la máquina donde se ejecuta en
+vez de sobre la API de DigitalOcean: **corre dentro del droplet**. Lanzarlo en la
+laptop no hace nada, se niega y te recuerda la forma de arriba.
+
+Si ya hiciste el pull a mano y sólo quieres que el servicio recoja el código
+(o si un reinicio anterior falló), `update --restart-all` reinicia aunque no haya
+cambios. Desde Telegram va con el ejecutor `lanzar`, que sí admite argumentos:
+
+```
+/use lanzar
+update --restart-all
+```
 
 ## Acceso desde tu otra laptop
 
@@ -767,6 +770,7 @@ python scripts/do_droplet.py list              # qué hay vivo
 python scripts/do_droplet.py ssh               # conectar
 python scripts/do_droplet.py ip                # sólo la IP
 python scripts/do_droplet.py service logs telegram-coordinator  # log de un servicio
+python scripts/do_droplet.py update            # DENTRO del droplet: git pull + reinicios
 python scripts/do_droplet.py destroy           # destruir (pide confirmación)
 python scripts/do_droplet.py destroy --tag ephemeral --yes   # limpieza de las de trabajo
 ```

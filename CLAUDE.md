@@ -46,7 +46,9 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 ## Estructura
 
 - [scripts/do_droplet.py](scripts/do_droplet.py) — CLI de todo el ciclo de vida
-  (`keygen`, `register-key`, `sizes`, `launch`, `provision`, `list`, `ssh`, `destroy`).
+  (`keygen`, `register-key`, `sizes`, `launch`, `provision`, `list`, `ssh`, `update`,
+  `destroy`). `update` es la excepción: actúa sobre la máquina donde se ejecuta, no
+  sobre la API, y se lanza dentro del droplet.
   **Sólo stdlib a propósito**: debe correr en cualquier máquina con Python 3.9+
   sin `pip install`. No introduzcas dependencias sin motivo fuerte.
 - [cloud-init.yaml](cloud-init.yaml) — configuración de primer arranque. El
@@ -230,6 +232,26 @@ Lo que hay que respetar:
   SSH a la máquina, `do_droplet.py` no veía el token y `register-key` fallaba con un "falta
   el token" que no se entiende. Con ello, quien pueda hablarle a ese bot o entrar a esa
   máquina puede gastar dinero en la cuenta: la allowlist es la única barrera.
+- **Un servicio no se entera de que su repo cambió.** El código está cargado en el
+  proceso desde que arrancó: `git pull` sin `systemctl restart` deja al servicio
+  corriendo lo viejo, y no hay ningún síntoma que lo delate salvo que el arreglo
+  "no funciona". De ahí `do_droplet.py update`, que corre **dentro** del droplet
+  (por SSH o desde el ejecutor `actualizar` del bot), hace el pull en cada repo de
+  `~/src` y reinicia sólo los servicios cuyo `WorkingDirectory` apunta a un repo
+  que cambió. `npm ci` únicamente si el pull tocó `package.json` o el lock: en 512
+  MB uno de más son minutos con el servicio parado.
+- **Un servicio que se reinicia a sí mismo se corta la respuesta.** Cuando el
+  update lo pide el bot, quien lo ejecuta es un hijo del bot: `systemctl restart`
+  mata el cgroup entero, con ese proceso y el mensaje que aún no había salido
+  hacia Telegram. El reinicio propio se programa con `systemd-run --on-active=3`,
+  que crea una unidad transitoria **fuera** del cgroup y sobrevive. Un
+  `sleep && systemctl restart` en segundo plano no vale: muere con el servicio.
+- **Para saber qué servicios instaló `provision`, pregunta a systemd.**
+  `build_provision_script` corre con `umask 077`, así que las unidades quedan en
+  modo 600 de root y `deploy` —el usuario del bot y de los repos— no puede
+  leerlas. Buscar la marca leyendo `/etc/systemd/system/*.service` daba lista
+  vacía y un "no hay nada que reiniciar" falso; `systemctl show` contesta a
+  cualquier usuario porque responde el gestor, no el fichero.
 - **Las máquinas de larga vida no llevan el tag de los efímeros.** El mini se crea con
   `--tag control` justamente para que `destroy --tag ephemeral --yes` no se lo lleve.
 - **NUNCA destruyas el droplet `mini` en una limpieza.** "Borra todos los droplets",
