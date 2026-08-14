@@ -875,6 +875,11 @@ def build_service_section(svc: dict, dev_user: str) -> list[str]:
         # sustituye aquí en vez de expandirla en el heredoc (que expandiría
         # también lo que traiga el comando de arranque).
         f'  sed -i "s|@DIR@|$DIR|" /etc/systemd/system/{unit}.service',
+        # El script corre con umask 077 por los secretos, y así la unidad salía
+        # en modo 600: systemd avisa de que es "world-inaccessible" y nadie que
+        # no sea root puede leerla. Aquí no hay ningún secreto (los tokens están
+        # en dev-secrets.env), y `update` necesita poder mirarla.
+        f"  chmod 644 /etc/systemd/system/{unit}.service",
         "  systemctl daemon-reload",
         f"  systemctl enable {unit}.service >/dev/null 2>&1 || true",
         # restart y no start: al reaprovisionar hay que recoger el código nuevo.
@@ -1238,21 +1243,44 @@ def reinstalar_dependencias(repo: Path, ficheros: list[str]) -> str:
 
 
 def unidades_de_provision() -> list[tuple[str, Path | None]]:
-    """Servicios instalados por `provision`, con el repo del que viven."""
+    """Servicios instalados por `provision`, con el repo del que viven.
+
+    Se le pregunta a systemd en vez de leer los ficheros de unidad: `provision`
+    los escribe bajo `umask 077`, o sea en modo 600 de root, y esto suele correr
+    como el usuario de desarrollo, que no puede abrirlos. Leyendo el fichero la
+    lista salía vacía y el update terminaba con un "no hay nada que reiniciar"
+    que era mentira: el servicio se quedaba con el código viejo.
+    """
+    code, salida = run_local(
+        [
+            "systemctl",
+            "show",
+            "--no-pager",
+            "--property=Id",
+            "--property=Description",
+            "--property=WorkingDirectory",
+            "*.service",
+        ],
+        timeout=60,
+    )
+    if code != 0:
+        log(f"  AVISO: no pude preguntar a systemd por los servicios: {salida}")
+        return []
+
     fuera = []
-    for fichero in sorted(Path("/etc/systemd/system").glob("*.service")):
-        try:
-            texto = fichero.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+    for bloque in salida.split("\n\n"):
+        campos = {}
+        for linea in bloque.splitlines():
+            clave, sep, valor = linea.partition("=")
+            if sep:
+                campos[clave.strip()] = valor.strip()
+        if PROVISION_MARK not in campos.get("Description", ""):
             continue
-        if PROVISION_MARK not in texto:
-            continue
-        directorio = None
-        for linea in texto.splitlines():
-            if linea.startswith("WorkingDirectory="):
-                directorio = Path(linea.split("=", 1)[1].strip())
-        fuera.append((fichero.stem, directorio))
-    return fuera
+        unit = campos.get("Id", "").removesuffix(".service")
+        directorio = campos.get("WorkingDirectory", "")
+        if unit:
+            fuera.append((unit, Path(directorio) if directorio else None))
+    return sorted(fuera)
 
 
 def unidad_propia() -> str:
