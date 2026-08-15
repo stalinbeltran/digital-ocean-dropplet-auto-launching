@@ -1,0 +1,6 @@
+{
+  "descripcion": "CPU dedicada (gama c-): para medir tiempos sin el ruido de los vecinos de la maquina.",
+  "size": "c-2",
+  "image": "ubuntu-24-04-x64",
+  "notas": "Cuesta bastante mas por vCPU que la gama s-. Lo que se compra no es velocidad de pico sino que el tiempo de CPU sea tuyo, que es lo que hace comparables dos corridas del mismo benchmark."
+}

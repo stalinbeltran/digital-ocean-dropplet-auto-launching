@@ -1,0 +1,5 @@
+{
+  "descripcion": "El droplet de trabajo de siempre: 2 vCPU compartidas y 4 GB de RAM. Sirve para casi todo.",
+  "size": "s-2vcpu-4gb",
+  "image": "ubuntu-24-04-x64"
+}

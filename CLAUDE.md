@@ -46,9 +46,9 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 ## Estructura
 
 - [scripts/do_droplet.py](scripts/do_droplet.py) — CLI de todo el ciclo de vida
-  (`keygen`, `register-key`, `sizes`, `launch`, `provision`, `list`, `ssh`, `update`,
-  `destroy`). `update` es la excepción: actúa sobre la máquina donde se ejecuta, no
-  sobre la API, y se lanza dentro del droplet.
+  (`keygen`, `register-key`, `types`, `sizes`, `launch`, `provision`, `list`, `ssh`,
+  `update`, `destroy`). `update` es la excepción: actúa sobre la máquina donde se
+  ejecuta, no sobre la API, y se lanza dentro del droplet.
   **Sólo stdlib a propósito**: debe correr en cualquier máquina con Python 3.9+
   sin `pip install`. No introduzcas dependencias sin motivo fuerte.
 - [cloud-init.yaml](cloud-init.yaml) — configuración de primer arranque. El
@@ -60,11 +60,45 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 - [services/](services/) — un JSON por servicio de larga vida (`repo`, `install`, `start`,
   `env_prefix`). Es **dato, no código**: añadir un servicio nunca debe requerir tocar
   `do_droplet.py`. Se activan con `DO_SERVICES` o `--service`.
+- [types/](types/) — un JSON por **tipo de máquina** (`size`, y opcionalmente `image`,
+  `region`, `cloud_init`, `tag`, `notas`). Mismo trato que `services/`: **dato, no
+  código**, añadir un tipo es añadir un fichero. Se eligen con `--type` o `DO_TYPE`.
 - [.env.example](.env.example) — plantilla de configuración; `.env` está ignorado.
 - [README.md](README.md) — uso, incluido el flujo multi-máquina.
 
 Droplet por defecto: `s-2vcpu-4gb` (2 vCPU / 4 GB / 80 GB SSD / $24 mes). El disco
 no se elige aparte en DigitalOcean; va fijo con el plan.
+
+## Elegir máquina: un tipo no es un `size`
+
+Lo que hay que respetar al tocar esto:
+
+- **Un tipo es la combinación entera**, no sólo el plan: una GPU necesita ADEMÁS su
+  imagen con drivers (`gpu-h100x1-base`, que vale para todos los planes de 1 GPU
+  aunque el nombre diga h100) y una región donde haya GPUs. Pedir sólo el `size` da
+  una máquina cara con Ubuntu pelado y sin CUDA, que es un fallo que se paga por hora.
+- **Las GPU no están en la mayoría de regiones, y eso engaña.** `sizes` filtraba por
+  `DO_REGION` (nyc1) y las escondía todas; la conclusión fácil era "mi cuenta no tiene
+  GPU". Por eso `--gpu` mira todas las regiones salvo que se pida una, y la línea de
+  detalle dice dónde hay cada plan. **No devuelvas ese filtro al valor por defecto.**
+- **Existir, estar disponible y estar en tu región son tres cosas distintas**, y antes
+  se confundían en un mismo silencio. `comprobar_size()` las separa con mensajes que
+  dicen qué escribir a continuación. `available: false` en una GPU casi siempre
+  significa que falta pedir acceso en el panel, no que el slug esté mal.
+- **Los planes por contrato no salen en `/v2/sizes`.** Para ésos existe `--no-check`;
+  no es un atajo para saltarse la validación por comodidad.
+- **El precio no se guarda en el descriptor.** Se trae en vivo de `/v2/sizes` cada vez.
+  Un número copiado a mano envejece sin avisar, y aquí un número viejo es dinero.
+- **El freno de coste (`DO_MAX_PRICE_MONTHLY`, 100 $/mes) es del objetivo 2**, no una
+  molestia: desde el móvil un tipo mal escrito se manda igual de rápido que el bueno y
+  el error son 3.229 $/mes. `list` enseña por eso el gasto por hora de lo que hay vivo.
+- Referencia medida hoy (2026-08-15, de la página de precios de DigitalOcean): RTX 4000
+  Ada 0,76 $/h ($556,80/mes), L40S y RTX 6000 Ada 1,57 $/h, H100 4,41 $/h ($3.228,96/mes),
+  H200 4,47 $/h, MI300X 2,59 $/h. El mensual se calcula a 730 h.
+- **Sin probar contra una GPU real** (cuesta dinero y esta máquina no tiene token): la
+  imagen de GPU va sobre Ubuntu 22.04 y `cloud-init.yaml` hace `package_upgrade`, que
+  podría traer un kernel nuevo por debajo de los drivers. Está avisado en las `notas` de
+  los tipos `gpu-*`. Si se comprueba algún día, anótalo aquí en vez de en la conversación.
 
 ## Documentación de referencia
 
@@ -270,7 +304,8 @@ Lo que hay que respetar:
 - **Nunca** commitear tokens ni claves privadas. El token va en `.env` (gitignoreado) o en secrets del CI.
 - Variables de entorno: `DIGITALOCEAN_TOKEN` para código propio; `DIGITALOCEAN_ACCESS_TOKEN` es la que
   leen `doctl` y el provider de Terraform.
-- No hardcodear slugs de imagen/tamaño/región en el código: van en configuración, y se validan contra
-  `/v2/images`, `/v2/sizes` y `/v2/regions`.
+- No hardcodear slugs de imagen/tamaño/región en el código: van en configuración (`.env` o
+  `types/`), y se validan contra `/v2/images`, `/v2/sizes` y `/v2/regions`. El plan lo
+  valida `comprobar_size()` en cada `launch`, antes de gastar nada.
 - Todo camino de creación debe tener su camino de destrucción, incluido el caso de fallo a mitad
   (una acción `errored` puede dejar un droplet existente e inservible que sigue facturando).

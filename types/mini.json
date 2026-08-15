@@ -1,0 +1,8 @@
+{
+  "descripcion": "La maquina de control de 512 MB, siempre encendida, desde la que se lanzan las demas por Telegram.",
+  "size": "s-1vcpu-512mb-10gb",
+  "image": "ubuntu-24-04-x64",
+  "cloud_init": "cloud-init.mini.yaml",
+  "tag": "control",
+  "notas": "El tag 'control' la deja fuera de destroy --tag ephemeral a proposito, y asi debe seguir. Este tipo fija la maquina, no lo que lleva dentro: para que sea lanzador siguen haciendo falta --service telegram-launcher, --push-do-token y --push-env, que estan en el README."
+}

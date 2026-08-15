@@ -1,0 +1,6 @@
+{
+  "descripcion": "NVIDIA H100 con 80 GB de VRAM, 20 vCPU y 240 GB de RAM. Entrenamiento serio, y el plan mas caro que se puede pedir sin hablar con ventas.",
+  "size": "gpu-h100x1-80gb",
+  "image": "gpu-h100x1-base",
+  "notas": "Cuesta unas 134 veces el droplet de trabajo: una noche olvidada son mas de 100 dolares. Destruyelo en cuanto acabes y comprueba con `list` que no queda vivo. gpu-h100x1-base es la imagen con los drivers NVIDIA ya puestos y va sobre Ubuntu 22.04, no 24.04. Las GPU solo existen en unas pocas regiones: si la de tu .env no es una, el lanzador se para y te dice cuales valen. Sin probar todavia contra una maquina real: cloud-init.yaml hace package_upgrade, que en una imagen con drivers podria traer un kernel nuevo."
+}

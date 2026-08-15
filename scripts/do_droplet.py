@@ -32,6 +32,16 @@ DEFAULTS = {
     "DO_IMAGE": "ubuntu-24-04-x64",
     "DO_DROPLET_NAME": "proyecto-01",
     "DO_TAG": "ephemeral",
+    # Tipo de máquina por defecto: nombre de un descriptor de types/, que fija
+    # de una vez plan, imagen, región y plantilla de arranque. Vacío = se usan
+    # las variables sueltas de aquí arriba, como siempre.
+    "DO_TYPE": "",
+    # Freno de mano contra un lanzamiento caro por error. Un plan con GPU cuesta
+    # de 557 a 3.229 dólares al mes (hasta 122 veces el droplet de trabajo), y
+    # desde el móvil un tipo mal escrito se manda igual de rápido que el bueno.
+    # Por encima de este precio mensual, `launch` se niega y pide --accept-cost.
+    # 0 = sin freno.
+    "DO_MAX_PRICE_MONTHLY": "100",
     # Plantilla de primer arranque. Hay más de una porque no todas las máquinas
     # quieren lo mismo: cloud-init.mini.yaml es para el control, que con 512 MB
     # no puede con Claude Code pero sí lanza droplets grandes.
@@ -76,10 +86,17 @@ def cfg(key: str) -> str:
     return os.environ.get(key) or DEFAULTS.get(key, "")
 
 
-def token() -> str:
-    tok = os.environ.get("DO_TOKEN") or os.environ.get("DIGITALOCEAN_TOKEN") or os.environ.get(
-        "DIGITALOCEAN_ACCESS_TOKEN"
+def token_opcional() -> str:
+    return (
+        os.environ.get("DO_TOKEN")
+        or os.environ.get("DIGITALOCEAN_TOKEN")
+        or os.environ.get("DIGITALOCEAN_ACCESS_TOKEN")
+        or ""
     )
+
+
+def token() -> str:
+    tok = token_opcional()
     if not tok:
         die(
             "Falta el token. Copia .env.example a .env y pon ahí tu Personal Access Token\n"
@@ -253,22 +270,243 @@ def cmd_register_key(args: argparse.Namespace) -> None:
     log(f"Clave registrada: {key['name']} (id {key['id']}, {key['fingerprint']})")
 
 
+# ------------------------------------------------------------- tipos de máquina
+
+
+TYPES_DIR = ROOT / "types"
+
+
+def load_type(name: str) -> dict:
+    """Lee types/<nombre>.json: un tipo de máquina con nombre.
+
+    Elegir máquina no es elegir un `size`: una GPU necesita ADEMÁS su imagen con
+    los drivers puestos (`gpu-h100x1-base`) y una región donde haya GPUs. Pedir
+    el plan a secas te da una máquina cara sin drivers, o un 422 según el día.
+    El tipo agrupa esa combinación bajo un nombre que sí se puede escribir de
+    memoria desde el móvil.
+
+    Es DATO, no código, como services/: añadir un tipo es añadir un fichero,
+    nunca tocar este script. Nada de lo que hay aquí se valida contra una lista
+    cableada; el plan se comprueba en el momento del lanzamiento contra
+    /v2/sizes, que es la única fuente de verdad sobre qué existe y qué cuesta.
+    """
+    path = TYPES_DIR / f"{name}.json"
+    if not path.exists():
+        disponibles = ", ".join(sorted(p.stem for p in TYPES_DIR.glob("*.json")))
+        die(
+            f"No existe el tipo '{name}' (falta {path}).\n"
+            f"  Definidos: {disponibles or 'ninguno'}\n"
+            "  Míralos con: python scripts/do_droplet.py types"
+        )
+    try:
+        tipo = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"{path} no es JSON válido: {exc}")
+    if not tipo.get("size"):
+        die(f"{path}: falta el campo obligatorio 'size'.")
+    tipo["name"] = name
+    return tipo
+
+
+def all_types() -> list[dict]:
+    if not TYPES_DIR.exists():
+        return []
+    return [load_type(p.stem) for p in sorted(TYPES_DIR.glob("*.json"))]
+
+
 # ----------------------------------------------------------------- descubrimiento
 
 
+def sizes_index(opcional: bool = False) -> dict[str, dict]:
+    """Todos los planes de /v2/sizes indexados por slug.
+
+    Con `opcional`, quedarse sin índice no aborta el comando: se usa para
+    ponerle precio a listados que valen igual sin él (`types`, `list`). Sin
+    token no se intenta siquiera, que es el caso de mirar los tipos definidos en
+    una máquina que no lanza nada.
+    """
+    if opcional and not token_opcional():
+        return {}
+    try:
+        return {s["slug"]: s for s in paged("/v2/sizes", "sizes")}
+    except SystemExit:
+        if not opcional:
+            raise
+        return {}
+
+
+def precio_mes(size: dict) -> float:
+    """Precio mensual del plan, en dólares.
+
+    Los planes que sólo publican precio por hora se estiman a 730 horas, que es
+    lo que hace la propia página de precios de DigitalOcean para los de GPU.
+    """
+    mensual = size.get("price_monthly") or 0
+    if mensual:
+        return float(mensual)
+    return float(size.get("price_hourly") or 0) * 730
+
+
+def precio_hora(size: dict) -> float:
+    return float(size.get("price_hourly") or 0)
+
+
+def gpu_desc(size: dict) -> str:
+    """'1x nvidia h100 80 GiB', o cadena vacía si el plan no lleva GPU."""
+    gpu = size.get("gpu_info") or {}
+    if not gpu:
+        return ""
+    modelo = str(gpu.get("model") or "gpu").replace("_", " ")
+    trozos = [f"{gpu.get('count', 1)}x {modelo}"]
+    vram = gpu.get("vram") or {}
+    if vram.get("amount"):
+        # La API contesta las unidades en minúsculas ("gib"). En mayúsculas del
+        # todo ("GIB") se leen peor que escritas como se escriben.
+        bruta = str(vram.get("unit") or "")
+        unidad = {"gib": "GiB", "mib": "MiB", "tib": "TiB"}.get(bruta.lower(), bruta.upper())
+        trozos.append(f"{vram['amount']} {unidad}")
+    return " ".join(trozos)
+
+
+def size_resumen(size: dict) -> str:
+    """Una línea con lo que cuesta y lo que trae, para logs y avisos."""
+    gpu = gpu_desc(size)
+    return (
+        f"{size['slug']} · ${precio_mes(size):,.2f}/mes (${precio_hora(size):.4f}/h)"
+        f" · {size['vcpus']} vCPU · {size['memory'] / 1024:g} GB RAM"
+        f" · {size['disk']} GB" + (f" · {gpu}" if gpu else "")
+    )
+
+
+SIZES_HEADER = f"{'SLUG':<24} {'vCPU':>4} {'RAM':>8} {'DISCO':>8} {'$/MES':>10} {'$/HORA':>9}"
+
+
+def size_fila(size: dict) -> str:
+    return (
+        f"{size['slug']:<24} {size['vcpus']:>4} {size['memory'] / 1024:>5g} GB "
+        f"{size['disk']:>5} GB {precio_mes(size):>10,.2f} {precio_hora(size):>9.4f}"
+    )
+
+
 def cmd_sizes(args: argparse.Namespace) -> None:
-    region = args.region or cfg("DO_REGION")
-    log(f"Tamaños disponibles en {region} (RAM >= {args.min_memory} MB):\n")
-    log(f"{'SLUG':<26} {'vCPU':>4} {'RAM':>8} {'DISCO':>7} {'$/MES':>8}")
-    for size in paged("/v2/sizes", "sizes"):
-        if not size["available"] or region not in size["regions"]:
+    """El catálogo de planes de DigitalOcean, con precio. De aquí salen los tipos.
+
+    Dos cosas que costaron un rato entender y que este comando ya no esconde:
+
+    - **Las GPU no están en todas las regiones.** Filtrar por la región del .env
+      (nyc1 por defecto) las escondía todas, y la conclusión fácil era "mi cuenta
+      no tiene GPU". Por eso --gpu mira todas las regiones salvo que se pida una,
+      y la línea de detalle dice en cuáles hay.
+    - **Un plan no disponible no es lo mismo que inexistente.** Se ocultaban
+      igual, así que --all los muestra marcados: si el que buscas sale como no
+      disponible, el problema es tu cuenta o esa región, no el nombre.
+
+    Siempre se imprime qué filtros están puestos: un listado corto por un filtro
+    olvidado se lee igual que "no hay nada", y son cosas muy distintas.
+    """
+    # Una región explícita manda siempre. Sin ella, --gpu y --all-regions miran
+    # todas: es justo el caso en que filtrar por la del .env engaña.
+    region = args.region or ("" if (args.all_regions or args.gpu) else cfg("DO_REGION"))
+    detalle = bool(args.gpu or args.all_regions or not region)
+
+    filtros = [f"región {region}" if region else "todas las regiones"]
+    if args.gpu:
+        filtros.append("sólo con GPU")
+    if args.filter:
+        filtros.append(f"slug contiene '{args.filter}'")
+    if args.min_memory:
+        filtros.append(f"RAM >= {args.min_memory} MB")
+    if args.max_price:
+        filtros.append(f"hasta ${args.max_price:,.2f}/mes")
+    if args.all:
+        filtros.append("incluidos los no disponibles")
+
+    log("Planes de DigitalOcean (" + "; ".join(filtros) + "):\n")
+    log(SIZES_HEADER)
+
+    mostrados = 0
+    for size in sorted(paged("/v2/sizes", "sizes"), key=precio_mes):
+        if not size.get("available") and not args.all:
+            continue
+        if region and region not in size.get("regions", []):
+            continue
+        if args.gpu and not size.get("gpu_info"):
+            continue
+        if args.filter and args.filter.lower() not in size["slug"].lower():
             continue
         if size["memory"] < args.min_memory:
             continue
+        if args.max_price and precio_mes(size) > args.max_price:
+            continue
+
+        log(size_fila(size))
+        mostrados += 1
+        if detalle:
+            partes = [p for p in (gpu_desc(size), ", ".join(size.get("regions", []))) if p]
+            if not size.get("available"):
+                partes.insert(0, "NO DISPONIBLE en tu cuenta")
+            if partes:
+                log("  " + " · ".join(partes))
+
+    log(f"\n{mostrados} planes.")
+    if not mostrados:
         log(
-            f"{size['slug']:<26} {size['vcpus']:>4} {size['memory']:>6} MB "
-            f"{size['disk']:>4} GB {size['price_monthly']:>8.2f}"
+            "  Ninguno pasa esos filtros. Prueba a quitarlos:\n"
+            "    sizes --all-regions --min-memory 0 --all"
         )
+    if args.gpu and not mostrados:
+        log(
+            "  Si no sale ninguna GPU ni con --all, tu cuenta aún no tiene acceso\n"
+            "  a GPU Droplets: hay que pedirlo desde el panel de DigitalOcean."
+        )
+    if mostrados and args.gpu:
+        log(
+            "  La imagen normal de Ubuntu NO trae drivers: para GPU hay que\n"
+            "  lanzar con la imagen 'gpu-h100x1-base' (o el tipo ya hecho de\n"
+            "  types/, que la lleva puesta). Míralas con: images --kind all --filter gpu"
+        )
+
+
+def cmd_types(args: argparse.Namespace) -> None:
+    """Los tipos con nombre de types/, con su precio traído en vivo.
+
+    El precio no se guarda en el descriptor a propósito: un número copiado a
+    mano envejece sin avisar, y aquí un número viejo se traduce en dinero.
+    """
+    tipos = all_types()
+    if not tipos:
+        log(f"No hay ningún tipo definido en {TYPES_DIR}.")
+        return
+
+    def efectivo(tipo: dict, campo: str, variable: str) -> str:
+        """Lo que acabaría usando el lanzador, marcando lo que no fija el tipo."""
+        return tipo.get(campo) or f"{cfg(variable)} (de .env)"
+
+    index = sizes_index(opcional=True)
+    log("Tipos definidos en types/ (precio en vivo de /v2/sizes):\n")
+    for tipo in tipos:
+        size = index.get(tipo["size"])
+        precio = f"${precio_mes(size):,.2f}/mes (${precio_hora(size):.4f}/h)" if size else ""
+        marca = " (por defecto)" if tipo["name"] == cfg("DO_TYPE") else ""
+        log(f"{tipo['name']}{marca}  ·  {tipo['size']}" + (f"  ·  {precio}" if precio else ""))
+        if tipo.get("descripcion"):
+            log(f"  {tipo['descripcion']}")
+        log(
+            f"  imagen {efectivo(tipo, 'image', 'DO_IMAGE')}"
+            f" · región {efectivo(tipo, 'region', 'DO_REGION')}"
+            f" · tag {efectivo(tipo, 'tag', 'DO_TAG')}"
+            f" · arranque {efectivo(tipo, 'cloud_init', 'DO_CLOUD_INIT')}"
+        )
+        if size and gpu_desc(size):
+            log(f"  {gpu_desc(size)} · regiones con este plan: {', '.join(size['regions'])}")
+        if tipo.get("notas"):
+            log(f"  Ojo: {tipo['notas']}")
+        log("")
+
+    if not index:
+        log("(sin precios: no hay token de DigitalOcean o la API no respondió)\n")
+    log("Se usa con:  launch <nombre-droplet> --type <tipo>")
+    log("Y el catálogo completo de planes está en:  sizes  /  sizes --gpu")
 
 
 def cmd_regions(args: argparse.Namespace) -> None:
@@ -278,9 +516,16 @@ def cmd_regions(args: argparse.Namespace) -> None:
 
 
 def cmd_images(args: argparse.Namespace) -> None:
-    for image in paged("/v2/images?type=distribution", "images"):
-        if args.filter.lower() in image["slug"].lower():
-            log(f"{image['slug']:<28} {image['distribution']} {image['name']}")
+    """Imágenes de arranque.
+
+    Por defecto sólo las distribuciones, que es lo que se quiere el 99% de las
+    veces. Las de GPU con drivers NO son distribuciones y por eso no salían
+    aquí: hay que pedir --kind all.
+    """
+    path = "/v2/images" if args.kind == "all" else f"/v2/images?type={args.kind}"
+    for image in paged(path, "images"):
+        if args.filter.lower() in (image.get("slug") or "").lower():
+            log(f"{image['slug']:<28} {image.get('distribution', '')} {image['name']}")
 
 
 # ------------------------------------------------------------------- ciclo de vida
@@ -413,32 +658,120 @@ def find_droplets(name: str = "", tag: str = "") -> list[dict]:
     return [d for d in droplets if not name or d["name"] == name]
 
 
+def resolver_maquina(args: argparse.Namespace) -> dict:
+    """Decide plan, imagen, región, arranque y tag combinando las tres fuentes.
+
+    Manda lo más explícito: una opción de la línea de comandos por encima del
+    tipo, y el tipo por encima del .env. Así `--type gpu-h100 --region tor1`
+    hace lo que parece, sin tener que editar el descriptor para un lanzamiento
+    suelto.
+    """
+    nombre = args.type or cfg("DO_TYPE")
+    tipo = load_type(nombre) if nombre else {}
+    return {
+        "tipo": tipo,
+        "size": args.size or tipo.get("size") or cfg("DO_SIZE"),
+        "image": args.image or tipo.get("image") or cfg("DO_IMAGE"),
+        "region": args.region or tipo.get("region") or cfg("DO_REGION"),
+        "cloud_init": args.cloud_init or tipo.get("cloud_init") or cfg("DO_CLOUD_INIT"),
+        "tag": args.tag or tipo.get("tag") or cfg("DO_TAG"),
+    }
+
+
+def limite_precio() -> float:
+    bruto = cfg("DO_MAX_PRICE_MONTHLY").strip()
+    if not bruto:
+        return 0.0
+    try:
+        return float(bruto)
+    except ValueError:
+        die(f"DO_MAX_PRICE_MONTHLY tiene que ser un número de dólares al mes, no '{bruto}'.")
+
+
+def comprobar_size(slug: str, region: str, aceptar_coste: bool) -> dict:
+    """Valida el plan contra /v2/sizes y frena los lanzamientos caros.
+
+    Una llamada de lectura antes de gastar nada. Convierte un 422 de la API -o,
+    peor, una máquina de GPU facturando a 4,42 $/h en la región equivocada- en un
+    mensaje que dice qué pasa y qué escribir. Que `available` sea falso no es lo
+    mismo que no existir: con las GPU casi siempre significa que falta pedir
+    acceso, y esos dos casos se confundían en un mismo silencio.
+    """
+    index = sizes_index()
+    size = index.get(slug)
+    if not size:
+        parecidos = sorted(s for s in index if s.startswith(slug.split("-")[0] + "-"))[:8]
+        die(
+            f"El plan '{slug}' no aparece en /v2/sizes.\n"
+            + (f"  Parecidos: {', '.join(parecidos)}\n" if parecidos else "")
+            + "  Míralos con: python scripts/do_droplet.py sizes --all-regions\n"
+            "  Los planes por contrato no se publican ahí: para ésos, --no-check."
+        )
+    if not size.get("available"):
+        die(
+            f"El plan '{slug}' existe pero no está disponible para tu cuenta.\n"
+            "  Con las GPU suele ser que falta pedir el acceso en el panel de\n"
+            "  DigitalOcean; no es que el nombre esté mal."
+        )
+    if region not in size.get("regions", []):
+        die(
+            f"El plan '{slug}' no existe en la región '{region}'.\n"
+            f"  Sí lo hay en: {', '.join(size.get('regions', [])) or 'ninguna'}\n"
+            "  Repite el comando con --region <una de ésas>.\n"
+            "  (Las GPU sólo están en unas pocas: por eso no salen filtrando por\n"
+            "   la región del .env.)"
+        )
+    limite = limite_precio()
+    if limite and precio_mes(size) > limite and not aceptar_coste:
+        die(
+            f"Freno de coste: {size_resumen(size)}\n"
+            f"  Pasa del límite DO_MAX_PRICE_MONTHLY = ${limite:,.2f}/mes.\n"
+            "  Si es justo lo que quieres, repite el comando con --accept-cost.\n"
+            "  Factura desde que el droplet existe, no desde que lo usas, y sólo\n"
+            "  se corta destruyéndolo:  destroy <nombre> --yes"
+        )
+    return size
+
+
 def cmd_launch(args: argparse.Namespace) -> None:
     name = args.name or cfg("DO_DROPLET_NAME")
     if find_droplets(name=name):
         die(f"Ya existe un droplet llamado '{name}'. Usa otro nombre o destrúyelo primero.")
 
+    maquina = resolver_maquina(args)
+    size = None if args.no_check else comprobar_size(
+        maquina["size"], maquina["region"], args.accept_cost
+    )
+
     keys = selected_keys()
     body = {
         "name": name,
-        "region": args.region or cfg("DO_REGION"),
-        "size": args.size or cfg("DO_SIZE"),
-        "image": args.image or cfg("DO_IMAGE"),
+        "region": maquina["region"],
+        "size": maquina["size"],
+        "image": maquina["image"],
         "ssh_keys": [k["id"] for k in keys],
         # El tag decide qué se barre con `destroy --tag`. Una máquina de control
         # no puede llevar el de los efímeros: se la llevaría por delante.
-        "tags": [args.tag or cfg("DO_TAG")],
+        "tags": [maquina["tag"]],
         "monitoring": True,
         "ipv6": True,
     }
-    user_data = build_user_data(keys, args.cloud_init or "")
+    user_data = build_user_data(keys, maquina["cloud_init"])
     if user_data:
         body["user_data"] = user_data
 
+    tipo = maquina["tipo"]
     log(
-        f"Creando '{name}': {body['size']} · {body['image']} · {body['region']}"
-        f" · tag {body['tags'][0]} · {args.cloud_init or cfg('DO_CLOUD_INIT')}"
+        f"Creando '{name}'" + (f" (tipo {tipo['name']})" if tipo else "") + ":"
+        f" {body['size']} · {body['image']} · {body['region']}"
+        f" · tag {body['tags'][0]} · {maquina['cloud_init']}"
     )
+    # El precio, antes de crear nada y en las dos unidades: la mensual es la que
+    # se entiende, la horaria la que de verdad pagas por una máquina efímera.
+    if size:
+        log(f"Coste: ${precio_mes(size):,.2f}/mes (${precio_hora(size):.4f}/h) mientras exista.")
+    if tipo.get("notas"):
+        log(f"Ojo: {tipo['notas']}")
     log(f"Claves SSH autorizadas: {', '.join(k['name'] for k in keys)}")
     if args.dry_run:
         log("\n--dry-run, no se envía nada. Cuerpo de la petición:\n")
@@ -506,16 +839,34 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
 
 def cmd_list(args: argparse.Namespace) -> None:
+    """Qué hay vivo y cuánto cuesta tenerlo así.
+
+    El precio no es decoración: un droplet olvidado se paga por segundo, y con
+    los planes de GPU un despiste vale 4,42 $/h. Ver el total al pie es lo que
+    convierte 'tengo tres máquinas' en 'estoy gastando esto'.
+    """
     droplets = find_droplets(tag=args.tag or "")
     if not droplets:
         log("No hay droplets.")
         return
-    log(f"{'ID':<12} {'NOMBRE':<24} {'ESTADO':<8} {'TAMAÑO':<16} IP")
+
+    index = sizes_index(opcional=True)
+    log(f"{'ID':<11} {'NOMBRE':<20} {'ESTADO':<8} {'TAMAÑO':<20} {'$/MES':>9}  IP")
+    total_hora = 0.0
     for d in droplets:
+        size = index.get(d["size_slug"])
+        total_hora += precio_hora(size) if size else 0.0
+        precio = f"{precio_mes(size):>9,.2f}" if size else f"{'?':>9}"
         log(
-            f"{d['id']:<12} {d['name']:<24} {d['status']:<8} "
-            f"{d['size_slug']:<16} {public_ip(d) or '-'}"
+            f"{d['id']:<11} {d['name']:<20} {d['status']:<8} "
+            f"{d['size_slug']:<20} {precio}  {public_ip(d) or '-'}"
         )
+    if total_hora:
+        log(
+            f"\nGastando ahora: ${total_hora:.4f}/h  ·  ${total_hora * 730:,.2f}/mes"
+            " si siguen existiendo."
+        )
+        log("Se corta destruyéndolos, no apagándolos:  destroy <nombre> --yes")
 
 
 def cmd_ip(args: argparse.Namespace) -> None:
@@ -1410,23 +1761,81 @@ def main() -> None:
     p.add_argument("--name")
     p.set_defaults(func=cmd_register_key)
 
-    p = sub.add_parser("sizes", help="tamaños disponibles en una región")
-    p.add_argument("--region")
-    p.add_argument("--min-memory", type=int, default=4096)
+    p = sub.add_parser(
+        "sizes", help="catálogo de planes con su precio mensual, GPU incluidas"
+    )
+    p.add_argument("--region", help="sólo los de esta región (por defecto, la de .env)")
+    p.add_argument(
+        "--all-regions",
+        action="store_true",
+        help="de todas las regiones, diciendo en cuáles hay cada plan",
+    )
+    p.add_argument(
+        "--gpu",
+        action="store_true",
+        help="sólo planes con GPU. Mira todas las regiones salvo que pidas una: "
+        "las GPU no están en la mayoría, y filtrando por la del .env no sale ninguna",
+    )
+    p.add_argument("--filter", default="", help="planes cuyo slug contenga este texto")
+    p.add_argument(
+        "--max-price", type=float, default=0.0, metavar="USD", help="precio mensual máximo"
+    )
+    p.add_argument(
+        "--min-memory",
+        type=int,
+        default=4096,
+        metavar="MB",
+        help="RAM mínima (por defecto 4096, para no listar los planes diminutos)",
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="incluye los que existen pero no están disponibles para tu cuenta",
+    )
     p.set_defaults(func=cmd_sizes)
+
+    p = sub.add_parser(
+        "types", help="tipos de máquina con nombre (types/), con su precio en vivo"
+    )
+    p.set_defaults(func=cmd_types)
 
     p = sub.add_parser("regions", help="regiones disponibles")
     p.set_defaults(func=cmd_regions)
 
-    p = sub.add_parser("images", help="imágenes de distribución")
+    p = sub.add_parser("images", help="imágenes de arranque")
     p.add_argument("--filter", default="ubuntu")
+    p.add_argument(
+        "--kind",
+        choices=["distribution", "application", "all"],
+        default="distribution",
+        help="qué tipo de imagen listar. Las de GPU con drivers "
+        "(gpu-h100x1-base) no son distribuciones: hacen falta --kind all",
+    )
     p.set_defaults(func=cmd_images)
 
     p = sub.add_parser("launch", help="crea el droplet y espera a que esté usable")
     p.add_argument("name", nargs="?")
+    p.add_argument(
+        "--type",
+        help="tipo de máquina de types/: fija de una vez plan, imagen, región y "
+        "plantilla de arranque. Míralos con `types`. Cualquier opción de aquí "
+        "abajo pisa lo que diga el tipo",
+    )
     p.add_argument("--region")
     p.add_argument("--size")
     p.add_argument("--image")
+    p.add_argument(
+        "--accept-cost",
+        action="store_true",
+        help="lanza aunque el plan pase de DO_MAX_PRICE_MONTHLY. Hace falta para "
+        "las GPU, que cuestan de 557 a 3.229 dólares al mes",
+    )
+    p.add_argument(
+        "--no-check",
+        action="store_true",
+        help="no validar el plan contra /v2/sizes antes de crear. Sólo para los "
+        "planes por contrato, que no se publican ahí",
+    )
     p.add_argument(
         "--cloud-init",
         help="plantilla de primer arranque (por defecto cloud-init.yaml; "

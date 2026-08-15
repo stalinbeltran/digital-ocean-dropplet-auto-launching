@@ -1,0 +1,5 @@
+{
+  "descripcion": "Cuatro veces el de trabajo: 8 vCPU compartidas y 16 GB de RAM. Para compilar o para lo que no cabe en 4 GB.",
+  "size": "s-8vcpu-16gb",
+  "image": "ubuntu-24-04-x64"
+}

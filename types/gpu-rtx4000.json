@@ -1,0 +1,6 @@
+{
+  "descripcion": "La GPU mas barata del catalogo: una NVIDIA RTX 4000 Ada con 20 GB de VRAM, 8 vCPU y 32 GB de RAM.",
+  "size": "gpu-4000adax1-20gb",
+  "image": "gpu-h100x1-base",
+  "notas": "gpu-h100x1-base es la imagen de DigitalOcean con los drivers NVIDIA ya puestos, y es la que toca para TODOS los planes de 1 GPU aunque el nombre diga h100; va sobre Ubuntu 22.04, no 24.04. Las GPU solo existen en unas pocas regiones: si la de tu .env no es una, el lanzador se para y te dice cuales valen. Sin probar todavia contra una maquina real: cloud-init.yaml hace package_upgrade, que en una imagen con drivers podria traer un kernel nuevo."
+}

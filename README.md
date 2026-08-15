@@ -13,6 +13,11 @@ opción de 4 GB con disco pequeño (`c-2`, 25 GB) es CPU-Optimized y cuesta
 $42/mes, así que pedir menos disco saldría más caro. Detalle en
 [docs/digitalocean/droplets-api.md](docs/digitalocean/droplets-api.md).
 
+Ése es el de por defecto, no el único: hay **tipos** con nombre para máquinas
+más grandes, con CPU dedicada o **con GPU**, y un comando para ver el catálogo
+entero con sus precios. Está en
+[Elegir la máquina](#elegir-la-máquina-tipos-catálogo-y-gpu).
+
 ## Antes de empezar
 
 Cinco pasos, **todos una sola vez**: valen para todos los droplets que crees
@@ -229,7 +234,9 @@ droplet. El resto tiene valores por defecto razonables:
 | Variable | ¿Hace falta? | Qué es |
 |---|---|---|
 | `DO_TOKEN` | **Sí** | El token de DigitalOcean del paso 2 |
-| `DO_SIZE` | No — `s-2vcpu-4gb` | Plan de la máquina. Míralos con `sizes` |
+| `DO_TYPE` | No — vacío | Tipo de máquina por defecto (plan + imagen + región de una vez). Ver [Elegir la máquina](#elegir-la-máquina-tipos-catálogo-y-gpu) |
+| `DO_MAX_PRICE_MONTHLY` | No — `100` | Freno de coste en $/mes: por encima, `launch` pide `--accept-cost`. `0` = sin freno |
+| `DO_SIZE` | No — `s-2vcpu-4gb` | Plan de la máquina si no usas un tipo. Míralos con `sizes` |
 | `DO_IMAGE` | No — `ubuntu-24-04-x64` | Sistema operativo. Míralos con `images` |
 | `DO_REGION` | No — `nyc1` | Centro de datos. Míralos con `regions` |
 | `DO_DROPLET_NAME` | No — `proyecto-01` | Nombre del droplet; también lo puedes pasar como argumento a `launch` |
@@ -301,6 +308,183 @@ facturación:
 ```powershell
 python scripts/do_droplet.py destroy
 ```
+
+## Elegir la máquina: tipos, catálogo y GPU
+
+`launch` sin más crea el droplet de trabajo de siempre. Cuando haga falta otra
+cosa —más RAM, CPU dedicada para medir, una GPU— hay un **tipo** con nombre:
+
+```bash
+python scripts/do_droplet.py types                  # qué tipos hay y qué cuestan
+python scripts/do_droplet.py launch p5 --type big   # lanzar con uno
+```
+
+### Ver qué tipos hay
+
+`types` lista los descriptores de [types/](types/) **con el precio traído en
+vivo** de la API, para que no haya números viejos en un fichero:
+
+```
+dev  ·  s-2vcpu-4gb  ·  $24.00/mes ($0.0357/h)
+  El droplet de trabajo de siempre: 2 vCPU compartidas y 4 GB de RAM.
+  imagen ubuntu-24-04-x64 · región nyc1 (de .env) · tag ephemeral (de .env)
+
+gpu-h100  ·  gpu-h100x1-80gb  ·  $3,228.96/mes ($4.4232/h)
+  NVIDIA H100 con 80 GB de VRAM, 20 vCPU y 240 GB de RAM.
+  imagen gpu-h100x1-base · región nyc1 (de .env) · tag ephemeral (de .env)
+  1x nvidia h100 80 GiB · regiones con este plan: tor1, nyc2, atl1
+  Ojo: cuesta unas 134 veces el droplet de trabajo...
+```
+
+Los que vienen puestos:
+
+| Tipo | Plan | Para qué |
+|---|---|---|
+| `dev` | `s-2vcpu-4gb` | el de siempre, ~$24/mes |
+| `big` | `s-8vcpu-16gb` | compilar, o lo que no cabe en 4 GB (~$96/mes) |
+| `cpu` | `c-2` | CPU dedicada: medir tiempos sin ruido de vecinos |
+| `mini` | `s-1vcpu-512mb-10gb` | la máquina de control (lleva ya `tag control` y su cloud-init) |
+| `gpu-rtx4000` | `gpu-4000adax1-20gb` | la GPU más barata, 20 GB de VRAM |
+| `gpu-l40s` | `gpu-l40sx1-48gb` | 48 GB de VRAM |
+| `gpu-h100` | `gpu-h100x1-80gb` | H100 de 80 GB |
+
+**Un tipo no es un `size`**: es la combinación entera de plan + imagen + región +
+plantilla de arranque + tag. Esa distinción es justo la que hace falta con las
+GPU, que además del plan necesitan **su imagen con los drivers puestos**
+(`gpu-h100x1-base`); pedir sólo el plan te da una máquina cara con Ubuntu pelado
+y sin CUDA.
+
+### Ver el catálogo completo, con precios
+
+`types` son los atajos con nombre. `sizes` es **todo lo que vende
+DigitalOcean**, y de ahí sale el `size` de un tipo nuevo:
+
+```bash
+python scripts/do_droplet.py sizes                    # de tu región, RAM >= 4 GB
+python scripts/do_droplet.py sizes --gpu              # sólo GPU (ver aviso)
+python scripts/do_droplet.py sizes --all-regions      # todo, diciendo dónde hay qué
+python scripts/do_droplet.py sizes --max-price 50     # hasta $50/mes
+python scripts/do_droplet.py sizes --filter c-        # el slug contiene "c-"
+python scripts/do_droplet.py sizes --gpu --all        # incluidos los que tu cuenta no tiene
+```
+
+```
+SLUG                     vCPU      RAM    DISCO      $/MES    $/HORA
+gpu-4000adax1-20gb          8    32 GB   500 GB     556.80    0.7626
+  1x nvidia rtx 4000 ada 20 GiB · tor1, nyc2
+gpu-h100x1-80gb            20   240 GB   720 GB   3,228.96    4.4232
+  1x nvidia h100 80 GiB · tor1, nyc2, atl1
+```
+
+Se ven las dos unidades a propósito: **la mensual es la que se entiende y la
+horaria la que de verdad pagas**, porque estas máquinas viven horas. Un plan que
+sólo publica precio por hora se muestra estimado a 730 h, igual que hace la
+página de precios de DigitalOcean.
+
+> **Las GPU no están en la mayoría de regiones.** Por eso `--gpu` mira todas
+> salvo que pidas una: filtrando por la de tu `.env` (`nyc1`) no aparecía
+> ninguna, y la conclusión fácil —"mi cuenta no tiene GPU"— era falsa. La línea
+> de detalle dice en qué regiones hay cada plan. Si aun con `--all` no sale
+> ninguna, entonces sí: falta pedir acceso a GPU Droplets en el panel.
+
+Y las imágenes de GPU, que **no son distribuciones** y por eso no salían en
+`images`:
+
+```bash
+python scripts/do_droplet.py images --kind all --filter gpu
+```
+
+### Lanzar una GPU
+
+```bash
+python scripts/do_droplet.py launch entrena --type gpu-rtx4000 --region tor1 --accept-cost
+```
+
+Tres cosas de ese comando:
+
+- **`--region`** porque las GPU no están en todas. Si te equivocas no se crea
+  nada: el lanzador comprueba el plan contra `/v2/sizes` antes de gastar un
+  céntimo y te dice en qué regiones sí lo hay.
+- **`--accept-cost`** es el freno de mano. Por encima de `DO_MAX_PRICE_MONTHLY`
+  (100 $/mes por defecto) `launch` se niega y enseña el precio. No es paranoia:
+  desde el móvil un tipo mal escrito se manda igual de rápido que el bueno, y
+  aquí el error son 3.229 $/mes. Se sube o se quita en el `.env` (`0` = sin
+  freno).
+- **Cualquier opción suelta pisa al tipo**, así que no hay que editar el
+  descriptor para un lanzamiento distinto.
+
+Antes de crear nada, el precio sale por pantalla:
+
+```
+Creando 'entrena' (tipo gpu-rtx4000): gpu-4000adax1-20gb · gpu-h100x1-base · tor1 · tag ephemeral
+Coste: $556.80/mes ($0.7626/h) mientras exista.
+```
+
+Y `list` dice lo que estás gastando ahora mismo, que es el número que de verdad
+importa cuando se te olvida una máquina encendida:
+
+```
+ID          NOMBRE               ESTADO   TAMAÑO                   $/MES  IP
+111111111   proyecto-01          active   s-2vcpu-4gb              24.00  164.90.10.20
+222222222   entrena              active   gpu-h100x1-80gb       3,228.96  159.65.30.40
+
+Gastando ahora: $4.4589/h  ·  $3,255.03/mes si siguen existiendo.
+```
+
+### Añadir un tipo tuyo
+
+Es un fichero, nunca código. `types/loquesea.json`:
+
+```json
+{
+  "descripcion": "Para qué sirve esta máquina.",
+  "size": "s-4vcpu-8gb",
+  "image": "ubuntu-24-04-x64",
+  "region": "nyc1",
+  "cloud_init": "cloud-init.yaml",
+  "tag": "ephemeral",
+  "notas": "Lo que quieras que se imprima al lanzarlo."
+}
+```
+
+| Campo | |
+|---|---|
+| `size` | **Obligatorio.** Slug del plan; sácalo de `sizes` |
+| `image`, `region`, `cloud_init`, `tag` | Opcionales: lo que no pongas se hereda del `.env` |
+| `descripcion` | Se ve en `types` |
+| `notas` | Se imprime **al lanzar**, que es cuando importa avisar |
+
+Nada de esto se valida contra una lista cableada: el plan se comprueba contra
+`/v2/sizes` en el momento de lanzar, que es la única fuente de verdad sobre qué
+existe, dónde y a qué precio. Los planes **por contrato** no se publican ahí; para
+ésos, `--no-check`.
+
+### Elegirlo desde Telegram
+
+Con el ejecutor `lanzar` de la máquina de control **no hay que añadir nada**: ya
+pasa lo que escribas a `do_droplet.py`.
+
+```
+/use lanzar
+types
+sizes --gpu
+launch entrena --type gpu-rtx4000 --region tor1 --accept-cost
+list
+destroy entrena --yes
+```
+
+Si quieres atajos aún más cortos, se definen con `definer` desde el móvil (son
+datos del coordinador, no código de nadie):
+
+```
+exec tipos echo timeout=0
+cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py types
+
+exec gpu echo timeout=0
+cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py launch {{input}} --type gpu-rtx4000 --region tor1 --accept-cost
+```
+
+Y a partir de ahí, `/use gpu` y el nombre del droplet como único mensaje.
 
 ## Continuar tus proyectos en el droplet
 
@@ -764,6 +948,7 @@ antes de dar el puerto por bueno.
 
 ```bash
 python scripts/do_droplet.py launch            # crear, esperar y aprovisionar
+python scripts/do_droplet.py launch p5 --type big     # con otro tipo de máquina
 python scripts/do_droplet.py launch --no-provision   # crudo, sin credenciales
 python scripts/do_droplet.py provision         # reinyectar credenciales y repos
 python scripts/do_droplet.py list              # qué hay vivo
@@ -787,9 +972,12 @@ python scripts/do_droplet.py launch --dry-run
 Descubrir slugs vigentes en lugar de fiarte de los del `.env`:
 
 ```bash
-python scripts/do_droplet.py sizes --region nyc1
+python scripts/do_droplet.py types                        # tipos con nombre y su precio
+python scripts/do_droplet.py sizes --region nyc1          # catálogo de planes
+python scripts/do_droplet.py sizes --gpu                  # los de GPU, en todas las regiones
 python scripts/do_droplet.py regions
 python scripts/do_droplet.py images --filter ubuntu
+python scripts/do_droplet.py images --kind all --filter gpu   # las imágenes con drivers
 ```
 
 ## Coste
