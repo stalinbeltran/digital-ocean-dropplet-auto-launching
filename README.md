@@ -873,6 +873,89 @@ cambios. Desde Telegram va con el ejecutor `lanzar`, que sí admite argumentos:
 update --restart-all
 ```
 
+## Dar a un droplet el token de DigitalOcean (y acceso al mini)
+
+A veces un droplet de trabajo necesita hablar con la API: probar `sizes`, mirar
+qué hay vivo, o lanzar él mismo otra máquina. Hay un comando para eso, y **no es
+`provision`**:
+
+```bash
+python scripts/do_droplet.py push-do-token foveal
+```
+
+### Por qué no `provision --push-do-token`
+
+Porque `provision` **reescribe `dev-secrets.env` entero** (`cat >`), y eso es
+deliberado: el fichero acaba siendo exactamente lo que diga el comando. Usarlo
+sólo para añadir el token **borra del destino todo lo que el emisor no tenga a
+mano** —el de Claude, el de GitHub—, y no se nota al momento: se nota cuando
+algo dentro de esa máquina deja de autenticar sin motivo aparente.
+
+`push-do-token` toca **una línea** y deja el resto como estaba. Repetirlo **rota**
+el token: quita la línea anterior y pone la nueva.
+
+Del resto se encarga igual que `provision`: el token viaja por SSH, dentro del
+script que va por **stdin** (nunca como argumento de `ssh`, que saldría en el
+`ps` del destino), y acaba en `~deploy/.config/dev-secrets.env` en modo 600, con
+la línea que lo carga en cada shell.
+
+> **Quien entre a esa máquina podrá crear y destruir droplets en tu cuenta**, es
+> decir gastar dinero. Dáselo sólo a máquinas tuyas y destrúyelas al acabar.
+>
+> Si lo que quieres es que sólo pueda *mirar*, crea en el panel un token con
+> *Custom Scopes* de sólo lectura (`droplet:read`, `image:read`, `sizes:read`,
+> `regions:read`, `ssh_key:read`), guárdalo aparte y mándalo con:
+>
+> ```bash
+> python scripts/do_droplet.py push-do-token foveal --from-env DO_TOKEN_RO
+> ```
+>
+> Llega al destino como `DO_TOKEN`, así que todo funciona igual salvo crear y
+> destruir. Para consultar el catálogo, comprobar planes o hacer `--dry-run`
+> basta con eso.
+
+Desde Telegram, con el ejecutor `lanzar` de la máquina de control:
+
+```
+/use lanzar
+push-do-token foveal
+```
+
+### Entrar por SSH a la máquina de control
+
+La otra mitad: que un droplet pueda **entrar** al mini (o a cualquier otra
+máquina). La clave privada no viaja nunca; sólo se autoriza la pública allí
+donde se quiere entrar.
+
+En el droplet que quiere entrar:
+
+```bash
+python scripts/do_droplet.py keygen --comment mi-droplet   # si no la tiene ya
+cat ~/.ssh/do_droplet.pub
+```
+
+Y en la máquina de destino —desde Telegram, que es donde ya tienes un comando—:
+
+```
+/use lanzar
+authorize-key ssh-ed25519 AAAAC3Nza... mi-droplet
+```
+
+`authorize-key` corre **dentro** de la máquina donde se quiere entrar, no contra
+la API. Es idempotente (compara el material de la clave, no el comentario), deja
+`authorized_keys` en modo 600 y se niega si lo que le pasas no es una clave.
+
+Luego, ya con el token puesto, el droplet encuentra solo la IP del mini:
+
+```bash
+python scripts/do_droplet.py ssh mini --cmd "uptime"
+```
+
+> **Esto es un permiso mayor que el token.** Shell en el mini es el token *más*
+> la capacidad de destruirlo todo, y el mini es la máquina desde la que lanzas
+> cuando no tienes la laptop delante. Dáselo sólo a droplets tuyos y recuerda
+> que [el mini no se destruye nunca en una limpieza](#la-máquina-de-control-lanzar-droplets-desde-el-móvil).
+
 ## Acceso desde tu otra laptop
 
 Están contempladas las dos formas. **La segunda es la recomendada.**

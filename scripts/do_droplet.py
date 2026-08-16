@@ -1258,6 +1258,37 @@ def push_env_names(valores: list[str]) -> list[str]:
     return nombres
 
 
+def bloque_cargar_secretos() -> list[str]:
+    """Líneas de sh que hacen que dev-secrets.env se cargue en cada shell.
+
+    Espera `$H` (home del usuario) y `$DEV_USER` ya puestos por quien las use, y
+    es idempotente: se puede reejecutar sin duplicar nada.
+
+    Vive aparte porque hacen falta en dos sitios -el aprovisionamiento completo y
+    el empujón suelto del token- y no pueden divergir: si esta línea falta, el
+    fichero de secretos existe pero no lo carga nadie, y el síntoma es un
+    "falta el token" en una máquina donde el token sí está.
+    """
+    return [
+        "# --- cargarlas en cada shell",
+        "# La línea va al PRINCIPIO de .bashrc, antes del corte que Ubuntu pone",
+        "# para shells no interactivas. Así el token existe en los tres casos:",
+        "# sesión interactiva, shell de login y `ssh droplet 'claude -p ...'`.",
+        'if ! grep -q dev-secrets.env "$H/.bashrc" 2>/dev/null; then',
+        "  TMP=$(mktemp)",
+        "  {",
+        "    echo '# Secretos de desarrollo (los inyecta do_droplet.py provision).'",
+        '    echo \'[ -f "$HOME/.config/dev-secrets.env" ] && . "$HOME/.config/dev-secrets.env"\'',
+        "    echo",
+        '    cat "$H/.bashrc" 2>/dev/null || true',
+        '  } > "$TMP"',
+        '  cat "$TMP" > "$H/.bashrc"',
+        '  rm -f "$TMP"',
+        '  chown "$DEV_USER:$DEV_USER" "$H/.bashrc"',
+        "fi",
+    ]
+
+
 def build_provision_script(
     repos: list[str],
     services: list[dict] | None = None,
@@ -1315,22 +1346,7 @@ def build_provision_script(
         'chmod 600 "$H/.config/dev-secrets.env"',
         'chown "$DEV_USER:$DEV_USER" "$H/.config/dev-secrets.env"',
         "",
-        "# --- cargarlas en cada shell",
-        "# La línea va al PRINCIPIO de .bashrc, antes del corte que Ubuntu pone",
-        "# para shells no interactivas. Así el token existe en los tres casos:",
-        "# sesión interactiva, shell de login y `ssh droplet 'claude -p ...'`.",
-        'if ! grep -q dev-secrets.env "$H/.bashrc" 2>/dev/null; then',
-        "  TMP=$(mktemp)",
-        "  {",
-        "    echo '# Secretos de desarrollo (los inyecta do_droplet.py provision).'",
-        '    echo \'[ -f "$HOME/.config/dev-secrets.env" ] && . "$HOME/.config/dev-secrets.env"\'',
-        "    echo",
-        '    cat "$H/.bashrc" 2>/dev/null || true',
-        '  } > "$TMP"',
-        '  cat "$TMP" > "$H/.bashrc"',
-        '  rm -f "$TMP"',
-        '  chown "$DEV_USER:$DEV_USER" "$H/.bashrc"',
-        "fi",
+        *bloque_cargar_secretos(),
         "",
         "# --- git",
         'sudo -u "$DEV_USER" -H git config --global credential.helper store',
@@ -1691,6 +1707,117 @@ def reiniciar_unidad(unit: str, propia: bool) -> str:
     return f"{unit}: reiniciado y activo"
 
 
+def cmd_push_do_token(args: argparse.Namespace) -> None:
+    """Da a un droplet ya creado el token de DigitalOcean, y sólo eso.
+
+    Existe aparte de `provision --push-do-token` por una razón concreta y cara:
+    `provision` reescribe `dev-secrets.env` ENTERO (`cat >`), a propósito, para
+    que el fichero sea exactamente lo que diga el comando. Usarlo sólo para
+    añadir el token borra del destino todo lo que el emisor no tenga a mano -el
+    de Claude, el de GitHub-, y eso no se nota al momento: se nota cuando algo
+    dentro de esa máquina deja de autenticar sin motivo aparente. Esto toca una
+    línea y deja el resto del fichero como estaba.
+
+    El token viaja por SSH y dentro del script que va por **stdin**, nunca como
+    argumento: lo que va en la línea de comandos de ssh sale en el `ps` del
+    destino, donde lo lee cualquier usuario sin privilegios.
+
+    Repetir el comando ROTA el token: quita la línea anterior y pone la nueva.
+    """
+    if args.from_env == "DO_TOKEN":
+        valor = token()  # acepta también DIGITALOCEAN_TOKEN y _ACCESS_TOKEN
+    else:
+        valor = os.environ.get(args.from_env, "").strip()
+        if not valor:
+            die(
+                f"La variable '{args.from_env}' no tiene valor en esta máquina.\n"
+                "  Es la que se iba a enviar como DO_TOKEN al destino."
+            )
+
+    dev_user = cfg("DO_DEV_USER")
+    droplet, ip, port = resolve_target(args.name or "", args.port or 0)
+    log(f"Enviando el token de DigitalOcean a '{droplet['name']}' ({ip}:{port}).")
+    log("  AVISO: con este token, quien entre a esa máquina puede crear y")
+    log("  destruir droplets en tu cuenta, es decir gastar dinero. Dáselo sólo")
+    log("  a máquinas tuyas y destrúyelas cuando acabes.")
+
+    script = "\n".join(
+        [
+            "set -eu",
+            "umask 077",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+            'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.config"',
+            'F="$H/.config/dev-secrets.env"',
+            'T="$F.nuevo"',
+            "# Se copia el fichero SIN la línea del token y se le añade la nueva:",
+            "# así esto sirve igual para ponerlo la primera vez que para rotarlo,",
+            "# y ningún otro secreto del destino se toca.",
+            'if [ -f "$F" ]; then grep -v "^export DO_TOKEN=" "$F" > "$T" || true;'
+            ' else : > "$T"; fi',
+            # Heredoc con el delimitador entrecomillado: nada de lo que haya en el
+            # token se expande ni se interpreta, venga como venga.
+            "cat >> \"$T\" <<'FIN_TOKEN'",
+            f"export DO_TOKEN={shq(valor)}",
+            "FIN_TOKEN",
+            'mv "$T" "$F"',
+            'chmod 600 "$F"',
+            'chown "$DEV_USER:$DEV_USER" "$F"',
+            "",
+            *bloque_cargar_secretos(),
+            "",
+            'echo "DO_TOKEN escrito en $F (modo 600, dueño $DEV_USER)."',
+        ]
+    )
+
+    if run_remote_script(ip, port, script) != 0:
+        die("Falló el envío del token. La salida de ssh está justo arriba.")
+    log("\nListo. En esa máquina, para comprobarlo sin sacar el token a pantalla:")
+    log("  bash -lc 'python3 scripts/do_droplet.py list'")
+
+
+def cmd_authorize_key(args: argparse.Namespace) -> None:
+    """DENTRO de una máquina: autoriza una clave pública para entrar por SSH.
+
+    Es la mitad que falta para que un droplet pueda entrar en otra máquina. La
+    privada no viaja nunca -se queda donde se generó-, aquí sólo se apunta la
+    pública, que no es secreta.
+
+    Se ejecuta donde se quiere entrar, y por eso vale desde Telegram: el bot ya
+    corre comandos en la máquina de control, que es justo el destino habitual.
+    """
+    linea = " ".join(args.clave).strip()
+    tipos = ("ssh-ed25519", "ssh-rsa", "ecdsa-sha2-", "sk-ssh-", "sk-ecdsa-")
+    partes = linea.split()
+    if not linea.startswith(tipos) or len(partes) < 2:
+        die(
+            "Eso no parece una clave pública.\n"
+            "  Se espera la línea entera, tal cual sale del fichero .pub:\n"
+            "    ssh-ed25519 AAAAC3Nza... comentario"
+        )
+
+    path = Path.home() / ".ssh" / "authorized_keys"
+    path.parent.mkdir(mode=0o700, exist_ok=True)
+    existentes = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    # Se compara el material de la clave, no la línea entera: el comentario del
+    # final cambia entre máquinas y no distingue una clave de otra.
+    for existente in existentes:
+        trozos = existente.split()
+        if len(trozos) >= 2 and trozos[1] == partes[1]:
+            log(f"Esa clave ya estaba autorizada en {path}. No se toca nada.")
+            return
+
+    with path.open("a", encoding="utf-8") as fh:
+        if existentes and existentes[-1].strip():
+            fh.write("\n")
+        fh.write(linea + "\n")
+    path.chmod(0o600)
+    comentario = " ".join(partes[2:]) or "(sin comentario)"
+    log(f"Clave autorizada en {path}: {partes[0]} … {comentario}")
+    log(f"Ahora esa máquina puede entrar aquí como {Path.home().name}.")
+
+
 def cmd_update(args: argparse.Namespace) -> None:
     """Trae el código nuevo de GitHub a esta máquina y reinicia lo que lo usa.
 
@@ -1913,6 +2040,33 @@ def main() -> None:
         help="no esperar al testigo de instalación de cloud-init",
     )
     p.set_defaults(func=cmd_provision)
+
+    p = sub.add_parser(
+        "push-do-token",
+        help="da a un droplet ya creado el token de DigitalOcean, sin tocar sus "
+        "demás secretos (a diferencia de provision, que reescribe el fichero)",
+    )
+    p.add_argument("name", nargs="?")
+    p.add_argument("--port", type=int)
+    p.add_argument(
+        "--from-env",
+        default="DO_TOKEN",
+        metavar="VAR",
+        help="variable de ESTA máquina cuyo valor se envía como DO_TOKEN. Sirve "
+        "para mandar un token de sólo lectura guardado aparte, p. ej. DO_TOKEN_RO",
+    )
+    p.set_defaults(func=cmd_push_do_token)
+
+    p = sub.add_parser(
+        "authorize-key",
+        help="DENTRO de una máquina: autoriza una clave pública para entrar por SSH",
+    )
+    p.add_argument(
+        "clave",
+        nargs="+",
+        help="la línea entera de la clave pública, tal cual sale del fichero .pub",
+    )
+    p.set_defaults(func=cmd_authorize_key)
 
     p = sub.add_parser(
         "update",

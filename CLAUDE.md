@@ -258,6 +258,16 @@ Lo que hay que respetar:
   control lleva un **bot distinto** (`telegram-launcher`, prefijo `TGL_`) y no el mismo: no
   es una cuestión de comodidad, con un solo token uno de los dos se queda fuera. Y por eso
   `selected_services()` se niega a instalar juntos dos servicios del mismo repo.
+- **Para dar el token a un droplet ya creado está `push-do-token`, no `provision`.**
+  `provision` reescribe `dev-secrets.env` entero (`cat >`) a propósito, así que usarlo
+  sólo para añadir el token **borra del destino lo que el emisor no tenga a mano** (el de
+  Claude, el de GitHub). El síntoma llega tarde y despistado: algo en esa máquina deja de
+  autenticar sin motivo aparente. `push-do-token` reescribe una línea y conserva el resto,
+  y repetirlo rota el token. Con `--from-env` se manda otro token que no sea el de esta
+  máquina; sirve para dar uno de **sólo lectura** a un droplet que sólo tiene que mirar.
+- **`authorize-key` corre DENTRO de la máquina donde se quiere entrar**, no contra la API.
+  Es la mitad que falta para el SSH entre máquinas: la clave privada no viaja nunca. Ojo
+  con a quién se le da: shell en el mini es el token *más* poder destruirlo todo.
 - **El `DO_TOKEN` del mini va por `--push-do-token`**, que lo escribe en
   `~/.config/dev-secrets.env` con el resto de secretos. Es una opción de línea de comandos
   y **no** una variable del `.env` a propósito: así no se cuela en todos los droplets.
