@@ -81,13 +81,22 @@ Lo que hay que respetar al tocar esto:
   `DO_REGION` (nyc1) y las escondía todas; la conclusión fácil era "mi cuenta no tiene
   GPU". Por eso `--gpu` mira todas las regiones salvo que se pida una, y la línea de
   detalle dice dónde hay cada plan. **No devuelvas ese filtro al valor por defecto.**
-- **Existir, estar disponible, tener capacidad y estar en tu región son cuatro cosas
-  distintas**, y antes se confundían en un mismo silencio. `comprobar_size()` las separa
-  con mensajes que dicen qué escribir a continuación. La que no se ve venir es la
-  tercera: medido el 2026-08-16, siete planes de GPU (entre ellos `gpu-l40sx1-48gb`)
-  vienen con `available: true` y `regions: []` — tu cuenta los tiene y aun así **no hay
-  dónde crearlos**. Es capacidad, no permisos, y cambia con el tiempo. Un tipo apuntando
-  a uno de ésos es un tipo que nunca arranca.
+- **Que un plan salga en `/v2/sizes` no quiere decir que puedas crearlo.** Son CINCO
+  estados distintos, y sólo los cuatro primeros se ven antes de gastar; `comprobar_size()`
+  los separa con mensajes que dicen qué escribir después:
+  1. no aparece en `/v2/sizes` (o es de contrato, que no se publican ahí);
+  2. `available: false` — tu cuenta no lo tiene;
+  3. `available: true` pero `regions: []` — **no hay dónde crearlo**. Medido el
+     2026-08-16: le pasa a siete planes de GPU, `gpu-l40sx1-48gb` entre ellos. Es
+     capacidad, no permisos, y cambia con el tiempo. Un tipo que apunte ahí no arranca nunca;
+  4. existe y hay capacidad, pero no en la región que pediste;
+  5. **todo lo anterior en orden y aun así 422 al crear: falta cupo de GPU.** Medido el
+     2026-08-16 lanzando `gpu-rtx4000` en tor1: `creating this/these droplet(s) will
+     exceed your GPU limit`. Este no hay forma de comprobarlo antes — no está en
+     `/v2/sizes` (el plan sale disponible y con región) ni en `/v2/account`, que sólo
+     trae `droplet_limit`. El cupo se pide en el panel. Por eso `api()` reconoce ese
+     mensaje y explica qué es, en vez de soltar el JSON en crudo. **Lo bueno: el 422 es
+     un rechazo, no un droplet a medias; no se crea nada ni se factura nada.**
 - **Los planes por contrato no salen en `/v2/sizes`.** Para ésos existe `--no-check`;
   no es un atajo para saltarse la validación por comodidad.
 - **El precio no se guarda en el descriptor.** Se trae en vivo de `/v2/sizes` cada vez.
@@ -106,12 +115,15 @@ Lo que hay que respetar al tocar esto:
   de memoria estaban mal y el `--dry-run` lo destapó: `s-8vcpu-16gb` ya no existe (hoy es
   `s-8vcpu-16gb-amd`) y `gpu-l40sx1-48gb` no tiene capacidad en ninguna región. Antes de
   dar por bueno un tipo nuevo: `launch prueba --type <t> --accept-cost --dry-run`.
-- **Lo único sin probar contra una máquina real es el arranque de una GPU**, porque
-  crearla cuesta dinero. El resto (catálogo, precios, validación, `--dry-run` de los siete
-  tipos) está comprobado contra la API el 2026-08-16. Lo que queda por saber: la imagen de
-  GPU va sobre Ubuntu 22.04 y `cloud-init.yaml` hace `package_upgrade`, que podría traer un
-  kernel nuevo por debajo de los drivers. Está avisado en las `notas` de los tipos `gpu-*`.
-  Si se comprueba algún día, anótalo aquí en vez de dejarlo en la conversación.
+- **Lo único sin probar contra una máquina real es el arranque de una GPU, y no por falta
+  de intentarlo**: el 2026-08-16 se lanzó `gpu-rtx4000` en tor1 y la API lo rechazó por
+  cupo (estado 5 de la lista de arriba). El resto —catálogo, precios, validación,
+  `--dry-run` de los siete tipos, `push-do-token`— está comprobado contra la API ese mismo
+  día. Lo que sigue pendiente para cuando haya cupo: la imagen de GPU va sobre Ubuntu 22.04
+  y `cloud-init.yaml` hace `package_upgrade`, que sobre drivers NVIDIA podría traer un
+  kernel nuevo; y el `ssh.socket` de la plantilla es cosa del 24.04, así que en el 22.04
+  debería caer al `ssh.service` clásico por el `||` que ya lleva. Anótalo aquí cuando se
+  compruebe, en vez de dejarlo en la conversación.
 
 ## Documentación de referencia
 

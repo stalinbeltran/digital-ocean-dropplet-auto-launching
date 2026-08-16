@@ -414,6 +414,21 @@ Tres cosas de ese comando:
 - **Cualquier opción suelta pisa al tipo**, así que no hay que editar el
   descriptor para un lanzamiento distinto.
 
+> **Las GPU necesitan cupo aparte, y eso no se puede comprobar antes.** Que el plan
+> salga en `sizes --gpu` con su región no basta: la creación puede acabar en
+>
+> ```
+> HTTP 422: creating this/these droplet(s) will exceed your GPU limit
+> ```
+>
+> Comprobado el 2026-08-16 con `gpu-rtx4000` en tor1. No está ni en `/v2/sizes` ni
+> en `/v2/account` (que sólo trae `droplet_limit`), así que no hay forma de avisarte
+> antes de intentarlo; el lanzador reconoce ese error y te explica qué es. El cupo
+> se pide en el panel de DigitalOcean (*Account → Limits*, o por soporte).
+>
+> Lo tranquilizador: es un **rechazo**, no un droplet a medias. No se crea nada y no
+> se factura nada.
+
 Antes de crear nada, el precio sale por pantalla:
 
 ```

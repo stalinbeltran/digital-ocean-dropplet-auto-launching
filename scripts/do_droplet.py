@@ -166,7 +166,21 @@ def api(method: str, path: str, body: dict | None = None) -> dict:
             if exc.code >= 500 and attempt < 5:
                 time.sleep(2**attempt)
                 continue
-            die(f"HTTP {exc.code} en {method} {url}\n{detail}")
+            # El cupo de GPU es el único límite que no se puede comprobar antes:
+            # no está en /v2/sizes (el plan sale disponible y con regiones) ni en
+            # /v2/account (que sólo trae droplet_limit). Sólo aparece aquí, y el
+            # mensaje en crudo no dice qué hacer.
+            pista = ""
+            if "gpu limit" in detail.lower():
+                pista = (
+                    "\n\nTu cuenta no tiene cupo de GPU.\n"
+                    "  No es el slug ni la región: la API acepta el plan y rechaza la\n"
+                    "  creación. El cupo se pide en el panel de DigitalOcean (Account ->\n"
+                    "  Limits, o por soporte) y NO se puede consultar por la API, así que\n"
+                    "  no hay forma de avisarte antes de intentarlo.\n"
+                    "  No se ha creado ningún droplet y no se te ha facturado nada."
+                )
+            die(f"HTTP {exc.code} en {method} {url}\n{detail}{pista}")
         except urllib.error.URLError as exc:
             last_error = str(exc.reason)
             time.sleep(2**attempt)
