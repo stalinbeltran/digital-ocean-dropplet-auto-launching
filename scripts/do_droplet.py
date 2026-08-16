@@ -37,7 +37,7 @@ DEFAULTS = {
     # las variables sueltas de aquí arriba, como siempre.
     "DO_TYPE": "",
     # Freno de mano contra un lanzamiento caro por error. Un plan con GPU cuesta
-    # de 557 a 3.229 dólares al mes (hasta 122 veces el droplet de trabajo), y
+    # de 565 a 3.281 dólares al mes (hasta 137 veces el droplet de trabajo), y
     # desde el móvil un tipo mal escrito se manda igual de rápido que el bueno.
     # Por encima de este precio mensual, `launch` se niega y pide --accept-cost.
     # 0 = sin freno.
@@ -336,10 +336,16 @@ def sizes_index(opcional: bool = False) -> dict[str, dict]:
 
 
 def precio_mes(size: dict) -> float:
-    """Precio mensual del plan, en dólares.
+    """Precio mensual del plan, en dólares, tal y como lo publica la API.
 
-    Los planes que sólo publican precio por hora se estiman a 730 horas, que es
-    lo que hace la propia página de precios de DigitalOcean para los de GPU.
+    **No lo calcules multiplicando el precio por hora**: no hay una constante
+    que valga. Medido contra la API el 2026-08-16, DigitalOcean usa 672 h para
+    la gama básica (24 $/mes = 0,035714 $/h) y 744 h para las de GPU
+    (3.281,04 $/mes = 4,41 $/h). Con 730 h, que es lo que dice su propia página
+    de precios, la suma de dos droplets daba 30,41 $ donde eran 28,00 $.
+
+    El factor sólo se usa para un plan que no publique mensual, caso que hoy no
+    se da en ninguno; ahí es una estimación y punto.
     """
     mensual = size.get("price_monthly") or 0
     if mensual:
@@ -442,11 +448,14 @@ def cmd_sizes(args: argparse.Namespace) -> None:
         log(size_fila(size))
         mostrados += 1
         if detalle:
-            partes = [p for p in (gpu_desc(size), ", ".join(size.get("regions", []))) if p]
+            # Un plan sin regiones se leía como una línea a medias, y es justo el
+            # caso que hay que ver: existe, tu cuenta lo tiene, y aun así no se
+            # puede lanzar en ningún sitio. Pasa de verdad y con varias GPU.
+            regiones = ", ".join(size.get("regions", [])) or "SIN CAPACIDAD en ninguna región"
+            partes = [p for p in (gpu_desc(size), regiones) if p]
             if not size.get("available"):
                 partes.insert(0, "NO DISPONIBLE en tu cuenta")
-            if partes:
-                log("  " + " · ".join(partes))
+            log("  " + " · ".join(partes))
 
     log(f"\n{mostrados} planes.")
     if not mostrados:
@@ -713,10 +722,19 @@ def comprobar_size(slug: str, region: str, aceptar_coste: bool) -> dict:
             "  Con las GPU suele ser que falta pedir el acceso en el panel de\n"
             "  DigitalOcean; no es que el nombre esté mal."
         )
-    if region not in size.get("regions", []):
+    if not size.get("regions"):
+        # Caso real y desconcertante: `available` es true y aun así no hay dónde
+        # crearlo. Es capacidad, no permisos. Le pasa hoy a varios planes de GPU.
+        die(
+            f"El plan '{slug}' existe y tu cuenta lo tiene, pero ahora mismo NO\n"
+            "  se ofrece en ninguna región: no hay dónde crearlo.\n"
+            "  Es falta de capacidad, no de permisos, y cambia con el tiempo.\n"
+            "  Mira qué alternativa hay hoy con: do_droplet.py sizes --gpu"
+        )
+    if region not in size["regions"]:
         die(
             f"El plan '{slug}' no existe en la región '{region}'.\n"
-            f"  Sí lo hay en: {', '.join(size.get('regions', [])) or 'ninguna'}\n"
+            f"  Sí lo hay en: {', '.join(size['regions'])}\n"
             "  Repite el comando con --region <una de ésas>.\n"
             "  (Las GPU sólo están en unas pocas: por eso no salen filtrando por\n"
             "   la región del .env.)"
@@ -852,20 +870,22 @@ def cmd_list(args: argparse.Namespace) -> None:
 
     index = sizes_index(opcional=True)
     log(f"{'ID':<11} {'NOMBRE':<20} {'ESTADO':<8} {'TAMAÑO':<20} {'$/MES':>9}  IP")
-    total_hora = 0.0
+    total_hora = total_mes = 0.0
     for d in droplets:
         size = index.get(d["size_slug"])
+        # Los dos totales se suman de lo que publica la API para cada plan. El
+        # mensual NO sale de multiplicar el horario: no hay factor único (672 h
+        # en la gama básica, 744 en las de GPU) y con uno inventado la suma sale
+        # mal -daba 30,41 $ donde eran 28,00 $-.
         total_hora += precio_hora(size) if size else 0.0
+        total_mes += precio_mes(size) if size else 0.0
         precio = f"{precio_mes(size):>9,.2f}" if size else f"{'?':>9}"
         log(
             f"{d['id']:<11} {d['name']:<20} {d['status']:<8} "
             f"{d['size_slug']:<20} {precio}  {public_ip(d) or '-'}"
         )
-    if total_hora:
-        log(
-            f"\nGastando ahora: ${total_hora:.4f}/h  ·  ${total_hora * 730:,.2f}/mes"
-            " si siguen existiendo."
-        )
+    if total_mes:
+        log(f"\nGastando ahora: ${total_hora:.4f}/h  ·  ${total_mes:,.2f}/mes en total.")
         log("Se corta destruyéndolos, no apagándolos:  destroy <nombre> --yes")
 
 
@@ -1955,7 +1975,7 @@ def main() -> None:
         "--accept-cost",
         action="store_true",
         help="lanza aunque el plan pase de DO_MAX_PRICE_MONTHLY. Hace falta para "
-        "las GPU, que cuestan de 557 a 3.229 dólares al mes",
+        "las GPU, que cuestan de 565 a 3.281 dólares al mes",
     )
     p.add_argument(
         "--no-check",

@@ -81,24 +81,37 @@ Lo que hay que respetar al tocar esto:
   `DO_REGION` (nyc1) y las escondía todas; la conclusión fácil era "mi cuenta no tiene
   GPU". Por eso `--gpu` mira todas las regiones salvo que se pida una, y la línea de
   detalle dice dónde hay cada plan. **No devuelvas ese filtro al valor por defecto.**
-- **Existir, estar disponible y estar en tu región son tres cosas distintas**, y antes
-  se confundían en un mismo silencio. `comprobar_size()` las separa con mensajes que
-  dicen qué escribir a continuación. `available: false` en una GPU casi siempre
-  significa que falta pedir acceso en el panel, no que el slug esté mal.
+- **Existir, estar disponible, tener capacidad y estar en tu región son cuatro cosas
+  distintas**, y antes se confundían en un mismo silencio. `comprobar_size()` las separa
+  con mensajes que dicen qué escribir a continuación. La que no se ve venir es la
+  tercera: medido el 2026-08-16, siete planes de GPU (entre ellos `gpu-l40sx1-48gb`)
+  vienen con `available: true` y `regions: []` — tu cuenta los tiene y aun así **no hay
+  dónde crearlos**. Es capacidad, no permisos, y cambia con el tiempo. Un tipo apuntando
+  a uno de ésos es un tipo que nunca arranca.
 - **Los planes por contrato no salen en `/v2/sizes`.** Para ésos existe `--no-check`;
   no es un atajo para saltarse la validación por comodidad.
 - **El precio no se guarda en el descriptor.** Se trae en vivo de `/v2/sizes` cada vez.
   Un número copiado a mano envejece sin avisar, y aquí un número viejo es dinero.
 - **El freno de coste (`DO_MAX_PRICE_MONTHLY`, 100 $/mes) es del objetivo 2**, no una
   molestia: desde el móvil un tipo mal escrito se manda igual de rápido que el bueno y
-  el error son 3.229 $/mes. `list` enseña por eso el gasto por hora de lo que hay vivo.
-- Referencia medida hoy (2026-08-15, de la página de precios de DigitalOcean): RTX 4000
-  Ada 0,76 $/h ($556,80/mes), L40S y RTX 6000 Ada 1,57 $/h, H100 4,41 $/h ($3.228,96/mes),
-  H200 4,47 $/h, MI300X 2,59 $/h. El mensual se calcula a 730 h.
-- **Sin probar contra una GPU real** (cuesta dinero y esta máquina no tiene token): la
-  imagen de GPU va sobre Ubuntu 22.04 y `cloud-init.yaml` hace `package_upgrade`, que
-  podría traer un kernel nuevo por debajo de los drivers. Está avisado en las `notas` de
-  los tipos `gpu-*`. Si se comprueba algún día, anótalo aquí en vez de en la conversación.
+  el error son 3.281 $/mes. `list` enseña por eso el gasto por hora de lo que hay vivo.
+- Referencia medida contra la API el 2026-08-16 (no contra la página de precios, que
+  redondea a 730 h y no coincide): RTX 4000
+  Ada 0,76 $/h ($565,44/mes), RTX 6000 Ada 1,57 $/h ($1.168,08), H100 4,41 $/h
+  ($3.281,04/mes), H200 4,47 $/h, MI325X 3,80 $/h. Hay 19 planes de GPU; `sizes --gpu`
+  es la lista de verdad. **El mensual no sale de multiplicar el horario**: DigitalOcean
+  usa 672 h en la gama basica y 744 h en las de GPU, asi que hay que sumar el
+  `price_monthly` de cada plan (con 730 h la suma de dos droplets daba 30,41 en vez de 28,00).
+- **Los tipos de `types/` se validan contra la API, no a ojo.** Los dos que se escribieron
+  de memoria estaban mal y el `--dry-run` lo destapó: `s-8vcpu-16gb` ya no existe (hoy es
+  `s-8vcpu-16gb-amd`) y `gpu-l40sx1-48gb` no tiene capacidad en ninguna región. Antes de
+  dar por bueno un tipo nuevo: `launch prueba --type <t> --accept-cost --dry-run`.
+- **Lo único sin probar contra una máquina real es el arranque de una GPU**, porque
+  crearla cuesta dinero. El resto (catálogo, precios, validación, `--dry-run` de los siete
+  tipos) está comprobado contra la API el 2026-08-16. Lo que queda por saber: la imagen de
+  GPU va sobre Ubuntu 22.04 y `cloud-init.yaml` hace `package_upgrade`, que podría traer un
+  kernel nuevo por debajo de los drivers. Está avisado en las `notas` de los tipos `gpu-*`.
+  Si se comprueba algún día, anótalo aquí en vez de dejarlo en la conversación.
 
 ## Documentación de referencia
 

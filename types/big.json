@@ -1,5 +1,6 @@
 {
-  "descripcion": "Cuatro veces el de trabajo: 8 vCPU compartidas y 16 GB de RAM. Para compilar o para lo que no cabe en 4 GB.",
-  "size": "s-8vcpu-16gb",
-  "image": "ubuntu-24-04-x64"
+  "descripcion": "Cuatro veces el de trabajo: 8 vCPU compartidas (AMD) y 16 GB de RAM. Para compilar o para lo que no cabe en 4 GB.",
+  "size": "s-8vcpu-16gb-amd",
+  "image": "ubuntu-24-04-x64",
+  "notas": "El slug lleva el sufijo -amd porque el s-8vcpu-16gb a secas ya no existe en el catalogo; comprobado contra /v2/sizes el 2026-08-16. Si algun dia falla, `sizes --min-memory 16384` dice cual es el vigente."
 }

@@ -329,11 +329,11 @@ dev  ·  s-2vcpu-4gb  ·  $24.00/mes ($0.0357/h)
   El droplet de trabajo de siempre: 2 vCPU compartidas y 4 GB de RAM.
   imagen ubuntu-24-04-x64 · región nyc1 (de .env) · tag ephemeral (de .env)
 
-gpu-h100  ·  gpu-h100x1-80gb  ·  $3,228.96/mes ($4.4232/h)
+gpu-h100  ·  gpu-h100x1-80gb  ·  $3,281.04/mes ($4.4100/h)
   NVIDIA H100 con 80 GB de VRAM, 20 vCPU y 240 GB de RAM.
-  imagen gpu-h100x1-base · región nyc1 (de .env) · tag ephemeral (de .env)
-  1x nvidia h100 80 GiB · regiones con este plan: tor1, nyc2, atl1
-  Ojo: cuesta unas 134 veces el droplet de trabajo...
+  imagen gpu-h100x1-base · región nyc2 · tag ephemeral (de .env)
+  1x nvidia h100 80 GiB · regiones con este plan: ams3, nyc2, tor1
+  Ojo: cuesta unas 137 veces el droplet de trabajo...
 ```
 
 Los que vienen puestos:
@@ -341,12 +341,12 @@ Los que vienen puestos:
 | Tipo | Plan | Para qué |
 |---|---|---|
 | `dev` | `s-2vcpu-4gb` | el de siempre, ~$24/mes |
-| `big` | `s-8vcpu-16gb` | compilar, o lo que no cabe en 4 GB (~$96/mes) |
+| `big` | `s-8vcpu-16gb-amd` | compilar, o lo que no cabe en 4 GB (~$112/mes) |
 | `cpu` | `c-2` | CPU dedicada: medir tiempos sin ruido de vecinos |
 | `mini` | `s-1vcpu-512mb-10gb` | la máquina de control (lleva ya `tag control` y su cloud-init) |
-| `gpu-rtx4000` | `gpu-4000adax1-20gb` | la GPU más barata, 20 GB de VRAM |
-| `gpu-l40s` | `gpu-l40sx1-48gb` | 48 GB de VRAM |
-| `gpu-h100` | `gpu-h100x1-80gb` | H100 de 80 GB |
+| `gpu-rtx4000` | `gpu-4000adax1-20gb` | la GPU más barata, 20 GB de VRAM (~$565/mes) |
+| `gpu-rtx6000` | `gpu-6000adax1-48gb` | 48 GB de VRAM (~$1.168/mes) |
+| `gpu-h100` | `gpu-h100x1-80gb` | H100 de 80 GB (~$3.281/mes) |
 
 **Un tipo no es un `size`**: es la combinación entera de plan + imagen + región +
 plantilla de arranque + tag. Esa distinción es justo la que hace falta con las
@@ -370,16 +370,17 @@ python scripts/do_droplet.py sizes --gpu --all        # incluidos los que tu cue
 
 ```
 SLUG                     vCPU      RAM    DISCO      $/MES    $/HORA
-gpu-4000adax1-20gb          8    32 GB   500 GB     556.80    0.7626
-  1x nvidia rtx 4000 ada 20 GiB · tor1, nyc2
-gpu-h100x1-80gb            20   240 GB   720 GB   3,228.96    4.4232
-  1x nvidia h100 80 GiB · tor1, nyc2, atl1
+gpu-4000adax1-20gb          8    32 GB   500 GB     565.44    0.7600
+  1x nvidia rtx4000 ada 20 GiB · tor1
+gpu-h100x1-80gb            20   240 GB   720 GB   3,281.04    4.4100
+  1x nvidia h100 80 GiB · ams3, nyc2, tor1
 ```
 
 Se ven las dos unidades a propósito: **la mensual es la que se entiende y la
 horaria la que de verdad pagas**, porque estas máquinas viven horas. Un plan que
-sólo publica precio por hora se muestra estimado a 730 h, igual que hace la
-página de precios de DigitalOcean.
+sólo publica precio por hora se muestra estimado a 730 h, pero eso es raro: hoy
+todos publican mensual. **No calcules el mensual multiplicando el horario**:
+DigitalOcean usa 672 h en la gama básica y 744 h en las de GPU.
 
 > **Las GPU no están en la mayoría de regiones.** Por eso `--gpu` mira todas
 > salvo que pidas una: filtrando por la de tu `.env` (`nyc1`) no aparecía
@@ -397,7 +398,7 @@ python scripts/do_droplet.py images --kind all --filter gpu
 ### Lanzar una GPU
 
 ```bash
-python scripts/do_droplet.py launch entrena --type gpu-rtx4000 --region tor1 --accept-cost
+python scripts/do_droplet.py launch entrena --type gpu-rtx4000 --accept-cost
 ```
 
 Tres cosas de ese comando:
@@ -408,7 +409,7 @@ Tres cosas de ese comando:
 - **`--accept-cost`** es el freno de mano. Por encima de `DO_MAX_PRICE_MONTHLY`
   (100 $/mes por defecto) `launch` se niega y enseña el precio. No es paranoia:
   desde el móvil un tipo mal escrito se manda igual de rápido que el bueno, y
-  aquí el error son 3.229 $/mes. Se sube o se quita en el `.env` (`0` = sin
+  aquí el error son 3.281 $/mes. Se sube o se quita en el `.env` (`0` = sin
   freno).
 - **Cualquier opción suelta pisa al tipo**, así que no hay que editar el
   descriptor para un lanzamiento distinto.
@@ -417,7 +418,7 @@ Antes de crear nada, el precio sale por pantalla:
 
 ```
 Creando 'entrena' (tipo gpu-rtx4000): gpu-4000adax1-20gb · gpu-h100x1-base · tor1 · tag ephemeral
-Coste: $556.80/mes ($0.7626/h) mientras exista.
+Coste: $565.44/mes ($0.7600/h) mientras exista.
 ```
 
 Y `list` dice lo que estás gastando ahora mismo, que es el número que de verdad
@@ -426,9 +427,9 @@ importa cuando se te olvida una máquina encendida:
 ```
 ID          NOMBRE               ESTADO   TAMAÑO                   $/MES  IP
 111111111   proyecto-01          active   s-2vcpu-4gb              24.00  164.90.10.20
-222222222   entrena              active   gpu-h100x1-80gb       3,228.96  159.65.30.40
+222222222   entrena              active   gpu-h100x1-80gb       3,281.04  159.65.30.40
 
-Gastando ahora: $4.4589/h  ·  $3,255.03/mes si siguen existiendo.
+Gastando ahora: $4.4457/h  ·  $3,305.04/mes en total.
 ```
 
 ### Añadir un tipo tuyo

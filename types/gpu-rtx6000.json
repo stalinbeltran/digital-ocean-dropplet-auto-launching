@@ -1,0 +1,7 @@
+{
+  "descripcion": "NVIDIA RTX 6000 Ada con 48 GB de VRAM, 8 vCPU y 64 GB de RAM. El escalon intermedio: mas del doble de VRAM que la RTX 4000, por el doble de precio.",
+  "size": "gpu-6000adax1-48gb",
+  "image": "gpu-h100x1-base",
+  "region": "tor1",
+  "notas": "Ocupa el sitio del L40S, que cuesta lo mismo y tiene la misma VRAM pero hoy no se ofrece en ninguna region (comprobado contra /v2/sizes el 2026-08-16). gpu-h100x1-base es la imagen de DigitalOcean con los drivers NVIDIA ya puestos, y es la que toca para TODOS los planes de 1 GPU aunque el nombre diga h100; va sobre Ubuntu 22.04, no 24.04. Sin probar todavia contra una maquina real: cloud-init.yaml hace package_upgrade, que en una imagen con drivers podria traer un kernel nuevo."
+}
