@@ -63,6 +63,11 @@ DEFAULTS = {
     "DO_SERVICES": "",
     "GIT_USER_NAME": "",
     "GIT_USER_EMAIL": "",
+    # Volumen de bloques: el único almacenamiento de la cuenta que sobrevive a
+    # su droplet. Vacío = no se usa ninguno. 10 GB es el escalón cómodo para el
+    # dataset del benchmark (unos 300 MB con todo) y cuesta 1 $/mes.
+    "DO_VOLUME": "",
+    "DO_VOLUME_SIZE_GB": "10",
 }
 
 
@@ -776,6 +781,37 @@ def cmd_launch(args: argparse.Namespace) -> None:
     )
 
     keys = selected_keys()
+
+    # El volumen se comprueba antes de crear el droplet: si la región no cuadra
+    # o el nombre está mal escrito, el fallo tiene que salir gratis y no
+    # dejarte una máquina facturando sin el disco que ibas a usar.
+    vol_name = args.volume or cfg("DO_VOLUME")
+    vol = None
+    if vol_name:
+        vol = find_volume(vol_name)
+        if not vol:
+            die(
+                f"No existe el volumen '{vol_name}'. No se ha creado ningún droplet.\n"
+                f"  Créalo con:  python scripts/do_droplet.py volume create {vol_name}\n"
+                "  o míralos con: python scripts/do_droplet.py volume list"
+            )
+        if vol["region"]["slug"] != maquina["region"]:
+            die(
+                f"El volumen '{vol_name}' está en {vol['region']['slug']} y el droplet "
+                f"iría a {maquina['region']}.\n"
+                "  Un volumen no se mueve de región. Lanza con "
+                f"--region {vol['region']['slug']}, o usa otro volumen.\n"
+                "  No se ha creado ningún droplet."
+            )
+        if vol.get("droplet_ids"):
+            die(
+                f"El volumen '{vol_name}' ya está conectado al droplet "
+                f"{vol['droplet_ids'][0]}.\n"
+                "  Un volumen sólo va en una máquina a la vez. Desconéctalo antes\n"
+                f"  (volume detach {vol_name}) o copia el dato por SSH desde ella.\n"
+                "  No se ha creado ningún droplet."
+            )
+
     body = {
         "name": name,
         "region": maquina["region"],
@@ -788,6 +824,10 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "monitoring": True,
         "ipv6": True,
     }
+    if vol:
+        # Conectado desde la creación: así el disco ya está ahí cuando el
+        # droplet arranca, y sólo queda montarlo al aprovisionar.
+        body["volumes"] = [vol["id"]]
     user_data = build_user_data(keys, maquina["cloud_init"])
     if user_data:
         body["user_data"] = user_data
@@ -805,6 +845,11 @@ def cmd_launch(args: argparse.Namespace) -> None:
     if tipo.get("notas"):
         log(f"Ojo: {tipo['notas']}")
     log(f"Claves SSH autorizadas: {', '.join(k['name'] for k in keys)}")
+    if vol:
+        log(
+            f"Volumen: '{vol['name']}' ({vol['size_gigabytes']} GB) se montará en "
+            f"{volume_mount_point(vol['name'])}"
+        )
     if args.dry_run:
         log("\n--dry-run, no se envía nada. Cuerpo de la petición:\n")
         log(json.dumps(body, indent=2, ensure_ascii=False))
@@ -843,9 +888,19 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 service=args.service,
                 push_do_token=args.push_do_token,
                 push_env=args.push_env,
+                make_launcher=args.make_launcher,
                 skip_wait=False,
             )
         )
+
+    if vol and port:
+        log(f"\nMontando el volumen '{vol['name']}'…")
+        if run_remote_script(ip, port, build_mount_script(vol["name"], cfg("DO_DEV_USER"))) != 0:
+            log(
+                "  AVISO: el volumen está conectado pero no se pudo montar.\n"
+                f"  Reintenta con: python scripts/do_droplet.py volume attach {vol['name']}"
+                f" --droplet {name}"
+            )
 
     key_file = Path(cfg("DO_SSH_KEY_FILE")).expanduser()
     port_flag = f"-p {port} " if port and port != 22 else ""
@@ -977,6 +1032,221 @@ def wait_until_gone(droplet_ids: list[int], timeout: int = 120) -> None:
     log("Aviso: la cuenta todavía lista algún droplet recién destruido.")
 
 
+# ------------------------------------------------------------------- volúmenes
+#
+# Un volumen es la única cosa de esta cuenta que NO es efímera. Los droplets se
+# rehacen sin aviso y con ellos se va su disco; el volumen sobrevive a su
+# droplet, y por eso es donde va lo que cuesta caro reconstruir: aquí, el
+# dataset del benchmark (mil imágenes renderizadas con Chromium, ver
+# docs/benchmark-vcpu.md). Regenerarlo es reproducible pero lento; recuperarlo
+# de un volumen es un `mount`.
+#
+# Un volumen se conecta a UN droplet a la vez -no es un disco compartido-, así
+# que el reparto a varias máquinas de medición no se hace conectándolo a todas,
+# sino copiando desde la que lo tiene. Que es además lo que se quiere para
+# medir: el benchmark debe leer de disco local, no de la red.
+
+
+def volumes(region: str = "") -> list[dict]:
+    path = f"/v2/volumes?region={region}" if region else "/v2/volumes"
+    return paged(path, "volumes")
+
+
+def find_volume(name: str, region: str = "") -> dict | None:
+    return next((v for v in volumes(region) if v["name"] == name), None)
+
+
+def volume_device(name: str) -> str:
+    """Ruta estable del disco dentro del droplet.
+
+    DigitalOcean expone cada volumen por su nombre bajo /dev/disk/by-id. El
+    /dev/sda de turno depende del orden en que se conectaron los discos y
+    cambia entre arranques: en fstab pondría a la máquina a arrancar contra el
+    disco equivocado, o a no arrancar.
+    """
+    return f"/dev/disk/by-id/scsi-0DO_Volume_{name}"
+
+
+def volume_mount_point(name: str) -> str:
+    return f"/mnt/{name}"
+
+
+def build_mount_script(vol_name: str, dev_user: str) -> str:
+    """Formatea (sólo si hace falta), monta y deja el volumen en fstab.
+
+    El `mkfs` va condicionado a que el disco no tenga ya sistema de ficheros:
+    un volumen creado con filesystem_type=ext4 viene formateado, y volver a
+    formatearlo borraría justo lo que se quiere conservar. `blkid` es quien
+    decide, no una suposición sobre cómo se creó el volumen.
+    """
+    dev = volume_device(vol_name)
+    mnt = volume_mount_point(vol_name)
+    return "\n".join(
+        [
+            "set -eu",
+            f"DEV={shq(dev)}",
+            f"MNT={shq(mnt)}",
+            f"DEV_USER={shq(dev_user)}",
+            # El disco tarda un momento en aparecer tras el attach.
+            'for i in 1 2 3 4 5 6 7 8 9 10; do',
+            '  [ -e "$DEV" ] && break',
+            '  sleep 3',
+            'done',
+            '[ -e "$DEV" ] || { echo "no aparece $DEV: ¿está conectado el volumen?" >&2; exit 1; }',
+            'if [ -z "$(blkid -o value -s TYPE "$DEV" 2>/dev/null || true)" ]; then',
+            '  echo "  volumen sin formato, creando ext4…"',
+            '  mkfs.ext4 -F -L "$(basename "$DEV" | tail -c 17)" "$DEV"',
+            "else",
+            '  echo "  volumen ya formateado ($(blkid -o value -s TYPE "$DEV")), no se toca"',
+            "fi",
+            'mkdir -p "$MNT"',
+            'if ! mountpoint -q "$MNT"; then mount -o discard,defaults,noatime "$DEV" "$MNT"; fi',
+            # La entrada de fstab lleva nofail a propósito: si algún día se
+            # arranca la máquina sin el volumen conectado, debe arrancar igual
+            # y no quedarse en la consola de emergencia, donde no se entra por
+            # SSH y el droplet sólo es una factura.
+            'if ! grep -q "^$DEV" /etc/fstab; then',
+            '  echo "$DEV $MNT ext4 defaults,nofail,discard,noatime 0 2" >> /etc/fstab',
+            "fi",
+            'chown "$DEV_USER:$DEV_USER" "$MNT"',
+            'echo "  montado en $MNT ($(df -h "$MNT" | tail -1 | awk "{print \\$4}") libres)"',
+        ]
+    ) + "\n"
+
+
+def cmd_volume(args: argparse.Namespace) -> None:
+    accion = args.action
+
+    if accion == "list":
+        vols = volumes()
+        if not vols:
+            log("No hay volúmenes en la cuenta.")
+            return
+        total = 0.0
+        for v in vols:
+            gb = v["size_gigabytes"]
+            total += gb * 0.10  # $0,10 por GB y mes, tarifa única de DO
+            conectado = ", ".join(str(i) for i in v.get("droplet_ids") or []) or "suelto"
+            log(f"{v['name']:<24} {gb:>5} GB  {v['region']['slug']:<6} → {conectado}")
+        log(f"\nTotal: ${total:,.2f}/mes mientras existan (se pagan conectados o no).")
+        return
+
+    name = args.name or cfg("DO_VOLUME")
+    if not name:
+        die("Falta el nombre del volumen (o define DO_VOLUME en .env).")
+
+    if accion == "create":
+        region = args.region or cfg("DO_REGION")
+        existente = find_volume(name)
+        if existente:
+            log(
+                f"Ya existe '{name}' ({existente['size_gigabytes']} GB en "
+                f"{existente['region']['slug']}), no se crea otro."
+            )
+            return
+        size = args.size_gb or int(cfg("DO_VOLUME_SIZE_GB"))
+        log(f"Creando volumen '{name}': {size} GB en {region}, ext4.")
+        log(f"Coste: ${size * 0.10:,.2f}/mes mientras exista, esté conectado o no.")
+        vol = api(
+            "POST",
+            "/v2/volumes",
+            {
+                "name": name,
+                "region": region,
+                "size_gigabytes": size,
+                "filesystem_type": "ext4",
+                "description": args.description or "dato que debe sobrevivir a los droplets",
+            },
+        )["volume"]
+        log(f"Creado (id {vol['id']}). Conéctalo con: volume attach {name} --droplet <nombre>")
+        return
+
+    vol = find_volume(name)
+    if not vol:
+        die(f"No existe el volumen '{name}'. Míralos con: volume list")
+
+    if accion == "attach":
+        droplet_name = args.droplet or cfg("DO_DROPLET_NAME")
+        droplet, ip, port = resolve_target(droplet_name, args.port or 0)
+        if droplet["region"]["slug"] != vol["region"]["slug"]:
+            die(
+                f"El volumen está en {vol['region']['slug']} y el droplet en "
+                f"{droplet['region']['slug']}.\n"
+                "  Un volumen sólo se conecta a droplets de su misma región; no se mueve.\n"
+                "  Lanza el droplet en la región del volumen (--region), o crea otro volumen."
+            )
+        if droplet["id"] in (vol.get("droplet_ids") or []):
+            log(f"'{name}' ya está conectado a '{droplet['name']}'.")
+        else:
+            if vol.get("droplet_ids"):
+                die(
+                    f"'{name}' está conectado al droplet {vol['droplet_ids'][0]}.\n"
+                    "  Un volumen no se comparte entre máquinas: desconéctalo primero\n"
+                    f"  (volume detach {name}) o copia el dato por SSH desde la que lo tiene."
+                )
+            log(f"Conectando '{name}' a '{droplet['name']}'…")
+            accion_api = api(
+                "POST",
+                f"/v2/volumes/{vol['id']}/actions",
+                {"type": "attach", "droplet_id": droplet["id"], "region": vol["region"]["slug"]},
+            )["action"]
+            wait_for_action(accion_api["id"])
+        if args.no_mount:
+            log(f"Conectado. Sin montar (--no-mount): el disco es {volume_device(name)}")
+            return
+        # Conectar sin montar deja un disco que no ve nadie: el dato "está" y
+        # ningún programa lo encuentra. Montar es parte de conectar.
+        if run_remote_script(ip, port, build_mount_script(name, cfg("DO_DEV_USER"))) != 0:
+            die("El volumen quedó conectado pero no se pudo montar. La salida de ssh está arriba.")
+        log(f"Listo: {volume_mount_point(name)} en '{droplet['name']}'.")
+        return
+
+    if accion == "detach":
+        if not vol.get("droplet_ids"):
+            log(f"'{name}' no está conectado a nada.")
+            return
+        droplet_id = vol["droplet_ids"][0]
+        # Desmontar antes de desconectar. Al revés se pierde lo que el kernel
+        # tenga sin escribir, y el dato del volumen es justo lo que no se
+        # quiere reconstruir.
+        try:
+            droplet = api("GET", f"/v2/droplets/{droplet_id}")["droplet"]
+            ip = public_ip(droplet)
+            port = wait_for_ssh(ip) if ip else 0
+            if port:
+                log(f"Desmontando en '{droplet['name']}'…")
+                run_remote_script(
+                    ip,
+                    port,
+                    f"umount {shq(volume_mount_point(name))} 2>/dev/null || true\n"
+                    f"sed -i '\\|^{volume_device(name)} |d' /etc/fstab\n",
+                )
+        except SystemExit:
+            log("  Aviso: no pude desmontar por SSH; se desconecta igualmente.")
+        log(f"Desconectando '{name}' del droplet {droplet_id}…")
+        accion_api = api(
+            "POST",
+            f"/v2/volumes/{vol['id']}/actions",
+            {"type": "detach", "droplet_id": droplet_id, "region": vol["region"]["slug"]},
+        )["action"]
+        wait_for_action(accion_api["id"])
+        log("Desconectado.")
+        return
+
+    if accion == "destroy":
+        log(f"Se va a DESTRUIR el volumen '{name}' ({vol['size_gigabytes']} GB) y todo su")
+        log("contenido. Esto es irreversible y el dato NO está en ningún otro sitio.")
+        if not args.yes and not confirmar("\nEscribe 'si' para confirmar: "):
+            log("Cancelado.")
+            return
+        if vol.get("droplet_ids"):
+            die(
+                f"'{name}' sigue conectado. Desconéctalo primero: volume detach {name}"
+            )
+        api("DELETE", f"/v2/volumes/{vol['id']}")
+        log(f"Destruido '{name}'.")
+        return
+
 # ------------------------------------------------------------- aprovisionamiento
 
 
@@ -1037,6 +1307,93 @@ def run_remote_script(ip: str, port: int, script: str) -> int:
         input=script.encode("utf-8"),
     )
     return proc.returncode
+
+
+def run_remote_capture(ip: str, port: int, script: str) -> tuple[int, str]:
+    """Como run_remote_script, pero devolviendo también lo que imprimió.
+
+    Hace falta para el camino de ida y vuelta de `--make-launcher`: la clave
+    privada se genera DENTRO del droplet y no sale de ahí nunca; lo que vuelve
+    es la pública, que no es secreta, para registrarla en la cuenta.
+    """
+    proc = subprocess.run(
+        ssh_command(ip, port, user="root") + ["bash -s"],
+        input=script.encode("utf-8"),
+        capture_output=True,
+    )
+    salida = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
+    return proc.returncode, salida
+
+
+# Repo del propio lanzador. Una máquina que va a lanzar droplets lo necesita
+# clonado: es el programa que sabe hablar con la API.
+REPO_LANZADOR = "stalinbeltran/digital-ocean-dropplet-auto-launching"
+
+
+def hacer_lanzador(name: str, ip: str, port: int) -> None:
+    """Deja al droplet en condiciones de crear y usar otros droplets.
+
+    El token por sí solo no basta, y esa es la parte que se olvida: con él la
+    máquina puede CREAR droplets, pero no ENTRAR en ellos. Un droplet acepta las
+    claves públicas que estén registradas en la cuenta en el momento de crearlo,
+    así que la máquina lanzadora necesita un par propio y su pública registrada
+    ANTES de lanzar nada. Sin esto se crean máquinas a las que su creador no
+    puede conectarse: existen, facturan y no sirven.
+
+    La privada se genera en el destino y no viaja: aquí sólo vuelve la pública.
+    """
+    dev_user = cfg("DO_DEV_USER")
+    key_file = cfg("DO_SSH_KEY_FILE").replace("~", "$H", 1) if cfg(
+        "DO_SSH_KEY_FILE"
+    ).startswith("~") else "$H/.ssh/do_droplet"
+
+    script = "\n".join(
+        [
+            "set -eu",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            f'KEY="{key_file}"',
+            'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.ssh"',
+            'if [ ! -f "$KEY" ]; then',
+            '  sudo -u "$DEV_USER" -H ssh-keygen -t ed25519 -f "$KEY" -N "" '
+            f'-C "lanzador-{name}" >/dev/null',
+            "fi",
+            'chown "$DEV_USER:$DEV_USER" "$KEY" "$KEY.pub"',
+            'chmod 600 "$KEY"',
+            "echo CLAVE_PUBLICA_INICIO",
+            'cat "$KEY.pub"',
+            "echo CLAVE_PUBLICA_FIN",
+        ]
+    )
+    code, salida = run_remote_capture(ip, port, script)
+    if code != 0:
+        log(f"  AVISO: no pude crear el par de claves en el droplet.\n{salida.strip()}")
+        return
+
+    publica = ""
+    dentro = False
+    for linea in salida.splitlines():
+        if linea.strip() == "CLAVE_PUBLICA_INICIO":
+            dentro = True
+        elif linea.strip() == "CLAVE_PUBLICA_FIN":
+            dentro = False
+        elif dentro and linea.strip():
+            publica = linea.strip()
+    if not publica:
+        log("  AVISO: el droplet no devolvió ninguna clave pública. Sigue sin poder")
+        log("         entrar en los droplets que lance.")
+        return
+
+    huella = publica.split()[1]
+    for key in account_keys():
+        if key["public_key"].split()[1] == huella:
+            log(f"  clave del lanzador ya registrada en la cuenta como '{key['name']}'")
+            return
+    registrada = api(
+        "POST", "/v2/account/keys", {"name": f"lanzador-{name}", "public_key": publica}
+    )["ssh_key"]
+    log(f"  clave del lanzador registrada en la cuenta: '{registrada['name']}'")
+    log("  (los droplets que cree esta máquina la aceptarán; los creados ANTES, no)")
 
 
 def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
@@ -1469,6 +1826,17 @@ def cmd_provision(args: argparse.Namespace) -> None:
     # escrito debe fallar al instante y no tras esperar a que arranque la máquina.
     repos = args.repo or [r for r in cfg("DO_REPOS").split(",") if r.strip()]
     services = selected_services(getattr(args, "service", []) or [])
+
+    # Una máquina lanzadora necesita las tres cosas a la vez, y pedirlas por
+    # separado es la forma de que falte una y no se note hasta que falla:
+    # el token (para crear), el repo del lanzador (el programa que crea) y un
+    # par de claves propio registrado en la cuenta (para poder entrar en lo que
+    # cree). --make-launcher implica las tres.
+    make_launcher = getattr(args, "make_launcher", False)
+    if make_launcher:
+        args.push_do_token = True
+        if REPO_LANZADOR not in repos:
+            repos.append(REPO_LANZADOR)
     # El repo de un servicio se clona aunque no esté en DO_REPOS: sin código no
     # hay nada que instalar, y obligarte a listarlo dos veces sólo genera fallos.
     for svc in services:
@@ -1509,6 +1877,11 @@ def cmd_provision(args: argparse.Namespace) -> None:
     )
     if code != 0:
         die(f"El aprovisionamiento falló (código {code}).")
+
+    if make_launcher:
+        log("\nDejando la máquina en condiciones de lanzar droplets…")
+        hacer_lanzador(name, ip, port)
+
     log("Aprovisionamiento terminado.")
 
 
@@ -2033,6 +2406,18 @@ def main() -> None:
         "Sólo para la máquina de control: quien entre ahí podrá gastar tu dinero",
     )
     p.add_argument(
+        "--volume",
+        help="volumen de bloques que conectar y montar en /mnt/<nombre>. Tiene que "
+        "existir ya (volume create) y estar en la misma región",
+    )
+    p.add_argument(
+        "--make-launcher",
+        action="store_true",
+        help="deja la máquina en condiciones de lanzar y usar otros droplets: "
+        "implica --push-do-token, clona el repo del lanzador y le crea un par de "
+        "claves SSH propio registrado en la cuenta",
+    )
+    p.add_argument(
         "--no-provision",
         action="store_true",
         help="no inyectar credenciales ni clonar repos",
@@ -2067,6 +2452,13 @@ def main() -> None:
         action="store_true",
         help="envía también el DO_TOKEN al droplet, para que pueda lanzar otros. "
         "Sólo para la máquina de control: quien entre ahí podrá gastar tu dinero",
+    )
+    p.add_argument(
+        "--make-launcher",
+        action="store_true",
+        help="deja la máquina en condiciones de lanzar y usar otros droplets: "
+        "implica --push-do-token, clona el repo del lanzador y le crea un par de "
+        "claves SSH propio registrado en la cuenta",
     )
     p.add_argument(
         "--skip-wait",
@@ -2137,6 +2529,27 @@ def main() -> None:
     p.add_argument("--port", type=int, help="fuerza un puerto en vez de autodetectarlo")
     p.add_argument("--cmd", help="ejecuta este comando en remoto en vez de abrir sesión")
     p.set_defaults(func=cmd_ssh)
+
+    p = sub.add_parser(
+        "volume",
+        help="volúmenes de bloques: el almacenamiento que sobrevive al droplet",
+    )
+    p.add_argument(
+        "action", choices=["list", "create", "attach", "detach", "destroy"]
+    )
+    p.add_argument("name", nargs="?", help="nombre del volumen (o DO_VOLUME de .env)")
+    p.add_argument("--droplet", help="droplet al que conectarlo (por defecto DO_DROPLET_NAME)")
+    p.add_argument("--port", type=int)
+    p.add_argument("--region", help="sólo en create; por defecto DO_REGION")
+    p.add_argument("--size-gb", type=int, help="sólo en create; por defecto DO_VOLUME_SIZE_GB")
+    p.add_argument("--description", help="sólo en create")
+    p.add_argument(
+        "--no-mount",
+        action="store_true",
+        help="en attach: conectar sin montar. Deja un disco que no ve ningún programa",
+    )
+    p.add_argument("--yes", action="store_true", help="en destroy: no preguntar")
+    p.set_defaults(func=cmd_volume)
 
     p = sub.add_parser("destroy", help="destruye el droplet")
     p.add_argument("name", nargs="?")

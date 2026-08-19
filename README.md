@@ -972,6 +972,74 @@ python scripts/do_droplet.py ssh mini --cmd "uptime"
 > cuando no tienes la laptop delante. Dáselo sólo a droplets tuyos y recuerda
 > que [el mini no se destruye nunca en una limpieza](#la-máquina-de-control-lanzar-droplets-desde-el-móvil).
 
+## Volúmenes: lo único que sobrevive al droplet
+
+Un droplet se rehace sin aviso y su disco se va con él. Un **volumen de bloques**
+no: existe aparte, se conecta a la máquina que lo necesite y sigue ahí cuando esa
+máquina ya no está. Por eso es donde va lo que cuesta caro reconstruir —en este
+montaje, el dataset del benchmark de vCPU: mil imágenes renderizadas con Chromium,
+reproducibles pero lentas de generar (ver `docs/benchmark-vcpu.md` en
+`foveal-vision`).
+
+```bash
+python scripts/do_droplet.py volume create bench-data --size-gb 10
+python scripts/do_droplet.py volume list
+python scripts/do_droplet.py launch trabajo --volume bench-data   # conecta y monta
+```
+
+Queda montado en `/mnt/<nombre>` y con una entrada en `/etc/fstab`, así que
+sobrevive a los reinicios de la máquina. `attach` formatea **sólo** si el disco
+viene en blanco: lo decide `blkid`, no una suposición, porque formatear un
+volumen con dato dentro es exactamente lo que no se puede permitir.
+
+Tres cosas que conviene saber antes de diseñar nada encima:
+
+- **Un volumen se conecta a UN droplet a la vez.** No es un disco compartido. Para
+  repartir su contenido entre varias máquinas se copia por SSH desde la que lo
+  tiene. Para un benchmark eso además es lo correcto: hay que medir leyendo de
+  disco local, no de un disco de red.
+- **No se mueve de región.** El volumen y el droplet tienen que estar en la misma;
+  `launch --volume` lo comprueba **antes** de crear nada, para que el error salga
+  gratis y no te deje una máquina facturando sin el disco que ibas a usar.
+- **Se paga por existir**, 0,10 $/GB al mes, esté conectado o no. 10 GB son 1 $/mes:
+  esa es la cuota por no tener que regenerar el dataset nunca más.
+
+`volume detach` desmonta antes de desconectar (al revés se pierde lo que el kernel
+tenga sin escribir) y `volume destroy` pide confirmación y se niega si sigue
+conectado.
+
+## Una máquina que lanza otras máquinas
+
+El token deja a un droplet **crear** droplets, pero no **entrar** en ellos, y eso
+se descubre tarde: las máquinas se crean, facturan, y su creador no puede
+conectarse. La razón es que un droplet acepta las claves públicas registradas en
+la cuenta **en el momento de crearlo**, así que la lanzadora necesita un par
+propio, registrado antes de lanzar nada.
+
+`--make-launcher` hace las tres cosas de una vez, que es el punto: por separado se
+olvida una.
+
+```bash
+python scripts/do_droplet.py launch trabajo \
+  --service telegram-coordinator \
+  --make-launcher \
+  --volume bench-data \
+  --repo stalinbeltran/foveal-vision \
+  --repo stalinbeltran/image-text-sample-generator
+```
+
+- envía el `DO_TOKEN` (implica `--push-do-token`),
+- clona el repo del lanzador en `~/src`,
+- genera un par de claves **dentro** del droplet y registra la pública en la
+  cuenta como `lanzador-<nombre>`. La privada no viaja: se queda donde nació.
+
+> ⚠️ Quien entre en esa máquina puede crear y destruir droplets en tu cuenta. Con
+> el servicio `telegram-coordinator` encima, eso incluye a quien hable con el bot:
+> la allowlist de Telegram es la única barrera.
+
+Las claves `lanzador-*` se acumulan en la cuenta según se rehacen máquinas.
+Míralas con `keys` y borra las de máquinas que ya no existen.
+
 ## Acceso desde tu otra laptop
 
 Están contempladas las dos formas. **La segunda es la recomendada.**
