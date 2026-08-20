@@ -2220,6 +2220,9 @@ def cmd_install_executors(args: argparse.Namespace) -> None:
             log(f"  {svc['name']}: no declara ningún fichero.")
             continue
         dueno = owner_of(destino)
+        # Por servicio y no global: con el contador compartido, escribir algo en
+        # el servicio A reiniciaba también el B, que no había cambiado.
+        cambiados = 0
         for ruta, contenido in svc["files"].items():
             if ruta.startswith("/") or ".." in ruta:
                 die(f"{svc['name']}: la ruta '{ruta}' tiene que ser relativa al repo.")
@@ -2235,13 +2238,18 @@ def cmd_install_executors(args: argparse.Namespace) -> None:
                 log(f"  {svc['name']}: {ruta} ya estaba al día")
                 continue
             path.write_text(texto, encoding="utf-8")
-            # Lo escribe root por SSH, pero quien lo lee es el servicio, que
-            # corre como el usuario de desarrollo. Sin el chown el bot arranca y
-            # no ve sus propios ejecutores.
-            run_local(["chown", f"{dueno}:{dueno}", str(path)], check=False)
+            # Este comando se ejecuta de dos maneras: como el usuario de
+            # desarrollo (desde el bot, que es el caso normal) y como root
+            # (entrando por SSH a mano). En el primer caso el fichero ya nace
+            # con el dueño correcto y `chown` sobra; en el segundo hace falta,
+            # porque si no el bot no puede leer sus propios ejecutores. Sólo
+            # root puede cambiar el dueño, así que se intenta únicamente ahí.
+            if os.geteuid() == 0 and dueno and dueno != "root":
+                run_local(["chown", f"{dueno}:{dueno}", str(path)])
             log(f"  {svc['name']}: escrito {ruta}")
+            cambiados += 1
             escritos += 1
-        if escritos and svc["name"] not in reiniciar:
+        if cambiados and svc["name"] not in reiniciar:
             reiniciar.append(svc["name"])
 
     if not escritos:
