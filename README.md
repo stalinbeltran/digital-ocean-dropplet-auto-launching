@@ -1373,9 +1373,29 @@ ejecutores
 Y luego, para montar la máquina donde Claude va a medir:
 
 ```
-lanzar   launch bench-control --make-launcher --push-env VAST_AI_API_TOKEN --repo stalinbeltran/foveal-vision
+lanzar   launch bench-control
 estado
 ```
+
+Sí, eso es todo. **Un tipo que se llama igual que el droplet se aplica solo**, y
+[types/bench-control.json](types/bench-control.json) ya trae dentro el repo que
+clonar, el token que llevarse, `--make-launcher` y el `register-key` de Vast.
+`launch` dice qué tipo cogió antes de crear nada, y `--type otro` lo pisa.
+
+Escribir la versión larga desde el móvil es exactamente la clase de cosa que se
+teclea mal, y un error de dedo ahí crea una máquina que factura y no sirve.
+
+### Cuando no te acuerdes de un comando
+
+```
+ayuda
+```
+
+Imprime el catálogo entero con ejemplos. El `/executors` del coordinador lista
+los nombres pero **no los describe** — no tiene campo para ello —, así que la
+descripción vive en el bloque `ayuda` de
+[services/telegram-launcher.json](services/telegram-launcher.json), en el mismo
+fichero que define los ejecutores para que no puedan divergir.
 
 > ⚠️ `apagar-do` se lleva por delante los droplets de trabajo. **Nunca toca el
 > mini**, que lleva el tag `control` justamente para eso.

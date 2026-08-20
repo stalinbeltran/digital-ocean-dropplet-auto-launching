@@ -69,6 +69,79 @@
         "echo"
       ],
       "timeoutMs": 0
+    },
+    "data/executors/ayuda.json": {
+      "name": "ayuda",
+      "command": "cd \"$HOME/src/digital-ocean-dropplet-auto-launching\" && python3 scripts/do_droplet.py executors",
+      "encargados": [
+        "echo"
+      ],
+      "timeoutMs": 0
+    }
+  },
+  "ayuda": {
+    "ayuda": {
+      "que": "Esta lista. Cuando no te acuerdes de que acepta cada ejecutor.",
+      "ejemplos": [
+        ""
+      ]
+    },
+    "actualizar": {
+      "que": "git pull en todos los repos de ~/src y reinicia los servicios cuyo codigo cambio.",
+      "ejemplos": [
+        ""
+      ]
+    },
+    "ejecutores": {
+      "que": "Aplica los ejecutores del descriptor que acaba de llegar por git. Uselo despues de 'actualizar' cuando haya ejecutores nuevos.",
+      "ejemplos": [
+        ""
+      ]
+    },
+    "lanzar": {
+      "que": "Cualquier comando de do_droplet.py, sobre DigitalOcean. Un tipo que se llame igual que el droplet trae solo sus repos, variables y pasos finales.",
+      "ejemplos": [
+        "launch bench-control",
+        "list",
+        "types",
+        "destroy bench-control --yes",
+        "ssh bench-control --cmd 'uptime'"
+      ]
+    },
+    "vast": {
+      "que": "Cualquier comando de vast_instance.py, sobre Vast.ai. Alquilar cuesta dinero; 'offers' y '--dry-run' no.",
+      "ejemplos": [
+        "list",
+        "offers --cpus 8",
+        "sweep --bench foveal-cpu --dry-run",
+        "destroy --all --yes"
+      ]
+    },
+    "datos": {
+      "que": "Datasets declarados: que hay, si cuadra con su sha256 y traerlos.",
+      "ejemplos": [
+        "list",
+        "check",
+        "fetch dirty-1000-80px"
+      ]
+    },
+    "estado": {
+      "que": "Que hay vivo AHORA en las dos nubes, con su gasto por hora. Mirelo si algo se corto a medias.",
+      "ejemplos": [
+        ""
+      ]
+    },
+    "apagar-vast": {
+      "que": "Destruye TODAS las instancias de Vast.ai. El boton de panico cuando un barrido dejo algo encendido.",
+      "ejemplos": [
+        ""
+      ]
+    },
+    "apagar-do": {
+      "que": "Destruye los droplets con tag 'ephemeral'. NO toca el mini, que lleva tag 'control'.",
+      "ejemplos": [
+        ""
+      ]
     }
   }
 }

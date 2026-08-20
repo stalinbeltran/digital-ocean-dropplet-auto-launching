@@ -111,6 +111,22 @@ no se elige aparte en DigitalOcean; va fijo con el plan.
 
 Lo que hay que respetar al tocar esto:
 
+- **Un tipo describe la máquina ENTERA, no sólo su hardware.** Además de `size`, `image`,
+  `region`, `cloud_init` y `tag`, puede traer `repos`, `services`, `push_env`,
+  `make_launcher`, `volume` y `post`. Las listas se **suman** a lo que venga por línea de
+  comandos en vez de pisarse: un `--repo` suelto quiere decir "y además éste", no "olvida
+  los del tipo", y pisarlos dejaría la máquina sin la mitad del trabajo sin avisar.
+- **Si hay un tipo que se llama como el droplet, se usa.** `launch bench-control` aplica
+  `types/bench-control.json`. Es por el móvil: la versión larga
+  (`--make-launcher --push-env … --repo …`) se teclea mal, y un error de dedo ahí crea
+  una máquina que factura y no sirve. No es magia silenciosa — `launch` dice qué tipo cogió
+  antes de crear nada — y `--type otro` lo pisa.
+- **`post` son los comandos que rematan la máquina, ejecutados DENTRO al final.** Es donde
+  va `vast_instance.py register-key`: el token de Vast deja alquilar pero no entrar, igual
+  que el de DigitalOcean, y sin ese paso se alquilan máquinas a las que su creador no puede
+  conectarse. Corren con `sudo -u $DEV_USER -H bash -lc` para que vean `dev-secrets.env`;
+  con root o sin shell de login fallan con un "falta el token" en una máquina donde el
+  token sí está. Ninguno es fatal: la máquina ya está creada y aprovisionada cuando corren.
 - **Un tipo es la combinación entera**, no sólo el plan: una GPU necesita ADEMÁS su
   imagen con drivers (`gpu-h100x1-base`, que vale para todos los planes de 1 GPU
   aunque el nombre diga h100) y una región donde haya GPUs. Pedir sólo el `size` da
@@ -359,6 +375,13 @@ Lo que hay que respetar:
   leerlas. Buscar la marca leyendo `/etc/systemd/system/*.service` daba lista
   vacía y un "no hay nada que reiniciar" falso; `systemctl show` contesta a
   cualquier usuario porque responde el gestor, no el fichero.
+- **El coordinador no sabe describir un ejecutor.** Su `Executor` es `name`, `command`,
+  `encargados` y `timeoutMs`, y `/executors` lista sólo nombre y encargados. Desde el móvil
+  eso obliga a recordar de memoria qué acepta cada uno. Por eso el descriptor del servicio
+  lleva un bloque `ayuda` (aparte de `files`, que se escribe tal cual en la máquina) y
+  `do_droplet.py executors` lo imprime; el ejecutor `ayuda` es eso mismo desde Telegram.
+  La alternativa mejor a largo plazo sería añadir `descripcion` al `Executor` del
+  coordinador, pero eso es tocar el otro repo.
 - **Los ejecutores del bot van en el descriptor del servicio, aquí, no en el repo del
   coordinador.** Llaman a comandos de este repo; separados, una de las dos mitades queda
   desfasada sin avisar y el síntoma es un ejecutor que falla con un error de argumentos.

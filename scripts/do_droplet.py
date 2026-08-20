@@ -688,16 +688,38 @@ def find_droplets(name: str = "", tag: str = "") -> list[dict]:
     return [d for d in droplets if not name or d["name"] == name]
 
 
+def tipo_por_nombre(nombre_droplet: str) -> str:
+    """Si hay un tipo que se llama igual que el droplet, ése es el que toca.
+
+    Existe para que el comando quepa en un mensaje de Telegram. Escribir
+    `launch bench-control --make-launcher --push-env VAST_AI_API_TOKEN --repo
+    …` desde el móvil es exactamente la clase de cosa que se escribe mal, y un
+    error de dedo ahí crea una máquina que factura y no sirve.
+
+    No es magia silenciosa: cuando pasa, `launch` lo dice antes de crear nada.
+    Y se puede desactivar para un lanzamiento suelto con `--type otro`.
+    """
+    if not nombre_droplet:
+        return ""
+    return nombre_droplet if (TYPES_DIR / f"{nombre_droplet}.json").exists() else ""
+
+
 def resolver_maquina(args: argparse.Namespace) -> dict:
-    """Decide plan, imagen, región, arranque y tag combinando las tres fuentes.
+    """Decide plan, imagen, región, arranque y tag combinando las fuentes.
 
     Manda lo más explícito: una opción de la línea de comandos por encima del
     tipo, y el tipo por encima del .env. Así `--type gpu-h100 --region tor1`
     hace lo que parece, sin tener que editar el descriptor para un lanzamiento
     suelto.
+
+    Si no se pide tipo, se busca uno que se llame como el droplet antes de caer
+    en DO_TYPE: es lo que permite que `launch bench-control` traiga consigo sus
+    repos, sus variables y su clave de Vast sin escribirlos.
     """
-    nombre = args.type or cfg("DO_TYPE")
+    nombre = args.type or tipo_por_nombre(getattr(args, "name", "") or "") or cfg("DO_TYPE")
     tipo = load_type(nombre) if nombre else {}
+    if tipo and not args.type:
+        log(f"Tipo '{nombre}' (por el nombre del droplet). Con --type usas otro.")
     return {
         "tipo": tipo,
         "size": args.size or tipo.get("size") or cfg("DO_SIZE"),
@@ -772,12 +794,40 @@ def comprobar_size(slug: str, region: str, aceptar_coste: bool) -> dict:
     return size
 
 
+def lista_unida(de_args: list[str], del_tipo) -> list[str]:
+    """Une lo de la línea de comandos con lo del tipo, sin repetir y sin perder.
+
+    Se SUMAN en vez de pisarse, al revés que `size` o `region`: un `--repo` suelto
+    quiere decir "y además éste", no "olvida los del tipo". Pisarlos haría que
+    añadir un repo a mano te dejara la máquina sin los que el tipo daba por
+    hechos, y eso no se ve hasta que entras y falta medio trabajo.
+    """
+    if isinstance(del_tipo, str):
+        del_tipo = [del_tipo]
+    salida: list[str] = []
+    for valor in list(de_args or []) + list(del_tipo or []):
+        for parte in str(valor).split(","):
+            parte = parte.strip()
+            if parte and parte not in salida:
+                salida.append(parte)
+    return salida
+
+
 def cmd_launch(args: argparse.Namespace) -> None:
     name = args.name or cfg("DO_DROPLET_NAME")
     if find_droplets(name=name):
         die(f"Ya existe un droplet llamado '{name}'. Usa otro nombre o destrúyelo primero.")
 
     maquina = resolver_maquina(args)
+    # Un tipo no es sólo hardware: es todo lo que hace falta para que esa
+    # máquina sirva para lo suyo. Sin esto, la mitad de la definición vivía en
+    # un comando largo que hay que recordar y teclear bien cada vez.
+    tipo = maquina["tipo"]
+    args.repo = lista_unida(args.repo, tipo.get("repos"))
+    args.service = lista_unida(args.service, tipo.get("services"))
+    args.push_env = lista_unida(args.push_env, tipo.get("push_env"))
+    args.make_launcher = args.make_launcher or bool(tipo.get("make_launcher"))
+    args.push_do_token = args.push_do_token or bool(tipo.get("push_do_token"))
     size = None if args.no_check else comprobar_size(
         maquina["size"], maquina["region"], args.accept_cost
     )
@@ -787,7 +837,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     # El volumen se comprueba antes de crear el droplet: si la región no cuadra
     # o el nombre está mal escrito, el fallo tiene que salir gratis y no
     # dejarte una máquina facturando sin el disco que ibas a usar.
-    vol_name = args.volume or cfg("DO_VOLUME")
+    vol_name = args.volume or tipo.get("volume") or cfg("DO_VOLUME")
     vol = None
     if vol_name:
         vol = find_volume(vol_name)
@@ -904,6 +954,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 f" --droplet {name}"
             )
 
+    if tipo.get("post") and port and not args.no_provision:
+        ejecutar_post(name, ip, port, tipo["post"])
+
     key_file = Path(cfg("DO_SSH_KEY_FILE")).expanduser()
     port_flag = f"-p {port} " if port and port != 22 else ""
     log("\n" + "=" * 62)
@@ -925,6 +978,44 @@ def cmd_launch(args: argparse.Namespace) -> None:
     log(f"\n  Al terminar:    python scripts/do_droplet.py destroy {name}")
     log("  (el droplet factura por segundo mientras exista)")
     log("=" * 62)
+
+
+def ejecutar_post(name: str, ip: str, port: int, comandos) -> None:
+    """Comandos del tipo que se ejecutan DENTRO del droplet al final del todo.
+
+    Es lo que remata una máquina que tiene que poder usar otra nube: el token de
+    Vast.ai la deja ALQUILAR, pero no ENTRAR. Como en DigitalOcean, una instancia
+    acepta las claves registradas en el momento de crearla, así que sin un
+    `vast_instance.py register-key` previo se alquilan máquinas a las que su
+    creador no puede conectarse: existen, facturan y no sirven. Con `post` en el
+    descriptor, eso deja de ser un paso que hay que acordarse de dar.
+
+    Corren como el usuario de desarrollo y con shell de login, para que vean los
+    tokens de `dev-secrets.env`; con root o sin login, `register-key` fallaría
+    con un "falta el token" en una máquina donde el token sí está.
+
+    Ninguno es fatal: para cuando corren, la máquina ya está creada y
+    aprovisionada, y tumbarlo todo por un paso final sería peor que avisar.
+    """
+    if isinstance(comandos, str):
+        comandos = [comandos]
+    dev_user = cfg("DO_DEV_USER")
+    log(f"\nPasos finales del tipo ({len(comandos)}):")
+    for comando in comandos:
+        log(f"  $ {comando}")
+        script = "\n".join(
+            [
+                "set -eu",
+                f"DEV_USER={shq(dev_user)}",
+                f'sudo -u "$DEV_USER" -H bash -lc {shq(comando)}',
+            ]
+        )
+        if run_remote_script(ip, port, script) != 0:
+            log(
+                f"  AVISO: falló. La máquina existe y está aprovisionada.\n"
+                f"  Reintenta desde dentro:  python scripts/do_droplet.py ssh {name} "
+                f"--cmd {shq(comando)}"
+            )
 
 
 def cmd_list(args: argparse.Namespace) -> None:
@@ -1486,6 +1577,19 @@ def load_service(name: str) -> dict:
     if not isinstance(svc["files"], dict):
         die(f"{path}: 'files' tiene que ser un objeto de ruta -> contenido.")
     return svc
+
+
+def all_services() -> list[dict]:
+    """Todos los descriptores de services/, sin filtrar por lo que esté activo.
+
+    `selected_services` responde a "qué va a correr en esta máquina";  esto, a
+    "qué hay definido en el repo", que es lo que necesita el catálogo de ayuda:
+    desde el móvil se consulta el catálogo justamente cuando no te acuerdas de
+    lo que hay.
+    """
+    if not SERVICES_DIR.exists():
+        return []
+    return [load_service(p.stem) for p in sorted(SERVICES_DIR.glob("*.json"))]
 
 
 def selected_services(extra: list[str]) -> list[dict]:
@@ -2332,6 +2436,53 @@ def cmd_push_service_env(args: argparse.Namespace) -> None:
     log("Listo. El servicio se reinició para recogerlas.")
 
 
+def cmd_executors(args: argparse.Namespace) -> None:
+    """Imprime el catálogo de ejecutores del bot, con ejemplos.
+
+    Existe porque el coordinador no sabe describir un ejecutor: su `/executors`
+    lista el nombre y los encargados, y nada más. Desde el móvil eso obliga a
+    recordar de memoria qué acepta cada uno, que es justo lo que no se recuerda.
+
+    La descripción vive en el mismo descriptor que define los ejecutores, en un
+    bloque `ayuda` aparte de `files`. Aparte y no dentro a propósito: lo que hay
+    en `files` se escribe tal cual en la máquina, y el coordinador no espera
+    campos que no conoce. Al estar los dos en el mismo fichero, no pueden
+    divergir sin que se note.
+    """
+    # Todos por defecto, no los de DO_SERVICES: el catálogo se consulta desde
+    # una máquina cualquiera para saber qué HAY, no qué corre aquí. Filtrando
+    # por lo activo, en la laptop salía vacío y parecía que no había ninguno.
+    servicios = [load_service(n) for n in args.service] if args.service else all_services()
+    hubo = False
+    for svc in servicios:
+        ayuda = svc.get("ayuda") or {}
+        declarados = [
+            v.get("name", "?") for v in svc.get("files", {}).values() if isinstance(v, dict)
+        ]
+        if not declarados:
+            continue
+        hubo = True
+        log(f"Ejecutores de '{svc['name']}':\n")
+        for nombre in declarados:
+            info = ayuda.get(nombre) or {}
+            log(f"  {nombre}")
+            if info.get("que"):
+                log(f"      {info['que']}")
+            else:
+                log("      (sin describir en el descriptor)")
+            for ej in info.get("ejemplos") or []:
+                log(f"      > {nombre}  {ej}" if ej else f"      > {nombre}")
+            log("")
+        sin_describir = [n for n in declarados if n not in ayuda]
+        if sin_describir:
+            log(f"  Sin descripción: {', '.join(sin_describir)}")
+    if not hubo:
+        log(
+            "Ningún servicio declara ejecutores.\n"
+            "  Se definen en el bloque 'files' de un descriptor de services/."
+        )
+
+
 def cmd_push_secret(args: argparse.Namespace) -> None:
     """Escribe variables en `~/.config/dev-secrets.env`, sin borrar las demás.
 
@@ -2808,6 +2959,19 @@ def main() -> None:
     p.add_argument("--name", help="droplet, si no es el de .env")
     p.add_argument("--port", type=int)
     p.set_defaults(func=cmd_push_service_env)
+
+    p = sub.add_parser(
+        "executors",
+        help="catálogo de ejecutores del bot con ejemplos, para consultarlo "
+        "desde el móvil (el /executors del coordinador no los describe)",
+    )
+    p.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        help="sólo los de este servicio (repetible). Por defecto, todos",
+    )
+    p.set_defaults(func=cmd_executors)
 
     p = sub.add_parser(
         "push-secret",
