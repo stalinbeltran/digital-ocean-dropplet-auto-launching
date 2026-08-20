@@ -83,6 +83,15 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
   repite `load_env`, `api()` y los ayudantes de SSH a propósito, para que cada script
   corra suelto en una máquina recién nacida. `sweep` es el comando que justifica el
   fichero: alquila una máquina por nivel de CPU, mide, guarda y destruye.
+- [scripts/dataset.py](scripts/dataset.py) — el registro de datos: `list`, `pack`,
+  `fetch`, `check`. Resuelve el problema de que **el dato no está en el repo del
+  proyecto** y una máquina nueva se queda sin él. Es el único módulo que
+  `vast_instance.py` sí importa, porque no es código de un proveedor: es
+  infraestructura compartida que viaja siempre con él.
+- [datasets/](datasets/) — un JSON por dataset (`destino`, `sha256`, `fuentes`,
+  `regenerar`). **Dato, no código.** Cada uno declara varias fuentes y se prueban
+  en orden: `repo` (tar.gz commiteado, llega con `git clone` a cualquier
+  proveedor), `url` (descarga pública, para lo que no cabe en git) y `local`.
 - [benchmarks/](benchmarks/) — un JSON por benchmark (`envia`, `install`, `run`,
   `recoge`, `metrica`). **Dato, no código**, igual que `services/` y `types/`: medir
   otra cosa es escribir otro fichero, no tocar `vast_instance.py`.
@@ -350,6 +359,24 @@ Lo que hay que respetar:
   leerlas. Buscar la marca leyendo `/etc/systemd/system/*.service` daba lista
   vacía y un "no hay nada que reiniciar" falso; `systemctl show` contesta a
   cualquier usuario porque responde el gestor, no el fichero.
+- **Los ejecutores del bot van en el descriptor del servicio, aquí, no en el repo del
+  coordinador.** Llaman a comandos de este repo; separados, una de las dos mitades queda
+  desfasada sin avisar y el síntoma es un ejecutor que falla con un error de argumentos.
+  El precio de esa decisión es que **un ejecutor nuevo no llega con `git pull`**: el
+  bloque `files` lo escribe `provision`, desde la laptop. Para eso está
+  `install-executors`, que corre DENTRO de la máquina y aplica el descriptor que acaba de
+  llegar. Desde el móvil: `actualizar` y luego `ejecutores`. La primera vez, `ejecutores`
+  todavía no existe: se arranca con el ejecutor `shell`, que sí está.
+- **Todo lo del mini va en git menos los `.env`.** Es la regla que hace que la máquina se
+  pueda tirar y rehacer: el código y los ejecutores se traen solos, y lo único que hay
+  que mandar desde la laptop son los secretos, con `push-service-env` (que reescribe una
+  línea) y no con `provision` (que reescribe el fichero entero y borra lo que el emisor
+  no tenga a mano).
+- **`--push-env` lee el entorno de la máquina QUE LANZA, no el tuyo.** Desde el mini, eso
+  es el `.env` del bot con el prefijo `TGL_` quitado. Si falta la variable, `launch` crea
+  el droplet igual y sólo avisa: nace sin poder alquilar y se descubre tarde, ya dentro.
+  Por eso `TGL_VAST_AI_API_TOKEN` tiene que estar en el `.env` de la laptop y haberse
+  enviado al mini.
 - **Las máquinas de larga vida no llevan el tag de los efímeros.** El mini se crea con
   `--tag control` justamente para que `destroy --tag ephemeral --yes` no se lo lleve.
 - **NUNCA destruyas el droplet `mini` en una limpieza.** "Borra todos los droplets",
@@ -416,10 +443,20 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
 - **La oferta puede desaparecer entre buscarla y comprarla.** Es un marketplace: `PUT
   /asks/{id}/` contesta 404 o 410 con `no_such_ask` si otro se la llevó primero. No es un
   fallo del programa, y por eso `api()` lo traduce en vez de soltar el JSON.
-- **El dato del benchmark no está en git.** `data/sources/dirty-1000-80px` (30 MB) está
-  gitignoreado en foveal-vision, así que la máquina de control lo recibe con
-  `do_droplet.py push-dir`. Sin ese paso el barrido alquila una máquina, la paga, y el
-  benchmark se para diciendo "falta la fuente": el fallo cuesta dinero y llega tarde.
+- **El dato del benchmark no está en el repo del proyecto, y por eso existe `datasets/`.**
+  `data/sources/dirty-1000-80px` está gitignoreado en foveal-vision. Antes se empujaba a
+  mano y el paso se olvidaba; ahora el dataset se declara, se verifica por sha256 y viaja
+  como `tar.gz` commiteado aquí (8,6 MB). **Los datasets se resuelven ANTES de alquilar
+  nada**: si falta el dato, el barrido tiene que morir gratis, no con la máquina
+  encendida y facturando mientras se depura.
+- **El empaquetado de un dataset es determinista a propósito** (orden fijo,
+  `uid`/`gid`/`mtime` a cero). Sin eso, dos `pack` del mismo dato dan checksums distintos
+  y el sha256 pasa a significar "lo hizo la misma máquina el mismo día" en vez de "es el
+  mismo dato", que es justo lo que no sirve. Comprobado el 2026-08-20.
+- **Regla de tamaño para un dataset nuevo:** hasta unas decenas de MB, fuente `repo`
+  (llega con `git clone`, sin red ni credenciales, a cualquier proveedor). Por encima de
+  ~50 MB, publícalo y usa `url`, o el repositorio engorda para siempre. Un volumen de
+  bloques de DigitalOcean **no** es una opción aquí: no se conecta a Vast.ai.
 
 ## Convenciones
 

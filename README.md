@@ -1221,6 +1221,69 @@ Dos cosas útiles cuando algo va mal:
   momento de crear la instancia. Si la vas a usar para lanzar, créala con
   permiso de escritura sobre instancias.
 
+## Datasets: que el dato llegue a cualquier máquina
+
+El problema es viejo y siempre igual: **los datos no están en el repo del
+proyecto**, porque son miles de binarios y van gitignoreados. Una máquina recién
+creada clona el código y se queda sin dato, y eso no se descubre hasta que el
+trabajo ya está pagado y fallando. Con Vast.ai además no vale la solución de
+DigitalOcean: **un volumen de bloques no se conecta a una máquina de otro
+proveedor**.
+
+[datasets/](datasets/) es un JSON por dataset — dato y no código, igual que
+`types/` y `services/`. Añadir uno es escribir un fichero.
+
+```bash
+python scripts/dataset.py list                    # qué hay declarado
+python scripts/dataset.py fetch dirty-1000-80px   # traerlo y dejarlo listo
+python scripts/dataset.py check                   # ¿cuadra con lo declarado?
+python scripts/dataset.py pack dirty-1000-80px    # fabricar el tar.gz + sha256
+```
+
+### Tres formas de que viaje, y cuándo usar cada una
+
+Cada dataset declara **varias fuentes** y se prueban en orden. Ninguna sirve para
+todos los tamaños:
+
+| fuente | cómo llega | úsala cuando | el precio |
+|---|---|---|---|
+| **`repo`** | un `tar.gz` commiteado aquí; llega con `git clone` | hasta unas **decenas de MB**, y el dato está congelado | engorda el repo para siempre |
+| **`url`** | descarga pública (release de GitHub, S3…) | **cientos de MB o GB**; la máquina se lo baja sola, sin pasar por tu conexión | hay que publicarlo y mantenerlo vivo |
+| **`local`** | copia de la máquina que lo tenga | aún no has publicado nada, o es privado | sólo funciona desde esa máquina |
+
+`dirty-1000-80px` (2.002 ficheros, **8,6 MB** comprimidos) va por `repo`: el
+benchmark queda listo con sólo clonar, en DigitalOcean, en Vast.ai o donde sea.
+
+Para el siguiente dataset, la regla práctica: **si pasa de ~50 MB, publícalo y
+usa `url`.** El flujo es el mismo:
+
+```bash
+python scripts/dataset.py pack mi-dataset          # da el sha256
+gh release create datasets-v1 datasets/blobs/mi-dataset.tar.gz \
+  --repo stalinbeltran/foveal-vision --title "Datasets" --notes "..."
+# y en datasets/mi-dataset.json, cambia la fuente `repo` por `url`
+```
+
+### Por qué todo lleva sha256
+
+Un dataset a medias o cambiado **da números con el mismo aspecto y otro
+significado**, que es peor que no dar ninguno. Ya pasó una vez en este proyecto:
+`bench-synth-16` y `bench-dirty1000-16` no se comparan entre sí, y el reporte
+guarda el nombre del dataset precisamente por eso.
+
+El empaquetado es **determinista** — orden fijo, `uid`/`gid`/`mtime` a cero — así
+que dos `pack` del mismo dato dan el mismo checksum (comprobado). Sin eso el
+sha256 significaría "lo hizo la misma máquina el mismo día" en vez de "es el
+mismo dato".
+
+Un benchmark declara los suyos por nombre y `vast_instance.py` los resuelve,
+verifica y coloca en su sitio **antes de alquilar nada**: si falta el dato, el
+barrido muere gratis en vez de con la máquina encendida.
+
+```json
+"datasets": ["dirty-1000-80px"]
+```
+
 ## Medir velocidad: un barrido de máquinas en Vast.ai
 
 El objetivo es responder a *cuánto acelera mi entrenamiento si le doy más CPU*,
@@ -1246,20 +1309,10 @@ python scripts/do_droplet.py launch bench-control `
 Vast; sin él, `vast_instance.py` allí dentro dirá que falta el token. Los repos
 quedan en `~/src`.
 
-### Paso 2 — subirle lo que git no trae
+El dataset **no hay que subirlo**: viaja en este repo y lo resuelve el registro
+de [datasets/](datasets/). Ése era el paso manual que fallaba siempre.
 
-El dataset del benchmark (`data/sources/dirty-1000-80px`, unos 30 MB) está
-gitignoreado, así que el clon llega sin él y el benchmark se pararía **después**
-de haber alquilado y pagado una máquina:
-
-```powershell
-python scripts/do_droplet.py push-dir `
-  c:\Desarrollo\foveal-vision\data\sources\dirty-1000-80px `
-  src/foveal-vision/data/sources/dirty-1000-80px `
-  --name bench-control
-```
-
-### Paso 3 — dentro del droplet, darle una clave en Vast
+### Paso 2 — dentro del droplet, darle una clave en Vast
 
 **El token deja alquilar, pero no entrar.** Es la misma trampa que con
 `--make-launcher` en DigitalOcean: sin una clave propia registrada *antes*, la
@@ -1272,7 +1325,7 @@ python3 scripts/vast_instance.py register-key
 
 Genera el par si no lo hay y sube la pública. Es idempotente.
 
-### Paso 4 — el barrido
+### Paso 3 — el barrido
 
 ```bash
 python3 scripts/vast_instance.py sweep --bench foveal-cpu --cpus 2,4,8,16,32
@@ -1283,6 +1336,67 @@ dataset, instala, mide, **recoge el JSON y destruye la máquina**. Antes de
 empezar enseña qué va a alquilar y cuánto puede costar como mucho, y pregunta.
 
 Los resultados se guardan en [results/](results/) y se commitean.
+
+### Todo esto desde Telegram
+
+El principio es: **todo va en git menos los `.env`, que salen sólo de tu
+laptop.** Los ejecutores del bot viven en el bloque `files` de
+[services/telegram-launcher.json](services/telegram-launcher.json), así que están
+versionados junto a los comandos que llaman — si viajaran en el repo del
+coordinador, una de las dos mitades quedaría desfasada sin avisar.
+
+| ejecutor | qué hace |
+|---|---|
+| `actualizar` | `git pull` en todos los repos y reinicia lo que cambió |
+| `ejecutores` | aplica los ejecutores del descriptor que acaba de llegar |
+| `lanzar` | cualquier subcomando de `do_droplet.py` |
+| `vast` | cualquier subcomando de `vast_instance.py` |
+| `datos` | cualquier subcomando de `dataset.py` |
+| `estado` | droplets **y** instancias de Vast, con su gasto por hora |
+| `apagar-vast` | destruye **todas** las instancias de Vast |
+| `apagar-do` | destruye los droplets con tag `ephemeral` (**el mini no lo lleva**) |
+
+**El arranque en frío tiene un huevo y gallina**: `ejecutores` es un ejecutor, así
+que la primera vez no existe todavía. Se sale con el `shell`, que sí está:
+
+```
+shell   cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py install-executors --service telegram-launcher
+```
+
+A partir de ahí, la secuencia normal es dos mensajes:
+
+```
+actualizar
+ejecutores
+```
+
+Y luego, para montar la máquina donde Claude va a medir:
+
+```
+lanzar   launch bench-control --make-launcher --push-env VAST_AI_API_TOKEN --repo stalinbeltran/foveal-vision
+estado
+```
+
+> ⚠️ `apagar-do` se lleva por delante los droplets de trabajo. **Nunca toca el
+> mini**, que lleva el tag `control` justamente para eso.
+
+### Los secretos, y sólo ellos, salen de la laptop
+
+Un `.env` no se commitea nunca. Para que una máquina ya creada reciba una
+variable **sin perder las que ya tenía**:
+
+```powershell
+python scripts/do_droplet.py push-service-env telegram-launcher VAST_AI_API_TOKEN --name mini
+```
+
+Reescribe esa línea y conserva el resto, igual que `push-do-token`. Usar
+`provision` para esto **borraría del destino lo que tú no tengas a mano**, y el
+síntoma llega tarde: algo en esa máquina deja de autenticar sin motivo aparente.
+
+El puente de nombres es el de siempre: `TGL_VAST_AI_API_TOKEN` en tu `.env` llega
+como `VAST_AI_API_TOKEN` al del bot. Sin esa variable, un `lanzar launch …
+--push-env VAST_AI_API_TOKEN` desde el móvil **crea el droplet igual y sólo
+avisa**: nace sin poder alquilar, y lo descubres ya en la máquina.
 
 ### Antes de gastar nada
 
