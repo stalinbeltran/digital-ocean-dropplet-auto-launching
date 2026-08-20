@@ -63,6 +63,15 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 - [types/](types/) — un JSON por **tipo de máquina** (`size`, y opcionalmente `image`,
   `region`, `cloud_init`, `tag`, `notas`). Mismo trato que `services/`: **dato, no
   código**, añadir un tipo es añadir un fichero. Se eligen con `--type` o `DO_TYPE`.
+- [scripts/vast_check.py](scripts/vast_check.py) — comprueba que `VAST_AI_API_TOKEN`
+  funciona **sin alquilar nada**: identidad, saldo, catálogo, benchmarks, instancias
+  vivas y claves SSH. Sale 0/1 para poder encadenarlo. Es el primer paso del trabajo
+  de comparar GPUs entre proveedores; no toca DigitalOcean ni comparte código con
+  `do_droplet.py` (repite `load_env` a propósito: cada script tiene que correr suelto).
+- [gpu_training_services.md](gpu_training_services.md) — comparativa de proveedores de
+  GPU por **precio y por API**, con tres tablas (capacidades, variedad de GPU/vCPU, y
+  el ciclo crear-esperar-medir-destruir endpoint por endpoint). Léelo antes de añadir
+  un proveedor nuevo.
 - [.env.example](.env.example) — plantilla de configuración; `.env` está ignorado.
 - [README.md](README.md) — uso, incluido el flujo multi-máquina.
 
@@ -330,6 +339,33 @@ Lo que hay que respetar:
   crees que hay que tocarlo, pregunta antes. Es la máquina desde la que el usuario lanza
   todo cuando no tiene la laptop delante: borrarla estando fuera de casa lo deja sin ninguna
   vía de crear ni destruir droplets, y rehacerla exige volver a la laptop.
+
+## Vast.ai: lo aprendido hasta ahora
+
+Segundo proveedor, para el trabajo de comparar velocidades de GPU. Convive con DigitalOcean,
+no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
+
+- **Su OpenAPI miente en `/api/v0/benchmarks/`.** La especificación documenta `score`, `model`
+  y `name`; lo que llega de verdad (medido el 2026-08-20) es `value`, `gpu_name` y `type`, y
+  los tres documentados vienen a `null`. Leer `model` daba "0 modelos" **sin que fallara
+  nada**: silencioso y creíble, la peor clase de error. Moraleja para el resto de la API:
+  **valida contra la respuesta real, no contra la spec.**
+- **`POST /api/v0/bundles/` no crea nada, busca.** En esta API el catálogo se consulta con
+  POST y se alquila con **`PUT /api/v0/asks/{id}/`**. Al escribir pruebas o herramientas de
+  lectura, el POST al catálogo es seguro; el PUT a `/asks/` es lo que cuesta dinero.
+- **El catálogo responde SIN autenticar** (comprobado). Permite escribir y depurar todo el
+  selector de máquinas antes de tener cuenta. Además da un diagnóstico gratis: si todo falla
+  con 401 menos la llamada sin clave, el problema es el token y no la red. `vast_check.py`
+  se apoya en eso.
+- **Las claves pueden ir con permisos recortados.** Una de sólo lectura autentica, lista el
+  catálogo y parece correcta; falla sólo al alquilar. No se puede distinguir sin intentarlo,
+  así que **el fallo hay que preverlo en el mensaje**, no descubrirlo.
+- **Autenticar no es poder alquilar.** Una cuenta sin saldo pasa todas las comprobaciones de
+  token. Por eso `vast_check.py` mira `credit` y lo marca como aviso: si no, el primer
+  alquiler falla por un motivo que no se parece en nada a "no tienes dinero".
+- **Rate limit de ~3 req/s por endpoint**, con un `429` que dice `API requests too frequent
+  endpoint threshold=3.0`. Sin reintento, correr las pruebas dos veces seguidas da un falso
+  fallo.
 
 ## Convenciones
 

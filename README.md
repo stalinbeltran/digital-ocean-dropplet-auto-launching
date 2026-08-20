@@ -1147,6 +1147,80 @@ python scripts/do_droplet.py images --filter ubuntu
 python scripts/do_droplet.py images --kind all --filter gpu   # las imágenes con drivers
 ```
 
+## Vast.ai: comprobar el token antes de gastar
+
+Además de DigitalOcean, este repo empieza a mirar **Vast.ai** para el trabajo de
+comparar velocidades de GPU. El porqué de ese proveedor y no otro está en
+[gpu_training_services.md](gpu_training_services.md); aquí sólo va el trámite de
+que la clave entre.
+
+Pon la clave en `.env` (se crea en <https://cloud.vast.ai/manage-keys/>):
+
+```
+VAST_AI_API_TOKEN=tu_clave_de_vast
+```
+
+Y compruébala:
+
+```bash
+python scripts/vast_check.py
+```
+
+Salida real de una cuenta recién creada:
+
+```
+Comprobando el token de Vast.ai (sin alquilar nada)
+
+  [OK   ] identidad            autenticado como tu@correo.com (id 618822)
+  [AVISO] saldo                saldo 0,00 $: el token lee bien, pero no podrás alquilar hasta cargar credito en https://cloud.vast.ai/billing/
+  [OK   ] catalogo             64 ofertas, 16 modelos de GPU; la más barata es Tesla V100 a 0.027 $/GPU-h
+  [OK   ] benchmarks           200 marcas sobre 21 modelos de GPU
+  [OK   ] instancias           ninguna instancia encendida (no se está facturando nada)
+  [AVISO] claves-ssh           no hay ninguna clave SSH registrada; hará falta una antes de alquilar (POST /api/v0/ssh/ o https://cloud.vast.ai/manage-keys/)
+  [OK   ] catalogo-sin-clave   responde sin token (4 ofertas)
+
+  El token funciona. 2 aviso(s): lee arriba antes de lanzar.
+```
+
+Las cifras del catálogo bailan de una ejecución a otra: es un marketplace vivo y
+la oferta cambia por minutos. Lo que importa es el `[OK]`, no el número.
+
+**No alquila nada ni gasta un céntimo.** Todas las llamadas son de lectura salvo
+la del catálogo, que es un `POST` porque así busca la API de Vast.ai; lo único
+que alquila una máquina es un `PUT` a `/asks/`, y ese no se hace aquí.
+
+Qué mira cada prueba:
+
+| prueba | para qué |
+|---|---|
+| `identidad` | que la clave entra: `GET /api/v0/users/current/` |
+| `saldo` | crédito de la cuenta; **aviso**, no fallo, porque una clave válida en una cuenta sin fondos autentica bien y sólo falla al alquilar |
+| `catalogo` | `POST /api/v0/bundles/`, la búsqueda del marketplace, y que traiga `dlperf` |
+| `benchmarks` | `GET /api/v0/benchmarks/`, las puntuaciones ya medidas por Vast.ai |
+| `instancias` | qué hay encendido **ahora mismo** y cuánto cuesta la hora |
+| `claves-ssh` | claves registradas; hace falta una antes de alquilar |
+| `catalogo-sin-clave` | que el catálogo siga respondiendo sin token |
+
+Sale con **0** si todo lo imprescindible pasa y con **1** si algo falla, así que
+sirve tal cual en un script. Los avisos no hacen fallar: el token es correcto, lo
+que falta es dinero o una clave SSH.
+
+Con `--json` la salida es JSON, para encadenarla con otra cosa:
+
+```bash
+python scripts/vast_check.py --json
+```
+
+Dos cosas útiles cuando algo va mal:
+
+- **Si falla todo menos `catalogo-sin-clave`, el problema es el token, no la
+  red.** Esa prueba llama al mismo servidor sin autenticar: si ella pasa y las
+  demás dan 401, la conexión está bien y lo que está mal es la clave.
+- **Vast.ai permite claves con permisos recortados.** Una de sólo lectura pasa
+  `identidad` y `catalogo` pero no podrá alquilar, y eso no se ve hasta el
+  momento de crear la instancia. Si la vas a usar para lanzar, créala con
+  permiso de escritura sobre instancias.
+
 ## Coste
 
 Se factura **por segundo mientras el droplet exista**, no por uso. Apagarlo no
