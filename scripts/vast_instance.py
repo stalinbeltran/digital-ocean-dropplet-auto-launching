@@ -975,10 +975,23 @@ def escribir_tabla(bench: dict) -> Path | None:
     return path
 
 
+def limpiar_texto(valor: str) -> str:
+    """Quita de un texto de la API lo que no sea ASCII imprimible.
+
+    Vast.ai devuelve los nombres de CPU con la codificacion rota: el simbolo (R)
+    de "Xeon(R) E5-2630 v4" llega como un byte invalido que json lo convierte en
+    U+FFFD. Eso acabaria escrito en los ficheros de results/, que son el dato que
+    se commitea y se compara dentro de seis meses; un caracter de reemplazo ahi
+    ensucia diffs y busquedas para siempre. Se limpia al guardar, no al mostrar.
+    """
+    limpio = "".join(c if 32 <= ord(c) < 127 else " " for c in valor)
+    return " ".join(limpio.split())
+
+
 def resumen_maquina(oferta: dict) -> dict:
     return {
         "vcpu": float(oferta.get("cpu_cores_effective") or 0),
-        "cpu": (oferta.get("cpu_name") or "?").strip(),
+        "cpu": limpiar_texto(oferta.get("cpu_name") or "?"),
         "ram_gb": round((oferta.get("cpu_ram") or 0) / 1024, 1),
         "ghz": oferta.get("cpu_ghz"),
         "gpu": oferta.get("gpu_name"),

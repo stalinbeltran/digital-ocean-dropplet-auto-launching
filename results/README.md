@@ -24,6 +24,20 @@ El reporte de `foveal-cpu` trae además `load_avg_before`: **un benchmark de CPU
 miente bajo carga**, así que la carga del sistema antes de empezar va guardada en
 vez de darla por cero.
 
+## Una máquina del marketplace la comparte gente
+
+Mira siempre `reporte.load_avg_before` antes de creerte una fila. En la primera
+medida real (2026-08-20, 10 vCPU en Corea) valía **1,02** *antes de arrancar el
+benchmark*: eso no es ruido nuestro, es que en esa máquina había alguien más
+trabajando. Vast.ai alquila porciones de ordenadores compartidos, así que el
+número mide "lo que rinde esa porción con los vecinos que tuviera ese día", no
+el hardware en el vacío.
+
+Consecuencias prácticas: **repite la medida antes de sacar conclusiones de una
+diferencia pequeña**, y desconfía de una fila cuyo `load_avg_before` sea mucho
+mayor que el de sus vecinas. `reliability` del host ayuda a elegir, pero no
+predice la carga del momento.
+
 ## Dos medidas sólo se comparan entre sí si coinciden en el dato
 
 Los reportes de foveal-vision llevan `window_dataset` justamente por eso. Un
