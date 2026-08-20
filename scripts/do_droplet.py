@@ -16,6 +16,8 @@ import os
 import socket
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -2184,6 +2186,88 @@ def cmd_push_do_token(args: argparse.Namespace) -> None:
     log("  bash -lc 'python3 scripts/do_droplet.py list'")
 
 
+EXCLUIDOS_POR_DEFECTO = (
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+)
+
+
+def cmd_push_dir(args: argparse.Namespace) -> None:
+    """Copia un directorio de esta máquina al droplet, sin pasar por git.
+
+    Existe porque hay cosas que un `git clone` no trae y sin las cuales la
+    máquina no puede trabajar: en este repo, el dataset del benchmark
+    (`data/sources/dirty-1000-80px`, unos 30 MB) está gitignoreado, así que el
+    droplet de control clona foveal-vision y se queda sin el dato con el que
+    tenía que medir. El síntoma llega tarde y despistado: el barrido alquila una
+    máquina, la paga, y el benchmark se para diciendo "falta la fuente".
+
+    Va por SSH y por stdin, como el resto: nada aparece en el `ps` del destino.
+    El tar se arma con `tarfile` en vez de llamar a `tar` para que el comando sea
+    el mismo desde Windows que desde Linux.
+
+    Lo que se sube queda con dueño DO_DEV_USER, que es quien luego lo usa; si se
+    dejara de root, el benchmark fallaría por permisos a mitad del alquiler.
+    """
+    origen = Path(args.origen).expanduser()
+    if not origen.is_dir():
+        die(f"No existe el directorio {origen}")
+    destino = (args.destino or f"src/{origen.name}").strip().strip("/")
+    if not destino:
+        die("El destino no puede estar vacío: es una ruta dentro del home.")
+
+    excluidos = set(EXCLUIDOS_POR_DEFECTO) | {
+        e.strip() for bruto in args.exclude for e in bruto.split(",") if e.strip()
+    }
+    dev_user = cfg("DO_DEV_USER")
+    droplet, ip, port = resolve_target(args.name or "", args.port or 0)
+
+    def filtro(info: tarfile.TarInfo) -> "tarfile.TarInfo | None":
+        partes = Path(info.name).parts[1:]  # sin el nombre de la raíz del tar
+        return None if any(p in excluidos for p in partes) else info
+
+    tmp = Path(tempfile.mkdtemp(prefix="do-push-dir-")) / "payload.tar.gz"
+    log(f"Empaquetando {origen} (sin {', '.join(sorted(excluidos))})…")
+    with tarfile.open(tmp, "w:gz") as tar:
+        tar.add(str(origen), arcname="contenido", filter=filtro)
+    megas = tmp.stat().st_size / 1e6
+    log(f"  {megas:.1f} MB. Subiendo a '{droplet['name']}' ({ip}:{port}) → ~{dev_user}/{destino}")
+
+    with tmp.open("rb") as fh:
+        proc = subprocess.run(
+            ssh_command(ip, port, user="root") + ["cat > /tmp/push-dir.tar.gz"],
+            stdin=fh,
+        )
+    if proc.returncode != 0:
+        die("No pude subir el paquete. La salida de ssh está justo arriba.")
+
+    script = "\n".join(
+        [
+            "set -eu",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+            f"DEST=\"$H/{destino}\"",
+            'install -d -o "$DEV_USER" -g "$DEV_USER" "$(dirname "$DEST")"',
+            'install -d -o "$DEV_USER" -g "$DEV_USER" "$DEST"',
+            # --strip-components quita el "contenido/" del tar, así que lo que
+            # cae en DEST es el contenido del directorio y no un nivel de más.
+            'tar -xzf /tmp/push-dir.tar.gz -C "$DEST" --strip-components=1',
+            'chown -R "$DEV_USER:$DEV_USER" "$DEST"',
+            "rm -f /tmp/push-dir.tar.gz",
+            'echo "  $(find "$DEST" -type f | wc -l) ficheros en $DEST"',
+        ]
+    )
+    if run_remote_script(ip, port, script) != 0:
+        die("El paquete subió pero no se pudo desempaquetar.")
+    log("Listo.")
+
+
 def cmd_authorize_key(args: argparse.Namespace) -> None:
     """DENTRO de una máquina: autoriza una clave pública para entrar por SSH.
 
@@ -2482,6 +2566,30 @@ def main() -> None:
         "para mandar un token de sólo lectura guardado aparte, p. ej. DO_TOKEN_RO",
     )
     p.set_defaults(func=cmd_push_do_token)
+
+    p = sub.add_parser(
+        "push-dir",
+        help="copia un directorio local al droplet, para lo que git no trae "
+        "(datasets gitignoreados, ficheros grandes)",
+    )
+    p.add_argument("origen", help="directorio de ESTA máquina")
+    p.add_argument(
+        "destino",
+        nargs="?",
+        help="ruta dentro del home del usuario de desarrollo "
+        "(por defecto src/<nombre del directorio>)",
+    )
+    p.add_argument("--name", help="droplet, si no es el de .env")
+    p.add_argument("--port", type=int)
+    p.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="NOMBRES",
+        help="nombres a excluir, separados por coma. Se suman a los de siempre "
+        "(.git, .venv, node_modules, __pycache__)",
+    )
+    p.set_defaults(func=cmd_push_dir)
 
     p = sub.add_parser(
         "authorize-key",
