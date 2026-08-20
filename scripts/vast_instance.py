@@ -703,6 +703,21 @@ def cmd_destroy(args: argparse.Namespace) -> None:
 CAMPOS_BENCH = ("descripcion", "envia", "install", "run", "recoge")
 
 
+def registro_datasets():
+    """El modulo `dataset.py`, importado solo si algun benchmark pide datasets.
+
+    Esto SI se importa, a diferencia de do_droplet.py, y la diferencia importa:
+    `dataset.py` no es codigo de otro proveedor, es el registro de datos que
+    comparten todos. Viaja siempre con este fichero en el mismo repo, asi que no
+    rompe la regla de "cada script corre suelto"; lo que romperia esa regla es
+    depender del lanzador de DigitalOcean para hablar con Vast.ai.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import dataset  # noqa: E402  -- import tardio a proposito
+
+    return dataset
+
+
 def load_bench(name: str) -> dict:
     path = BENCH_DIR / f"{name}.json"
     if not path.exists():
@@ -765,18 +780,42 @@ def ruta_origen(origen: str) -> Path:
     return p if p.is_absolute() else (ROOT / p)
 
 
-def construir_tar(envios: list[dict]) -> Path:
+def datasets_del_bench(bench: dict) -> list[tuple[str, Path, str]]:
+    """(nombre, tar.gz local ya verificado, destino relativo) de cada dataset.
+
+    Se resuelven ANTES de alquilar nada. Si falta el dato, el barrido tiene que
+    morir gratis: descubrirlo con la maquina ya encendida cuesta dinero y ademas
+    deja la instancia viva mientras se depura.
+    """
+    nombres = bench.get("datasets") or []
+    if not nombres:
+        return []
+    ds_mod = registro_datasets()
+    salida = []
+    for nombre in nombres:
+        ds = ds_mod.load_dataset(nombre)
+        log(f"  dataset '{nombre}':")
+        blob = ds_mod.resolver_blob(ds)
+        ds_mod.verificar(ds, blob)
+        salida.append((nombre, blob, ds["destino"]))
+    return salida
+
+
+def construir_tar(envios: list[dict], datasets: list[tuple[str, Path, str]]) -> Path:
     """Empaqueta lo que hay que subir a la maquina alquilada.
 
     Se construye con `tarfile` en vez de llamar a `tar` para que esto funcione
     igual desde Windows, donde el barrido se depura antes de llevarlo al droplet.
 
     Va por SSH y no por `git clone` a proposito: clonar exigiria darle a un
-    ordenador de un desconocido un token de GitHub, y el dato del benchmark ni
-    siquiera esta en git. Lo que viaja es codigo y datos publicos, nada mas.
+    ordenador de un desconocido un token de GitHub. Los datasets viajan como su
+    tar.gz tal cual, sin volver a comprimirlos: ya vienen empaquetados y
+    verificados por `dataset.py`, y recomprimir solo gastaria tiempo.
     """
     tmp = Path(tempfile.mkdtemp(prefix="vast-bench-")) / "payload.tar.gz"
     with tarfile.open(tmp, "w:gz") as tar:
+        for nombre, blob, _destino in datasets:
+            tar.add(str(blob), arcname=f"_datasets/{nombre}.tar.gz")
         for envio in envios:
             origen = ruta_origen(envio["origen"])
             if not origen.exists():
@@ -832,7 +871,13 @@ def ssh_capture(host: str, port: int, script: str, timeout: int) -> tuple[int, s
     return proc.returncode, proc.stdout.decode("utf-8", errors="replace")
 
 
-def subir_payload(host: str, port: int, tar_path: Path, timeout: int) -> None:
+def subir_payload(
+    host: str,
+    port: int,
+    tar_path: Path,
+    datasets: list[tuple[str, Path, str]],
+    timeout: int,
+) -> None:
     with tar_path.open("rb") as fh:
         proc = subprocess.run(
             ssh_command(host, port) + ["cat > /root/payload.tar.gz"],
@@ -841,12 +886,25 @@ def subir_payload(host: str, port: int, tar_path: Path, timeout: int) -> None:
         )
     if proc.returncode != 0:
         raise RuntimeError("no pude subir el payload a la instancia")
-    if ssh_script(
-        host,
-        port,
-        "set -eu\nmkdir -p /root/bench\ntar -xzf /root/payload.tar.gz -C /root/bench\n",
-        timeout,
-    ) != 0:
+
+    lineas = [
+        "set -eu",
+        "mkdir -p /root/bench",
+        "tar -xzf /root/payload.tar.gz -C /root/bench",
+    ]
+    for nombre, _blob, destino in datasets:
+        # El destino viene del descriptor del dataset y es relativo a la raiz de
+        # trabajo, que en la instancia es /root/bench: asi el repo y su dato
+        # quedan colocados como los espera el proyecto, sin que el benchmark
+        # tenga que saber que esta en una maquina alquilada.
+        lineas += [
+            f'D="/root/bench/{destino}"',
+            'mkdir -p "$D"',
+            f'tar -xzf "/root/bench/_datasets/{nombre}.tar.gz" -C "$D"',
+            f'echo "  dataset {nombre}: $(find "$D" -type f | wc -l) ficheros"',
+        ]
+    lineas.append('rm -rf /root/bench/_datasets /root/payload.tar.gz')
+    if ssh_script(host, port, "\n".join(lineas) + "\n", timeout) != 0:
         raise RuntimeError("el payload subio pero no se pudo desempaquetar")
 
 
@@ -1061,7 +1119,13 @@ def resumen_maquina(oferta: dict) -> dict:
 # ------------------------------------------------------------ medir de verdad
 
 
-def medir_en_oferta(bench: dict, oferta: dict, tar_path: Path, etiqueta: str) -> dict:
+def medir_en_oferta(
+    bench: dict,
+    oferta: dict,
+    tar_path: Path,
+    datasets: list,
+    etiqueta: str,
+) -> dict:
     """Alquila, mide y destruye. La destruccion va en `finally` y no es opcional.
 
     Es el objetivo 2 del proyecto: todo camino de creacion tiene su camino de
@@ -1093,7 +1157,7 @@ def medir_en_oferta(bench: dict, oferta: dict, tar_path: Path, etiqueta: str) ->
         log(f"  SSH listo en {host}:{port}. Subiendo {tar_path.stat().st_size / 1e6:.1f} MB...")
 
         inicio_subida = time.time()
-        subir_payload(host, port, tar_path, timeout=600)
+        subir_payload(host, port, tar_path, datasets, timeout=600)
         subida = time.time() - inicio_subida
 
         reporte, tiempos = correr_bench(host, port, bench, timeout)
@@ -1148,7 +1212,8 @@ def cmd_bench(args: argparse.Namespace) -> None:
         log("\n--dry-run: no se alquila nada.")
         return
 
-    tar_path = construir_tar(bench["envia"])
+    datasets = datasets_del_bench(bench)
+    tar_path = construir_tar(bench["envia"], datasets)
     resultado = medir_en_oferta(
         bench, oferta, tar_path, f"bench-{args.cpus or 'x'}vcpu"
     )
@@ -1207,13 +1272,16 @@ def cmd_sweep(args: argparse.Namespace) -> None:
         log("Cancelado. No se ha alquilado nada.")
         return
 
-    tar_path = construir_tar(bench["envia"])
+    datasets = datasets_del_bench(bench)
+    tar_path = construir_tar(bench["envia"], datasets)
     log(f"Payload listo: {tar_path.stat().st_size / 1e6:.1f} MB")
 
     hechos, fallados = [], []
     for n, oferta in elegidas:
         try:
-            resultado = medir_en_oferta(bench, oferta, tar_path, f"sweep-{n}vcpu")
+            resultado = medir_en_oferta(
+                bench, oferta, tar_path, datasets, f"sweep-{n}vcpu"
+            )
         except (ApiError, RuntimeError, subprocess.TimeoutExpired) as exc:
             log(f"  FALLO en el nivel {n} vCPU: {exc}")
             fallados.append((n, str(exc)))

@@ -1,0 +1,21 @@
+{
+  "descripcion": "Mil imagenes de parrafos 'sucios' renderizados con Chromium y reducidas a 80x60, con sus mascaras y etiquetas. Es el dato REAL del benchmark de foveal-vision.",
+  "destino": "foveal-vision/data/sources/dirty-1000-80px",
+  "sha256": "a48f05415b7a2016cc00e8be66627dfbc8dbe6b52cbd58874b38c24048547a41",
+  "bytes": 8601334,
+  "ficheros": 2002,
+  "fuentes": [
+    {
+      "tipo": "repo",
+      "ruta": "datasets/blobs/dirty-1000-80px.tar.gz",
+      "nota": "Commiteado aqui. Llega con git clone a cualquier proveedor, sin red ni credenciales. Vale porque son pocos MB y el dato esta CONGELADO: es un benchmark, cambiarlo invalida las medidas anteriores."
+    },
+    {
+      "tipo": "local",
+      "ruta": "$BENCH_SRC/foveal-vision/data/sources/dirty-1000-80px",
+      "nota": "La copia de trabajo, gitignoreada en foveal-vision. Es de donde sale el blob con `dataset.py pack`."
+    }
+  ],
+  "regenerar": "Se genera en image-text-sample-generator (receta 'dirty', 1000 imagenes 640x480), se copia a foveal-vision/data/sources/dirty-1000 y se reduce con `.venv/bin/fv-resize --source local/dirty-1000 --name dirty-1000-80px --width 80`. Es lento (mil renderizados de Chromium): por eso existe este descriptor.",
+  "notas": "Cambiar este dataset mueve el numero del benchmark aunque la maquina sea la misma. Ya paso una vez: bench-synth-16 no se compara con bench-dirty1000-16. Si algun dia cambia, cambia tambien el nombre en vez de reutilizarlo."
+}

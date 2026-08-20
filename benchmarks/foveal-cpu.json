@@ -19,16 +19,15 @@
         "__pycache__",
         ".pytest_cache"
       ]
-    },
-    {
-      "origen": "$BENCH_SRC/foveal-vision/data/sources/dirty-1000-80px",
-      "destino": "foveal-vision/data/sources/dirty-1000-80px"
     }
+  ],
+  "datasets": [
+    "dirty-1000-80px"
   ],
   "install": "cd foveal-vision\napt-get update -qq\nDEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3-venv python3-pip >/dev/null\npython3 -m venv .venv\n.venv/bin/pip install -q --upgrade pip\n.venv/bin/pip install -q numpy pillow pyyaml\n.venv/bin/pip install -q torch --index-url https://download.pytorch.org/whl/cpu\n.venv/bin/pip install -q -e .\n.venv/bin/python -c \"import torch, numpy; print('torch', torch.__version__, 'numpy', numpy.__version__)\"",
   "run": "cd foveal-vision\nrm -f /root/reporte.json\n.venv/bin/python scripts/bench_speed.py --repeats 3 --device cpu --out /root/reporte.json",
   "recoge": "/root/reporte.json",
-  "notas": "Se excluye data/ entera y luego se manda SOLO la fuente que hace falta. Mandar data/window-datasets seria peor que no mandarlo: bench_speed.py se niega a arrancar si encuentra el directorio del dataset sin su windows.npz ('dataset a medias'), y en git solo estan el manifest y el split. Excluido tambien web/ (node_modules) y runs/, que no pintan nada en una maquina de medir y son cientos de MB. torch se instala del indice de CPU: el de por defecto arrastra las ruedas de CUDA, unos 2,5 GB que aqui no se usan para nada. $BENCH_SRC es ~/src por defecto (donde provision deja los repos); se cambia para probar el barrido desde la laptop.",
+  "notas": "Se excluye data/ entera del envio y el dataset llega por el registro de datasets/, verificado por sha256 y colocado en su destino dentro de la maquina. Mandar data/window-datasets seria peor que no mandarlo: bench_speed.py se niega a arrancar si encuentra el directorio del dataset sin su windows.npz ('dataset a medias'), y en git solo estan el manifest y el split. Excluido tambien web/ (node_modules) y runs/, que no pintan nada en una maquina de medir y son cientos de MB. torch se instala del indice de CPU: el de por defecto arrastra las ruedas de CUDA, unos 2,5 GB que aqui no se usan para nada.",
   "referencia": {
     "nombre": "droplet DO s-2vcpu-4gb",
     "valor": 61.762,
