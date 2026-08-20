@@ -1221,6 +1221,98 @@ Dos cosas útiles cuando algo va mal:
   momento de crear la instancia. Si la vas a usar para lanzar, créala con
   permiso de escritura sobre instancias.
 
+## Medir velocidad: un barrido de máquinas en Vast.ai
+
+El objetivo es responder a *cuánto acelera mi entrenamiento si le doy más CPU*,
+con números medidos y no con intuiciones. El montaje son dos piezas y cada una
+está donde tiene sentido:
+
+- **La máquina de control es un droplet de DigitalOcean.** Ahí corre Claude, ahí
+  vive el dataset y desde ahí se dispara el barrido. Es de larga vida.
+- **Las máquinas de medir se alquilan en Vast.ai**, viven los minutos que dura la
+  medida y se destruyen solas. Salen entre 0,05 y 0,10 $/h, así que un barrido de
+  cinco niveles cuesta **céntimos**.
+
+### Paso 1 — el droplet de control
+
+```powershell
+python scripts/do_droplet.py launch bench-control `
+  --make-launcher `
+  --push-env VAST_AI_API_TOKEN `
+  --repo stalinbeltran/foveal-vision
+```
+
+`--push-env VAST_AI_API_TOKEN` es lo que hace que el droplet pueda alquilar en
+Vast; sin él, `vast_instance.py` allí dentro dirá que falta el token. Los repos
+quedan en `~/src`.
+
+### Paso 2 — subirle lo que git no trae
+
+El dataset del benchmark (`data/sources/dirty-1000-80px`, unos 30 MB) está
+gitignoreado, así que el clon llega sin él y el benchmark se pararía **después**
+de haber alquilado y pagado una máquina:
+
+```powershell
+python scripts/do_droplet.py push-dir `
+  c:\Desarrollo\foveal-vision\data\sources\dirty-1000-80px `
+  src/foveal-vision/data/sources/dirty-1000-80px `
+  --name bench-control
+```
+
+### Paso 3 — dentro del droplet, darle una clave en Vast
+
+**El token deja alquilar, pero no entrar.** Es la misma trampa que con
+`--make-launcher` en DigitalOcean: sin una clave propia registrada *antes*, la
+máquina se alquila, factura y no te deja pasar. Un comando, dentro del droplet:
+
+```bash
+cd ~/src/digital-ocean-dropplet-auto-launching
+python3 scripts/vast_instance.py register-key
+```
+
+Genera el par si no lo hay y sube la pública. Es idempotente.
+
+### Paso 4 — el barrido
+
+```bash
+python3 scripts/vast_instance.py sweep --bench foveal-cpu --cpus 2,4,8,16,32
+```
+
+Por cada nivel: busca la oferta más barata, la alquila, sube el código y el
+dataset, instala, mide, **recoge el JSON y destruye la máquina**. Antes de
+empezar enseña qué va a alquilar y cuánto puede costar como mucho, y pregunta.
+
+Los resultados se guardan en [results/](results/) y se commitean.
+
+### Antes de gastar nada
+
+```bash
+python3 scripts/vast_instance.py offers --cpus 8          # qué hay y a cuánto
+python3 scripts/vast_instance.py sweep --bench foveal-cpu --dry-run
+python3 scripts/vast_instance.py list                     # qué está vivo AHORA
+```
+
+`sizes`/`offers` y `--dry-run` son gratis. `list` es el que hay que mirar si algo
+se cortó a mitad: una instancia viva factura aunque el proceso que la lanzó ya no
+exista.
+
+```bash
+python3 scripts/vast_instance.py destroy --all --yes      # el botón de pánico
+```
+
+### Tres cosas que conviene saber antes de tocarlo
+
+- **Se alquilan máquinas CON GPU y se usa sólo su CPU.** No es un descuido: en
+  Vast.ai las ofertas sin GPU **no son máquinas**, son ofertas de disco
+  (`resource_type: "disk"`, `cpu_ram: 0`, 256 núcleos por 0,01 $/h). El nivel de
+  CPU sale de `cpu_cores_effective`, que es lo que toca a la porción alquilada.
+- **Ningún secreto viaja a una máquina de Vast.** Son ordenadores de
+  desconocidos alquilados por minutos. Por eso el código va como un tar por SSH y
+  no por `git clone`: clonar exigiría darles un token de GitHub.
+- **Un benchmark es un fichero, no código.** [benchmarks/foveal-cpu.json](benchmarks/foveal-cpu.json)
+  dice qué enviar, cómo instalar, qué ejecutar y de dónde recoger el número.
+  Medir otra cosa es escribir otro JSON, igual que con `services/` y `types/`.
+
 ## Coste
 
 Se factura **por segundo mientras el droplet exista**, no por uso. Apagarlo no

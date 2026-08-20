@@ -42,6 +42,15 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 10. **Aprendizajes caros, escritos.** Lo que nos ha mordido (el carácter no ASCII que silencia
    cloud-init, el 403 del instalador nativo, el sshd por socket) queda anotado aquí y en `docs/`
    para no volver a pagarlo.
+11. **Medir hardware con números, y guardarlos en git.** La pregunta es *cuánto acelera un
+   entrenamiento si le doy más CPU*, y se responde alquilando varias máquinas, corriendo en
+   todas el mismo benchmark congelado y comparando. El resultado no es una conclusión en una
+   conversación: es un JSON commiteado en `results/` con la máquina, el coste y el reporte
+   entero. Lo que no queda en git no se puede volver a comparar dentro de seis meses.
+12. **Un proveedor por lanzador, un objetivo compartido.** DigitalOcean aloja lo de larga vida
+   (la máquina de control, los servicios); Vast.ai las máquinas de medir, que viven minutos.
+   Los dos scripts no comparten código a propósito, pero sí las reglas: catálogo antes de
+   gastar, freno de precio, `list` que enseña lo vivo y destrucción en el camino de fallo.
 
 ## Estructura
 
@@ -68,6 +77,17 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
   vivas y claves SSH. Sale 0/1 para poder encadenarlo. Es el primer paso del trabajo
   de comparar GPUs entre proveedores; no toca DigitalOcean ni comparte código con
   `do_droplet.py` (repite `load_env` a propósito: cada script tiene que correr suelto).
+- [scripts/vast_instance.py](scripts/vast_instance.py) — el lanzador de Vast.ai:
+  `offers`, `register-key`, `launch`, `list`, `ssh`, `destroy`, `bench`, `sweep`.
+  Mismo ciclo que `do_droplet.py` contra otra API, y **sin compartir código con él**:
+  repite `load_env`, `api()` y los ayudantes de SSH a propósito, para que cada script
+  corra suelto en una máquina recién nacida. `sweep` es el comando que justifica el
+  fichero: alquila una máquina por nivel de CPU, mide, guarda y destruye.
+- [benchmarks/](benchmarks/) — un JSON por benchmark (`envia`, `install`, `run`,
+  `recoge`, `metrica`). **Dato, no código**, igual que `services/` y `types/`: medir
+  otra cosa es escribir otro fichero, no tocar `vast_instance.py`.
+- [results/](results/) — lo medido, commiteado. Un JSON por máquina y una `tabla.md`
+  que **se regenera entera** a partir de ellos; no se edita a mano.
 - [gpu_training_services.md](gpu_training_services.md) — comparativa de proveedores de
   GPU por **precio y por API**, con tres tablas (capacidades, variedad de GPU/vCPU, y
   el ciclo crear-esperar-medir-destruir endpoint por endpoint). Léelo antes de añadir
@@ -366,6 +386,40 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
 - **Rate limit de ~3 req/s por endpoint**, con un `429` que dice `API requests too frequent
   endpoint threshold=3.0`. Sin reintento, correr las pruebas dos veces seguidas da un falso
   fallo.
+- **`num_gpus: {eq: 0}` NO devuelve máquinas sin GPU: devuelve ofertas de DISCO.** Medido el
+  2026-08-20: las 64 que salen traen `resource_type: "disk"`, `cpu_ram: 0` y hasta 256
+  núcleos por 0,0103 $/h. Es demasiado bueno para ser verdad porque no es una máquina, es
+  almacenamiento, y alquilar una no da nada donde correr. El catálogo (`POST /bundles/`)
+  mezcla los dos tipos y **la única señal fiable es `resource_type`**, que ni siquiera es un
+  campo por el que se pueda filtrar (`{"resource_type": {"eq": "cpu"}}` da 400). Por eso
+  `buscar_ofertas()` filtra en cliente por `resource_type == "gpu"`. **Consecuencia de
+  diseño: para medir CPU se alquilan máquinas CON GPU y se usa sólo su vCPU.** No es un
+  descuido; en Vast.ai no hay otra forma. Mismo patrón que el `/benchmarks/` de arriba:
+  la respuesta no se parece a lo que uno esperaría, y el error es silencioso y creíble.
+- **El nivel de CPU es `cpu_cores_effective`, no `cpu_cores`.** El segundo son los núcleos
+  del host entero; el primero, los que tocan a la porción alquilada. Medir contra `cpu_cores`
+  daría cinco máquinas "distintas" que en realidad reparten el mismo procesador.
+- **Un barrido tiene que acotar el nivel por arriba, no sólo por abajo.** Con
+  `cpu_cores_effective >= n` la oferta más barata suele tener muchos más núcleos de los
+  pedidos: pedir 4 devolvía una de 12. Tres niveles seguidos acababan en máquinas casi
+  iguales y el barrido medía tres veces lo mismo **sin decirlo**, que es peor que fallar.
+  De ahí el rango `[n, 2n)`. La API acepta dos operadores en el mismo filtro
+  (`{"gte": n, "lt": 2n}`), comprobado.
+- **A una máquina de Vast no se le da ningún secreto.** No es un droplet tuyo: es el
+  ordenador de un desconocido alquilado por minutos, con acceso de root del host a todo lo
+  que haya dentro del contenedor. Por eso el código y el dataset viajan como un tar por SSH
+  y **no** por `git clone`, que exigiría mandarle un token de GitHub. El objetivo 5 aquí no
+  es "nada en `user_data`", es "nada que no sea público, y punto".
+- **El catálogo corta en 64 ofertas por consulta** aunque pidas `limit: 1000`. Para barrer
+  el mercado hay que trocear la búsqueda por rangos, que es justo lo que hace el barrido al
+  ir nivel por nivel.
+- **La oferta puede desaparecer entre buscarla y comprarla.** Es un marketplace: `PUT
+  /asks/{id}/` contesta 404 o 410 con `no_such_ask` si otro se la llevó primero. No es un
+  fallo del programa, y por eso `api()` lo traduce en vez de soltar el JSON.
+- **El dato del benchmark no está en git.** `data/sources/dirty-1000-80px` (30 MB) está
+  gitignoreado en foveal-vision, así que la máquina de control lo recibe con
+  `do_droplet.py push-dir`. Sin ese paso el barrido alquila una máquina, la paga, y el
+  benchmark se para diciendo "falta la fuente": el fallo cuesta dinero y llega tarde.
 
 ## Convenciones
 
