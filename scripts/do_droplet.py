@@ -1896,20 +1896,23 @@ def cmd_provision(args: argparse.Namespace) -> None:
 PROVISION_MARK = "instalado por do_droplet.py provision"
 
 
-def dentro_del_droplet() -> Path:
-    """Comprueba que corremos en el droplet y devuelve el ~/src a actualizar.
+def dentro_del_droplet(comando: str = "update") -> Path:
+    """Comprueba que corremos en el droplet y devuelve el ~/src sobre el que actuar.
 
-    `update` es el único comando que actúa sobre la máquina donde se ejecuta en
-    vez de sobre la API: se lanza dentro del droplet, por SSH o desde el bot.
-    Ejecutarlo por error en la laptop haría `git pull` en repos que estás
-    tocando a mano y reiniciaría servicios; de ahí la comprobación.
+    `update` e `install-executors` son los comandos que actúan sobre la máquina
+    donde se ejecutan en vez de sobre la API: se lanzan dentro del droplet, por
+    SSH o desde el bot. Ejecutarlos por error en la laptop haría `git pull` en
+    repos que estás tocando a mano y reiniciaría servicios; de ahí la
+    comprobación, y de ahí que el mensaje nombre al comando de verdad: uno que
+    nombre a otro manda a la persona a copiar la orden equivocada.
     """
     if sys.platform != "linux" or not Path("/var/lib/cloud").exists():
         die(
-            "`update` se ejecuta DENTRO del droplet, no en la máquina lanzadora.\n"
+            f"`{comando}` se ejecuta DENTRO del droplet, no en la máquina "
+            "lanzadora.\n"
             "  Desde aquí:  python scripts/do_droplet.py ssh mini --cmd \\\n"
             "    'cd ~/src/digital-ocean-dropplet-auto-launching && "
-            "python3 scripts/do_droplet.py update'"
+            f"python3 scripts/do_droplet.py {comando}'"
         )
 
     candidatos = [Path.home() / "src"]
@@ -2184,6 +2187,141 @@ def cmd_push_do_token(args: argparse.Namespace) -> None:
         die("Falló el envío del token. La salida de ssh está justo arriba.")
     log("\nListo. En esa máquina, para comprobarlo sin sacar el token a pantalla:")
     log("  bash -lc 'python3 scripts/do_droplet.py list'")
+
+
+def cmd_install_executors(args: argparse.Namespace) -> None:
+    """DENTRO de una máquina: reescribe los ficheros que declara un servicio.
+
+    Existe por un hueco concreto del ciclo: `update` hace `git pull` y reinicia,
+    así que trae el CÓDIGO nuevo, pero los ficheros del bloque `files` de un
+    descriptor los escribe `provision`, que se lanza desde la laptop. Resultado:
+    añadir un ejecutor nuevo obligaba a sacar el portátil, que es justo lo que la
+    máquina de control existe para evitar.
+
+    Con esto, desde el móvil basta con `actualizar` (trae el descriptor nuevo por
+    git) y luego esto (lo aplica). No toca el `.env` del servicio: los secretos
+    siguen viniendo sólo de la máquina que los tiene, que es lo correcto.
+    """
+    base = dentro_del_droplet("install-executors")
+    servicios = selected_services(args.service)
+    if not servicios:
+        die(
+            "Dime qué servicio aplicar: --service telegram-launcher\n"
+            "  (o pon DO_SERVICES en el .env de esta máquina)"
+        )
+
+    escritos, reiniciar = 0, []
+    for svc in servicios:
+        destino = base / svc["dir"]
+        if not destino.is_dir():
+            log(f"  {svc['name']}: no existe {destino}, me lo salto.")
+            continue
+        if not svc["files"]:
+            log(f"  {svc['name']}: no declara ningún fichero.")
+            continue
+        dueno = owner_of(destino)
+        for ruta, contenido in svc["files"].items():
+            if ruta.startswith("/") or ".." in ruta:
+                die(f"{svc['name']}: la ruta '{ruta}' tiene que ser relativa al repo.")
+            texto = (
+                contenido
+                if isinstance(contenido, str)
+                else json.dumps(contenido, indent=2, ensure_ascii=False) + "\n"
+            )
+            path = destino / ruta
+            path.parent.mkdir(parents=True, exist_ok=True)
+            antes = path.read_text(encoding="utf-8") if path.exists() else None
+            if antes == texto:
+                log(f"  {svc['name']}: {ruta} ya estaba al día")
+                continue
+            path.write_text(texto, encoding="utf-8")
+            # Lo escribe root por SSH, pero quien lo lee es el servicio, que
+            # corre como el usuario de desarrollo. Sin el chown el bot arranca y
+            # no ve sus propios ejecutores.
+            run_local(["chown", f"{dueno}:{dueno}", str(path)], check=False)
+            log(f"  {svc['name']}: escrito {ruta}")
+            escritos += 1
+        if escritos and svc["name"] not in reiniciar:
+            reiniciar.append(svc["name"])
+
+    if not escritos:
+        log("Nada que cambiar.")
+        return
+    for unit in reiniciar:
+        log(f"  {reiniciar_unidad(unit, propia=unit == unidad_propia())}")
+
+
+def cmd_push_service_env(args: argparse.Namespace) -> None:
+    """Añade o rota variables en el `.env` de un servicio, sin borrar el resto.
+
+    Hermano de `push-do-token`, y por el mismo motivo: `provision` reescribe ese
+    fichero ENTERO, así que usarlo para añadir una variable borra del destino lo
+    que el emisor no tenga a mano. Aquí se sustituye línea a línea.
+
+    El puente de nombres es el de siempre: `TGL_VAST_AI_API_TOKEN` en el .env de
+    esta máquina llega como `VAST_AI_API_TOKEN` al del servicio. Así el secreto
+    vive en un único sitio -esta laptop- y sólo alcanza a la máquina a la que se
+    lo mandas, en vez de colarse en todos los droplets.
+    """
+    svc = load_service(args.service)
+    prefijo = svc["env_prefix"]
+    if not prefijo:
+        die(f"El servicio '{svc['name']}' no declara env_prefix: no hay puente de nombres.")
+
+    nombres = push_env_names(args.vars)
+    if not nombres:
+        die("Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN")
+
+    pares = []
+    for nombre in nombres:
+        # Se acepta escribir el nombre de destino (VAST_AI_API_TOKEN) o el de
+        # origen (TGL_VAST_AI_API_TOKEN): desde el móvil se recuerda mal cuál es.
+        destino = nombre[len(prefijo):] if nombre.startswith(prefijo) else nombre
+        valor = os.environ.get(prefijo + destino, "").strip()
+        if not valor:
+            die(
+                f"'{prefijo}{destino}' no tiene valor en esta máquina.\n"
+                f"  Ponlo en .env como {prefijo}{destino}=… (el .env está gitignoreado)."
+            )
+        pares.append((destino, valor))
+
+    droplet, ip, port = resolve_target(args.name or "", args.port or 0)
+    dev_user = cfg("DO_DEV_USER")
+    log(
+        f"Enviando {', '.join(n for n, _ in pares)} al .env de "
+        f"'{svc['name']}' en {droplet['name']} ({ip}:{port})."
+    )
+
+    lineas = [
+        "set -eu",
+        "umask 077",
+        f"DEV_USER={shq(dev_user)}",
+        'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+        f'F="$H/src/{svc["dir"]}/{svc["env_file"]}"',
+        '[ -f "$F" ] || { echo "no existe $F; aprovisiona el servicio antes" >&2; exit 1; }',
+        'T="$F.nuevo"',
+        'cp "$F" "$T"',
+    ]
+    for destino, valor in pares:
+        lineas += [
+            f'grep -v "^{destino}=" "$T" > "$T.tmp" || true',
+            f'mv "$T.tmp" "$T"',
+            f"cat >> \"$T\" <<'FIN_VAR'",
+            f"{destino}={valor}",
+            "FIN_VAR",
+        ]
+    lineas += [
+        'mv "$T" "$F"',
+        'chmod 600 "$F"',
+        'chown "$DEV_USER:$DEV_USER" "$F"',
+        'echo "  $F: $(grep -c . "$F") variables"',
+        f"systemctl restart {svc['name']}.service || true",
+        f'echo "  {svc["name"]}: $(systemctl is-active {svc["name"]}.service)"',
+    ]
+
+    if run_remote_script(ip, port, "\n".join(lineas)) != 0:
+        die("Falló el envío. La salida de ssh está justo arriba.")
+    log("Listo. El servicio se reinició para recogerlas.")
 
 
 EXCLUIDOS_POR_DEFECTO = (
@@ -2566,6 +2704,35 @@ def main() -> None:
         "para mandar un token de sólo lectura guardado aparte, p. ej. DO_TOKEN_RO",
     )
     p.set_defaults(func=cmd_push_do_token)
+
+    p = sub.add_parser(
+        "push-service-env",
+        help="añade o rota variables en el .env de un servicio sin borrar el "
+        "resto (a diferencia de provision, que lo reescribe entero)",
+    )
+    p.add_argument("service", help="nombre del descriptor en services/")
+    p.add_argument(
+        "vars",
+        nargs="+",
+        help="variables a enviar, separadas por coma. Se admite el nombre de "
+        "destino (VAST_AI_API_TOKEN) o el de origen (TGL_VAST_AI_API_TOKEN)",
+    )
+    p.add_argument("--name", help="droplet, si no es el de .env")
+    p.add_argument("--port", type=int)
+    p.set_defaults(func=cmd_push_service_env)
+
+    p = sub.add_parser(
+        "install-executors",
+        help="DENTRO de una máquina: aplica los ficheros que declara un "
+        "servicio (ejecutores del bot) sin tener que reaprovisionar",
+    )
+    p.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        help="servicio de services/ (repetible). Por defecto, DO_SERVICES",
+    )
+    p.set_defaults(func=cmd_install_executors)
 
     p = sub.add_parser(
         "push-dir",
