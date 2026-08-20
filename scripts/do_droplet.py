@@ -2332,6 +2332,86 @@ def cmd_push_service_env(args: argparse.Namespace) -> None:
     log("Listo. El servicio se reinició para recogerlas.")
 
 
+def cmd_push_secret(args: argparse.Namespace) -> None:
+    """Escribe variables en `~/.config/dev-secrets.env`, sin borrar las demás.
+
+    Hace falta porque el `.env` de un servicio y los secretos de la MÁQUINA son
+    dos sitios distintos, y la diferencia se descubre tarde. El coordinador pasa
+    su entorno a cada ejecutor (`runner.ts`: `{...process.env}`), así que una
+    variable del `.env` del bot alcanza al bot y a nadie más: entrando por SSH a
+    esa misma máquina no existe. Ya nos pasó con `DO_TOKEN` y un `register-key`
+    que fallaba con un "falta el token" incomprensible en una máquina donde el
+    token sí estaba.
+
+    Lo que se escribe aquí lo cargan las tres formas de usar la máquina -sesión
+    interactiva, shell de login y `ssh maquina 'comando'`- porque la línea que
+    lo lee va al principio de `.bashrc`.
+
+    Repetir el comando ROTA el valor: quita la línea anterior y pone la nueva.
+    """
+    nombres = push_env_names(args.vars)
+    if not nombres:
+        die("Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN")
+
+    pares = []
+    for nombre in nombres:
+        valor = os.environ.get(nombre, "").strip()
+        if not valor and args.prefix:
+            valor = os.environ.get(args.prefix + nombre, "").strip()
+        if not valor:
+            alt = f" ni '{args.prefix}{nombre}'" if args.prefix else ""
+            die(
+                f"'{nombre}'{alt} no tiene valor en esta máquina.\n"
+                "  Ponlo en .env (que está gitignoreado) antes de enviarlo."
+            )
+        pares.append((nombre, valor))
+
+    dev_user = cfg("DO_DEV_USER")
+    droplet, ip, port = resolve_target(args.name or "", args.port or 0)
+    log(
+        f"Enviando {', '.join(n for n, _ in pares)} a los secretos de "
+        f"'{droplet['name']}' ({ip}:{port})."
+    )
+
+    lineas = [
+        "set -eu",
+        "umask 077",
+        f"DEV_USER={shq(dev_user)}",
+        'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+        '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+        'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.config"',
+        'F="$H/.config/dev-secrets.env"',
+        'T="$F.nuevo"',
+        'if [ -f "$F" ]; then cp "$F" "$T"; else : > "$T"; fi',
+    ]
+    for nombre, valor in pares:
+        lineas += [
+            f'grep -v "^export {nombre}=" "$T" > "$T.tmp" || true',
+            'mv "$T.tmp" "$T"',
+            # Heredoc con el delimitador entrecomillado: nada de lo que haya en
+            # el valor se expande ni se interpreta, venga como venga.
+            "cat >> \"$T\" <<'FIN_VAR'",
+            f"export {nombre}={shq(valor)}",
+            "FIN_VAR",
+        ]
+    lineas += [
+        'mv "$T" "$F"',
+        'chmod 600 "$F"',
+        'chown "$DEV_USER:$DEV_USER" "$F"',
+        "",
+        *bloque_cargar_secretos(),
+        "",
+        'echo "  $F: $(grep -c ^export "$F") variables"',
+    ]
+
+    if run_remote_script(ip, port, "\n".join(lineas)) != 0:
+        die("Falló el envío. La salida de ssh está justo arriba.")
+    log("\nListo. Para comprobarlo sin sacar el valor a pantalla:")
+    log(f"  python scripts/do_droplet.py ssh {droplet['name']} --cmd \\")
+    log("    'cd ~/src/digital-ocean-dropplet-auto-launching && "
+        "python3 scripts/vast_instance.py list'")
+
+
 EXCLUIDOS_POR_DEFECTO = (
     ".git",
     ".venv",
@@ -2728,6 +2808,23 @@ def main() -> None:
     p.add_argument("--name", help="droplet, si no es el de .env")
     p.add_argument("--port", type=int)
     p.set_defaults(func=cmd_push_service_env)
+
+    p = sub.add_parser(
+        "push-secret",
+        help="escribe variables en los secretos de la máquina (dev-secrets.env) "
+        "sin borrar las demás. A diferencia del .env de un servicio, esto lo "
+        "ven también las sesiones SSH, no sólo el bot",
+    )
+    p.add_argument("vars", nargs="+", help="nombres de variables, separadas por coma")
+    p.add_argument(
+        "--prefix",
+        default="TGL_",
+        help="prefijo con el que buscarlas en tu .env si no están sin él "
+        "(por defecto TGL_, el del bot Lanzador)",
+    )
+    p.add_argument("--name", help="droplet, si no es el de .env")
+    p.add_argument("--port", type=int)
+    p.set_defaults(func=cmd_push_secret)
 
     p = sub.add_parser(
         "install-executors",

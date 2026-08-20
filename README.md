@@ -1398,6 +1398,21 @@ como `VAST_AI_API_TOKEN` al del bot. Sin esa variable, un `lanzar launch …
 --push-env VAST_AI_API_TOKEN` desde el móvil **crea el droplet igual y sólo
 avisa**: nace sin poder alquilar, y lo descubres ya en la máquina.
 
+**Un secreto tiene que ir a dos sitios, y por eso hay dos comandos.** El `.env`
+del servicio alcanza **sólo al bot** — el coordinador pasa su entorno a cada
+ejecutor, pero una sesión SSH en esa misma máquina no lo tiene. Nos pasó con
+`DO_TOKEN` y volvió a pasar con el de Vast: `vast list` funcionaba desde Telegram
+y fallaba con "falta el token" entrando por SSH.
+
+```powershell
+python scripts/do_droplet.py push-service-env telegram-launcher VAST_AI_API_TOKEN --name mini   # el bot
+python scripts/do_droplet.py push-secret VAST_AI_API_TOKEN --name mini                          # la máquina
+```
+
+`push-secret` escribe en `~/.config/dev-secrets.env`, que cargan las tres formas
+de usar la máquina: sesión interactiva, shell de login y `ssh maquina 'comando'`.
+Los dos conservan lo que ya hubiera y repetirlos rota el valor.
+
 ### Antes de gastar nada
 
 ```bash

@@ -372,6 +372,13 @@ Lo que hay que respetar:
   que mandar desde la laptop son los secretos, con `push-service-env` (que reescribe una
   línea) y no con `provision` (que reescribe el fichero entero y borra lo que el emisor
   no tenga a mano).
+- **Un secreto tiene DOS destinos en la misma máquina, y olvidar uno da un fallo que no
+  se entiende.** El `.env` del servicio lo ve sólo el bot (el coordinador pasa su entorno
+  a cada ejecutor); `~/.config/dev-secrets.env` lo ven además las sesiones SSH, porque la
+  línea que lo carga va al principio de `.bashrc`. Ya mordió con `DO_TOKEN` y volvió a
+  morder con el de Vast el 2026-08-20: `vast list` funcionaba desde Telegram y fallaba
+  con "falta el token" entrando por SSH a esa misma máquina. Son `push-service-env` y
+  `push-secret`, y para un token que use tanto el bot como tú, **hay que mandar los dos**.
 - **`--push-env` lee el entorno de la máquina QUE LANZA, no el tuyo.** Desde el mini, eso
   es el `.env` del bot con el prefijo `TGL_` quitado. Si falta la variable, `launch` crea
   el droplet igual y sólo avisa: nace sin poder alquilar y se descubre tarde, ya dentro.
