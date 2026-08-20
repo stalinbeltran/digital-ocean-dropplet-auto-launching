@@ -1,0 +1,68 @@
+{
+  "format_version": 2,
+  "benchmark": "foveal-cpu",
+  "proveedor": "vast.ai",
+  "medido": "2026-08-20T23:16:42+00:00",
+  "instancia": 48250280,
+  "oferta": 46609727,
+  "maquina": {
+    "vcpu": 10.0,
+    "cpu": "Xeon E5-2630 v4",
+    "ram_gb": 7.8,
+    "ghz": 3.1,
+    "gpu": "RTX 2060",
+    "ubicacion": "South Korea, KR",
+    "host": 123545,
+    "fiabilidad": 0.9945
+  },
+  "usd_hora": 0.04889,
+  "usd_medida": 0.00481,
+  "segundos_vivida": 354.5,
+  "tiempos": {
+    "instalacion_s": 51.7,
+    "medida_s": 154.9,
+    "arranque_s": 135.6,
+    "subida_s": 8.5,
+    "listo_en_s": 195.9
+  },
+  "metrica": 16.354,
+  "reporte": {
+    "format_version": 1,
+    "hostname": "eb03c6463be0",
+    "timestamp": "20260820-231409",
+    "git_commit": "unknown: not a git repository",
+    "hardware": {
+      "hostname": "eb03c6463be0",
+      "platform": "Linux-5.15.0-186-generic-x86_64-with-glibc2.39",
+      "python": "3.12.3",
+      "cpu_model": "Intel(R) Xeon(R) CPU E5-2630 v4 @ 2.20GHz",
+      "cpu_count_logical": 20,
+      "ram_total_gb": 15.52,
+      "gpu": null
+    },
+    "device": "cpu",
+    "load_avg_before": [
+      1.38671875,
+      0.9345703125,
+      0.4375
+    ],
+    "window_dataset": "bench-dirty1000-16",
+    "network": "bench-16",
+    "recipe": "bench",
+    "repeats": 3,
+    "runs": [
+      "bench-eb03c6463be0-20260820-231409-0",
+      "bench-eb03c6463be0-20260820-231409-1",
+      "bench-eb03c6463be0-20260820-231409-2"
+    ],
+    "seconds_per_epoch": {
+      "values": [
+        16.589,
+        16.361,
+        16.111
+      ],
+      "mean": 16.354,
+      "std": 0.195
+    }
+  }
+}

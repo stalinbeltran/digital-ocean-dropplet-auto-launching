@@ -1,0 +1,68 @@
+{
+  "format_version": 2,
+  "benchmark": "foveal-cpu",
+  "proveedor": "vast.ai",
+  "medido": "2026-08-20T23:10:46+00:00",
+  "instancia": 48249932,
+  "oferta": 48101366,
+  "maquina": {
+    "vcpu": 6.0,
+    "cpu": "Core i5-8500",
+    "ram_gb": 31.3,
+    "ghz": 4.1,
+    "gpu": "GTX 1080",
+    "ubicacion": "South Korea, KR",
+    "host": 136680,
+    "fiabilidad": 0.998
+  },
+  "usd_hora": 0.04889,
+  "usd_medida": 0.0053,
+  "segundos_vivida": 389.9,
+  "tiempos": {
+    "instalacion_s": 40.4,
+    "medida_s": 158.1,
+    "arranque_s": 180.7,
+    "subida_s": 7.9,
+    "listo_en_s": 229.0
+  },
+  "metrica": 16.873,
+  "reporte": {
+    "format_version": 1,
+    "hostname": "72c58af9c898",
+    "timestamp": "20260820-230810",
+    "git_commit": "unknown: not a git repository",
+    "hardware": {
+      "hostname": "72c58af9c898",
+      "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+      "python": "3.10.12",
+      "cpu_model": "Intel(R) Core(TM) i5-8500 CPU @ 3.00GHz",
+      "cpu_count_logical": 6,
+      "ram_total_gb": 31.29,
+      "gpu": null
+    },
+    "device": "cpu",
+    "load_avg_before": [
+      1.35546875,
+      1.05029296875,
+      0.458984375
+    ],
+    "window_dataset": "bench-dirty1000-16",
+    "network": "bench-16",
+    "recipe": "bench",
+    "repeats": 3,
+    "runs": [
+      "bench-72c58af9c898-20260820-230810-0",
+      "bench-72c58af9c898-20260820-230810-1",
+      "bench-72c58af9c898-20260820-230810-2"
+    ],
+    "seconds_per_epoch": {
+      "values": [
+        17.181,
+        16.517,
+        16.922
+      ],
+      "mean": 16.873,
+      "std": 0.273
+    }
+  }
+}
