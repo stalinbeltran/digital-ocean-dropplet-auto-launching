@@ -850,12 +850,20 @@ def subir_payload(host: str, port: int, tar_path: Path, timeout: int) -> None:
         raise RuntimeError("el payload subio pero no se pudo desempaquetar")
 
 
-def correr_bench(host: str, port: int, bench: dict, timeout: int) -> dict:
-    """Instala, mide y devuelve el JSON que dejo el benchmark.
+def correr_bench(
+    host: str, port: int, bench: dict, timeout: int
+) -> tuple[dict, dict]:
+    """Instala, mide, y devuelve el reporte junto con los tiempos de cada tramo.
 
     `install` y `run` van en dos pasos para que el log diga cual de los dos
     fallo: instalar torch tarda minutos y falla por motivos (red, disco) que no
     tienen nada que ver con los del benchmark en si.
+
+    Los dos tiempos se guardan porque miden cosas distintas y las dos importan
+    para decidir donde entrenar: `medida` es lo rapida que es la maquina, e
+    `instalacion` es el peaje que hay que pagar ANTES de la primera epoca. Una
+    maquina el doble de rapida que tarda diez minutos en estar lista sale peor
+    para un entrenamiento corto, y sin este numero eso no se ve.
     """
     prologo = "set -eu\ncd /root/bench\n"
 
@@ -863,13 +871,14 @@ def correr_bench(host: str, port: int, bench: dict, timeout: int) -> dict:
     inicio = time.time()
     if ssh_script(host, port, prologo + bench["install"] + "\n", timeout) != 0:
         raise RuntimeError("fallo la instalacion de dependencias en la instancia")
-    log(f"  instalado en {time.time() - inicio:.0f}s. Midiendo...")
+    instalacion = time.time() - inicio
+    log(f"  instalado en {instalacion:.0f}s. Midiendo...")
 
     inicio = time.time()
     if ssh_script(host, port, prologo + bench["run"] + "\n", timeout) != 0:
         raise RuntimeError("el benchmark fallo al ejecutarse")
-    segundos = time.time() - inicio
-    log(f"  medido en {segundos:.0f}s. Recogiendo el reporte...")
+    medida = time.time() - inicio
+    log(f"  medido en {medida:.0f}s. Recogiendo el reporte...")
 
     code, salida = ssh_capture(
         host, port, f"set -eu\ncat {bench['recoge']}\n", timeout=120
@@ -882,8 +891,11 @@ def correr_bench(host: str, port: int, bench: dict, timeout: int) -> dict:
         reporte = json.loads(salida)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"lo que dejo en {bench['recoge']} no es JSON: {exc}")
-    reporte["_segundos_de_medida"] = round(segundos, 1)
-    return reporte
+    tiempos = {
+        "instalacion_s": round(instalacion, 1),
+        "medida_s": round(medida, 1),
+    }
+    return reporte, tiempos
 
 
 def valor_metrica(reporte: dict, ruta: str) -> float | None:
@@ -930,11 +942,15 @@ def escribir_tabla(bench: dict) -> Path | None:
     if not medidas:
         return None
 
-    metrica = bench.get("metrica", "")
-    unidad = bench.get("unidad", "")
+    unidad = bench.get("unidad", "tiempo")
+    ref = bench.get("referencia") or {}
+    ref_valor = float(ref.get("valor") or 0)
+    ref_precio = float(ref.get("usd_hora") or 0)
+
     filas = []
     for m in medidas:
         maq = m.get("maquina", {})
+        t = m.get("tiempos") or {}
         valor = m.get("metrica")
         precio = float(m.get("usd_hora") or 0)
         filas.append(
@@ -945,11 +961,17 @@ def escribir_tabla(bench: dict) -> Path | None:
                 "sitio": maq.get("ubicacion") or "?",
                 "valor": valor,
                 "usd_hora": precio,
-                "usd_medida": m.get("usd_medida"),
+                # Lo que cuesta UNA unidad de trabajo, no una hora de maquina.
+                # Es el numero que decide si la maquina cara sale a cuenta: una
+                # que va el doble de rapida por el doble de precio empata aqui.
+                "usd_unidad": (precio * valor / 3600)
+                if isinstance(valor, (int, float)) and valor
+                else None,
+                "listo": t.get("listo_en_s"),
                 "medido": m.get("medido", "")[:10],
             }
         )
-    filas.sort(key=lambda f: f["vcpu"])
+    filas.sort(key=lambda f: (f["valor"] is None, f["valor"]))
 
     lineas = [
         f"# {bench['name']}: {bench.get('descripcion', '')}",
@@ -957,17 +979,52 @@ def escribir_tabla(bench: dict) -> Path | None:
         "Generada por `vast_instance.py sweep`. **No se edita a mano**: se rehace",
         "entera a partir de los JSON de este directorio, que son el dato.",
         "",
-        f"Metrica: `{metrica}`" + (f" ({unidad})" if unidad else ""),
+        f"La columna que manda es **{unidad}**; la tabla va ordenada por ella, de",
+        "mas rapida a mas lenta.",
         "",
-        "| vCPU | CPU | RAM GB | metrica | $/h | $ por medida | ubicacion | fecha |",
-        "|---:|---|---:|---:|---:|---:|---|---|",
+        f"| {unidad} | x vs. base | listo en | $/h | $/unidad | vCPU | CPU | RAM GB | ubicacion | fecha |",
+        "|---:|---:|---:|---:|---:|---:|---|---:|---|---|",
     ]
     for f in filas:
-        valor = f"{f['valor']:.3f}" if isinstance(f["valor"], (int, float)) else "-"
-        coste = f"{f['usd_medida']:.4f}" if isinstance(f["usd_medida"], (int, float)) else "-"
+        valor = f"**{f['valor']:.2f}**" if isinstance(f["valor"], (int, float)) else "-"
+        if ref_valor and isinstance(f["valor"], (int, float)) and f["valor"]:
+            veces = f"{ref_valor / f['valor']:.2f}x"
+        else:
+            veces = "-"
+        listo = f"{f['listo'] / 60:.1f} min" if f["listo"] else "-"
+        usd_u = f"{f['usd_unidad']:.5f}" if f["usd_unidad"] is not None else "-"
         lineas.append(
-            f"| {f['vcpu']:g} | {f['cpu'][:34]} | {f['ram']:.1f} | {valor} | "
-            f"{f['usd_hora']:.4f} | {coste} | {f['sitio']} | {f['medido']} |"
+            f"| {valor} | {veces} | {listo} | {f['usd_hora']:.4f} | {usd_u} | "
+            f"{f['vcpu']:g} | {f['cpu'][:30]} | {f['ram']:.1f} | {f['sitio']} | "
+            f"{f['medido']} |"
+        )
+
+    lineas += [
+        "",
+        "## Como se lee",
+        "",
+        f"- **{unidad}** es el numero que se quiere bajar.",
+    ]
+    if ref_valor:
+        lineas.append(
+            f"- **x vs. base** compara contra {ref.get('nombre', 'la referencia')}"
+            f" ({ref_valor:g}). Un 2,00x es la mitad de tiempo."
+        )
+    lineas += [
+        "- **listo en** es lo que se tarda desde que se alquila hasta la primera",
+        "  unidad de trabajo: arrancar, subir el codigo e instalar. **Es un peaje",
+        "  que hay que amortizar**: una maquina el doble de rapida que tarda 6",
+        "  minutos en estar lista sale peor para un entrenamiento de tres epocas.",
+        "- **$/unidad** es el coste del trabajo, no de la hora. Es lo que decide si",
+        "  la maquina cara compensa: una que va el doble de rapida por el doble de",
+        "  precio empata en esta columna, y entonces lo unico que compras es tiempo",
+        "  de reloj.",
+    ]
+    if ref_valor and ref_precio:
+        ref_unidad = ref_precio * ref_valor / 3600
+        lineas.append(
+            f"- La base ({ref.get('nombre', '?')}) sale a **{ref_unidad:.5f} $** por"
+            f" unidad, a {ref_precio:.4f} $/h."
         )
     lineas.append("")
     path = destino / "tabla.md"
@@ -1032,14 +1089,26 @@ def medir_en_oferta(bench: dict, oferta: dict, tar_path: Path, etiqueta: str) ->
         host, port = ssh_destino(info)
         if not esperar_ssh(host, port):
             raise RuntimeError(f"sshd no contesto en {host}:{port}")
+        arranque = time.time() - arrancada
         log(f"  SSH listo en {host}:{port}. Subiendo {tar_path.stat().st_size / 1e6:.1f} MB...")
 
+        inicio_subida = time.time()
         subir_payload(host, port, tar_path, timeout=600)
-        reporte = correr_bench(host, port, bench, timeout)
+        subida = time.time() - inicio_subida
+
+        reporte, tiempos = correr_bench(host, port, bench, timeout)
+        tiempos["arranque_s"] = round(arranque, 1)
+        tiempos["subida_s"] = round(subida, 1)
+        # Lo que hay que esperar antes de la PRIMERA epoca. Es el peaje de usar
+        # una maquina alquilada, y hay que amortizarlo: para tres epocas puede
+        # pesar mas que la velocidad de la maquina.
+        tiempos["listo_en_s"] = round(
+            arranque + subida + tiempos["instalacion_s"], 1
+        )
 
         vivida = time.time() - arrancada
         return {
-            "format_version": 1,
+            "format_version": 2,
             "benchmark": bench["name"],
             "proveedor": "vast.ai",
             "medido": ahora_iso(),
@@ -1049,6 +1118,7 @@ def medir_en_oferta(bench: dict, oferta: dict, tar_path: Path, etiqueta: str) ->
             "usd_hora": round(precio, 5),
             "usd_medida": round(precio * vivida / 3600, 5),
             "segundos_vivida": round(vivida, 1),
+            "tiempos": tiempos,
             "metrica": valor_metrica(reporte, bench.get("metrica", "")),
             "reporte": reporte,
         }
