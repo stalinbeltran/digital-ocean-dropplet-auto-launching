@@ -8,6 +8,7 @@ mas rapida a mas lenta.
 
 | s/epoca (menos es mejor) | x vs. base | listo en | $/h | $/unidad | vCPU | CPU | RAM GB | ubicacion | fecha |
 |---:|---:|---:|---:|---:|---:|---|---:|---|---|
+| **13.80** | 4.48x | 3.2 min | 0.0529 | 0.00020 | 18 | Xeon E5-2696 v3 | 31.3 | South Korea, KR | 2026-08-21 |
 | **16.35** | 3.78x | 3.3 min | 0.0489 | 0.00022 | 10 | Xeon E5-2630 v4 | 7.8 | South Korea, KR | 2026-08-20 |
 | **16.87** | 3.66x | 3.8 min | 0.0489 | 0.00023 | 6 | Core i5-8500 | 31.3 | South Korea, KR | 2026-08-20 |
 | **21.87** | 2.82x | 3.8 min | 0.0489 | 0.00030 | 10 | Xeon E5-2630 v4 | 15.7 | South Korea, KR | 2026-08-20 |
