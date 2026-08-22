@@ -390,6 +390,17 @@ Lo que hay que respetar:
   `install-executors`, que corre DENTRO de la máquina y aplica el descriptor que acaba de
   llegar. Desde el móvil: `actualizar` y luego `ejecutores`. La primera vez, `ejecutores`
   todavía no existe: se arranca con el ejecutor `shell`, que sí está.
+
+  **El argumento de dónde viven es correcto; el mecanismo de cómo llegan, no.** Copiarlos
+  con `install-executors` cuesta un paso manual más, un huevo y gallina en el arranque en
+  frío, código nuevo que ya falló al primer uso real (`f7c2849`), un reinicio que no hace
+  falta (el coordinador relee `data/executors/` en **cada** mensaje) y un catálogo de
+  descripciones en paralelo. La alternativa —que cada repo declare los suyos en
+  `telegram/executors/` y el coordinador los **descubra** donde están, en vez de que se
+  los copien— conserva el argumento entero y quita las cinco cosas. Está escrita, con
+  migración por fases y coste, en
+  [`telegram-coordinator/docs/ejecutores-federados.md`](https://github.com/stalinbeltran/telegram-coordinator/blob/main/docs/ejecutores-federados.md).
+  No está implementada: toca `src/` del coordinador.
 - **Todo lo del mini va en git menos los `.env`.** Es la regla que hace que la máquina se
   pueda tirar y rehacer: el código y los ejecutores se traen solos, y lo único que hay
   que mandar desde la laptop son los secretos, con `push-service-env` (que reescribe una
@@ -501,3 +512,26 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
   valida `comprobar_size()` en cada `launch`, antes de gastar nada.
 - Todo camino de creación debe tener su camino de destrucción, incluido el caso de fallo a mitad
   (una acción `errored` puede dejar un droplet existente e inservible que sigue facturando).
+- **Terminado = el comando existe Y se puede invocar desde Telegram.** Si un comando nuevo
+  puede empezar o parar un gasto, su ejecutor va en el **mismo commit**: el freno nunca
+  llega después del acelerador. El 2026-08-20 hubo 1 h 08 min entre poder alquilar máquinas
+  de Vast (`5426f0a`, 20:53) y poder apagarlas desde el móvil (`b35a0cb`, 22:01).
+- **Todo número lleva su procedencia**: medido (con fecha y comando) o estimado, dicho en la
+  misma línea. Un número sin procedencia se lee siempre como medido, y los tiempos del README
+  ya hubo que corregirlos una vez por eso (`b749ce5`).
+- **Una trampa se indexa por la acción que la dispara, no por su primera víctima.** «Nos pasó
+  con `DO_TOKEN`» se lee como historia y se lee una vez; escrita así, volvió a morder con el
+  token de Vast (`d1a9982`). Escríbela como procedimiento: *«al añadir un token nuevo hay que
+  mandarlo a sus dos destinos»*.
+
+> El repaso completo de agosto de 2026 —qué se hizo en este repo y en el del coordinador, y
+> qué documentación habría ahorrado las vueltas— está en
+> [`telegram-coordinator/docs/revision-2026-08-22.md`](https://github.com/stalinbeltran/telegram-coordinator/blob/main/docs/revision-2026-08-22.md).
+> Enlazado y no copiado a propósito: una lección duplicada en dos repos es una lección que va
+> a divergir.
+>
+> Pendientes que salen de ahí para **este** repo: un `do_check.py` hermano de `vast_check.py`
+> (comprobar contra la API de DigitalOcean lo que el token puede hacer **antes** de gastar —
+> los scopes aceptan `volume create` y luego dan 403 al listar), y un mapa de los helpers de
+> `do_droplet.py`, que son 128 KB sin índice y ya costaron un `TypeError` por escribir de
+> memoria contra la API propia (`f7c2849`).
