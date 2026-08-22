@@ -69,6 +69,11 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 - [services/](services/) — un JSON por servicio de larga vida (`repo`, `install`, `start`,
   `env_prefix`). Es **dato, no código**: añadir un servicio nunca debe requerir tocar
   `do_droplet.py`. Se activan con `DO_SERVICES` o `--service`.
+- [telegram/executors/](telegram/executors/) — un JSON por **ejecutor del bot**, junto a los
+  comandos de este repo que llaman. El coordinador los **descubre** aquí (su
+  `data/fuentes.json` trae `~/src/*/telegram`): llegan con `git pull`, sin copiarlos ni
+  reiniciar nada. Cada uno lleva su `descripcion` y sus `ejemplos` en el mismo fichero, y
+  **no** lleva `cd`: el cwd ya es la raíz de este repo.
 - [types/](types/) — un JSON por **tipo de máquina** (`size`, y opcionalmente `image`,
   `region`, `cloud_init`, `tag`, `notas`). Mismo trato que `services/`: **dato, no
   código**, añadir un tipo es añadir un fichero. Se eligen con `--type` o `DO_TYPE`.
@@ -375,32 +380,30 @@ Lo que hay que respetar:
   leerlas. Buscar la marca leyendo `/etc/systemd/system/*.service` daba lista
   vacía y un "no hay nada que reiniciar" falso; `systemctl show` contesta a
   cualquier usuario porque responde el gestor, no el fichero.
-- **El coordinador no sabe describir un ejecutor.** Su `Executor` es `name`, `command`,
-  `encargados` y `timeoutMs`, y `/executors` lista sólo nombre y encargados. Desde el móvil
-  eso obliga a recordar de memoria qué acepta cada uno. Por eso el descriptor del servicio
-  lleva un bloque `ayuda` (aparte de `files`, que se escribe tal cual en la máquina) y
-  `do_droplet.py executors` lo imprime; el ejecutor `ayuda` es eso mismo desde Telegram.
-  La alternativa mejor a largo plazo sería añadir `descripcion` al `Executor` del
-  coordinador, pero eso es tocar el otro repo.
-- **Los ejecutores del bot van en el descriptor del servicio, aquí, no en el repo del
+- **El coordinador YA sabe describir un ejecutor** (desde el 2026-08-22). Su `Executor`
+  admite `descripcion` y `ejemplos`, y los imprimen `/executors`, `/executors <nombre>` y
+  `/use`. Se acabó el bloque `ayuda` paralelo en el descriptor y el ejecutor `ayuda` que lo
+  imprimía: la descripción va en el **mismo fichero** que el ejecutor, así que no hay dos
+  sitios que puedan divergir. `do_droplet.py executors` sigue existiendo para consultarlo
+  desde la laptop, pero ahora lee `~/src/*/telegram/executors/` de todos los repos.
+- **Los ejecutores del bot viven en `telegram/executors/*.json`, aquí, no en el repo del
   coordinador.** Llaman a comandos de este repo; separados, una de las dos mitades queda
   desfasada sin avisar y el síntoma es un ejecutor que falla con un error de argumentos.
-  El precio de esa decisión es que **un ejecutor nuevo no llega con `git pull`**: el
-  bloque `files` lo escribe `provision`, desde la laptop. Para eso está
-  `install-executors`, que corre DENTRO de la máquina y aplica el descriptor que acaba de
-  llegar. Desde el móvil: `actualizar` y luego `ejecutores`. La primera vez, `ejecutores`
-  todavía no existe: se arranca con el ejecutor `shell`, que sí está.
 
-  **El argumento de dónde viven es correcto; el mecanismo de cómo llegan, no.** Copiarlos
-  con `install-executors` cuesta un paso manual más, un huevo y gallina en el arranque en
-  frío, código nuevo que ya falló al primer uso real (`f7c2849`), un reinicio que no hace
-  falta (el coordinador relee `data/executors/` en **cada** mensaje) y un catálogo de
-  descripciones en paralelo. La alternativa —que cada repo declare los suyos en
-  `telegram/executors/` y el coordinador los **descubra** donde están, en vez de que se
-  los copien— conserva el argumento entero y quita las cinco cosas. Está escrita, con
-  migración por fases y coste, en
+  Desde el 2026-08-22 **el coordinador los descubre ahí** (su `data/fuentes.json` trae
+  `~/src/*/telegram`), así que llegan con `git pull` y ya está: desde el móvil, sólo
+  `actualizar`. No hay paso de aplicación, ni reinicio, ni el huevo y gallina del arranque
+  en frío. Antes iban en el bloque `files` del descriptor de `services/` y había que
+  copiarlos con `install-executors`, que costaba las cinco cosas que enumera
   [`telegram-coordinator/docs/ejecutores-federados.md`](https://github.com/stalinbeltran/telegram-coordinator/blob/main/docs/ejecutores-federados.md).
-  No está implementada: toca `src/` del coordinador.
+
+  Dos consecuencias al escribir uno:
+  - **No lleva `cd`**: el coordinador ejecuta cada comando con el cwd puesto en la raíz del
+    repo que lo declara. `python3 scripts/do_droplet.py …` y nada más.
+  - **La descripción va en el mismo JSON** (`descripcion`, `ejemplos`), y la imprimen
+    `/executors` y `/use` del bot, y `do_droplet.py executors` desde la laptop. Ya no hay
+    un bloque `ayuda` aparte que pueda divergir, ni hace falta el ejecutor `ayuda`.
+
 - **Todo lo del mini va en git menos los `.env`.** Es la regla que hace que la máquina se
   pueda tirar y rehacer: el código y los ejecutores se traen solos, y lo único que hay
   que mandar desde la laptop son los secretos, con `push-service-env` (que reescribe una

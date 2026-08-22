@@ -1,0 +1,15 @@
+{
+  "name": "vast",
+  "descripcion": "Cualquier comando de vast_instance.py, sobre Vast.ai. Alquilar cuesta dinero; 'offers' y '--dry-run' no.",
+  "ejemplos": [
+    "list",
+    "offers --cpus 8",
+    "sweep --bench foveal-cpu --dry-run",
+    "destroy --all --yes"
+  ],
+  "command": "python3 scripts/vast_instance.py {{input}}",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}

@@ -1,0 +1,12 @@
+{
+  "name": "apagar-vast",
+  "descripcion": "Destruye TODAS las instancias de Vast.ai. El boton de panico cuando un barrido dejo algo encendido.",
+  "ejemplos": [
+    ""
+  ],
+  "command": "python3 scripts/vast_instance.py destroy --all --yes",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}

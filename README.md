@@ -1340,15 +1340,18 @@ Los resultados se guardan en [results/](results/) y se commitean.
 ### Todo esto desde Telegram
 
 El principio es: **todo va en git menos los `.env`, que salen sólo de tu
-laptop.** Los ejecutores del bot viven en el bloque `files` de
-[services/telegram-launcher.json](services/telegram-launcher.json), así que están
-versionados junto a los comandos que llaman — si viajaran en el repo del
-coordinador, una de las dos mitades quedaría desfasada sin avisar.
+laptop.** Los ejecutores del bot viven en
+[telegram/executors/](telegram/executors/) de este repo, así que están versionados
+junto a los comandos que llaman — si viajaran en el repo del coordinador, una de
+las dos mitades quedaría desfasada sin avisar.
+
+Y llegan solos: el coordinador **descubre** los ejecutores de cada repo clonado
+(su `data/fuentes.json` trae `~/src/*/telegram`). Con que este repo esté ahí, sus
+comandos salen en `/executors`. **No hay paso de instalación ni reinicio.**
 
 | ejecutor | qué hace |
 |---|---|
 | `actualizar` | `git pull` en todos los repos y reinicia lo que cambió |
-| `ejecutores` | aplica los ejecutores del descriptor que acaba de llegar |
 | `lanzar` | cualquier subcomando de `do_droplet.py` |
 | `vast` | cualquier subcomando de `vast_instance.py` |
 | `datos` | cualquier subcomando de `dataset.py` |
@@ -1356,18 +1359,12 @@ coordinador, una de las dos mitades quedaría desfasada sin avisar.
 | `apagar-vast` | destruye **todas** las instancias de Vast |
 | `apagar-do` | destruye los droplets con tag `ephemeral` (**el mini no lo lleva**) |
 
-**El arranque en frío tiene un huevo y gallina**: `ejecutores` es un ejecutor, así
-que la primera vez no existe todavía. Se sale con el `shell`, que sí está:
-
-```
-shell   cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py install-executors --service telegram-launcher
-```
-
-A partir de ahí, la secuencia normal es dos mensajes:
+**El arranque en frío ya no tiene huevo y gallina.** Antes `ejecutores` era un
+ejecutor que había que aplicar con `shell` la primera vez; ahora la secuencia
+entera es **un** mensaje:
 
 ```
 actualizar
-ejecutores
 ```
 
 Y luego, para montar la máquina donde Claude va a medir:
@@ -1385,17 +1382,28 @@ clonar, el token que llevarse, `--make-launcher` y el `register-key` de Vast.
 Escribir la versión larga desde el móvil es exactamente la clase de cosa que se
 teclea mal, y un error de dedo ahí crea una máquina que factura y no sirve.
 
+> **Si vienes de una máquina anterior al 2026-08-22**, los ejecutores que
+> `install-executors` copió en su día siguen en `data/executors/` del coordinador
+> y **pisan** a los descubiertos. No rompen nada (son los mismos comandos con un
+> `cd` de más), pero conviene borrarlos: el arranque del bot y `/executors` dicen
+> qué fichero manda y cuál queda pisado.
+
 ### Cuando no te acuerdes de un comando
 
 ```
-ayuda
+/executors           la lista, con el repo que declara cada uno
+/executors lanzar    la ficha: qué hace, ejemplos, timeout, dónde está definido
 ```
 
-Imprime el catálogo entero con ejemplos. El `/executors` del coordinador lista
-los nombres pero **no los describe** — no tiene campo para ello —, así que la
-descripción vive en el bloque `ayuda` de
-[services/telegram-launcher.json](services/telegram-launcher.json), en el mismo
-fichero que define los ejecutores para que no puedan divergir.
+La descripción vive en el **mismo JSON** que define el ejecutor (campos
+`descripcion` y `ejemplos`), así que no puede divergir. Desde la laptop, el mismo
+catálogo:
+
+```powershell
+python scripts/do_droplet.py executors
+```
+
+que lee `~/src/*/telegram/executors/` de **todos** los repos, no sólo los de éste.
 
 > ⚠️ `apagar-do` se lleva por delante los droplets de trabajo. **Nunca toca el
 > mini**, que lleva el tag `control` justamente para eso.

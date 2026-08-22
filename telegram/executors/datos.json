@@ -1,0 +1,14 @@
+{
+  "name": "datos",
+  "descripcion": "Datasets declarados: que hay, si cuadra con su sha256 y traerlos.",
+  "ejemplos": [
+    "list",
+    "check",
+    "fetch dirty-1000-80px"
+  ],
+  "command": "python3 scripts/dataset.py {{input}}",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}

@@ -1,0 +1,12 @@
+{
+  "name": "actualizar",
+  "descripcion": "git pull en todos los repos de ~/src y reinicia los servicios cuyo codigo cambio. Trae tambien los ejecutores nuevos de cualquier repo.",
+  "ejemplos": [
+    ""
+  ],
+  "command": "python3 scripts/do_droplet.py update",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}

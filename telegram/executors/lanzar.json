@@ -1,0 +1,16 @@
+{
+  "name": "lanzar",
+  "descripcion": "Cualquier comando de do_droplet.py, sobre DigitalOcean. Un tipo que se llame igual que el droplet trae solo sus repos, variables y pasos finales.",
+  "ejemplos": [
+    "launch bench-control",
+    "list",
+    "types",
+    "destroy bench-control --yes",
+    "ssh bench-control --cmd 'uptime'"
+  ],
+  "command": "python3 scripts/do_droplet.py {{input}}",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}

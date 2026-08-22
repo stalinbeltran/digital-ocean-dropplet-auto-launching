@@ -2296,15 +2296,16 @@ def cmd_push_do_token(args: argparse.Namespace) -> None:
 def cmd_install_executors(args: argparse.Namespace) -> None:
     """DENTRO de una máquina: reescribe los ficheros que declara un servicio.
 
-    Existe por un hueco concreto del ciclo: `update` hace `git pull` y reinicia,
-    así que trae el CÓDIGO nuevo, pero los ficheros del bloque `files` de un
-    descriptor los escribe `provision`, que se lanza desde la laptop. Resultado:
-    añadir un ejecutor nuevo obligaba a sacar el portátil, que es justo lo que la
-    máquina de control existe para evitar.
+    Existía por un hueco del ciclo que **ya no está**: `update` hacía `git pull`
+    y reiniciaba, o sea traía el CÓDIGO, pero los ficheros del bloque `files` de
+    un descriptor los escribía `provision`, desde la laptop.
 
-    Con esto, desde el móvil basta con `actualizar` (trae el descriptor nuevo por
-    git) y luego esto (lo aplica). No toca el `.env` del servicio: los secretos
-    siguen viniendo sólo de la máquina que los tiene, que es lo correcto.
+    Desde 2026-08-22 los ejecutores de este repo viven en `telegram/executors/` y
+    el coordinador los DESCUBRE ahí (`data/fuentes.json` trae `~/src/*/telegram`),
+    así que llegan con `git pull` y no hay nada que aplicar: basta `actualizar`.
+    Esto se queda para descriptores que aún declaren `files` —y para decirlo
+    cuando no—, porque un comando que no hace nada en silencio es peor que uno
+    que falta.
     """
     base = dentro_del_droplet("install-executors")
     servicios = selected_services(args.service)
@@ -2321,7 +2322,14 @@ def cmd_install_executors(args: argparse.Namespace) -> None:
             log(f"  {svc['name']}: no existe {destino}, me lo salto.")
             continue
         if not svc["files"]:
-            log(f"  {svc['name']}: no declara ningún fichero.")
+            log(
+                f"  {svc['name']}: no declara ningún fichero, y es lo normal desde el "
+                "2026-08-22.\n"
+                "      Sus ejecutores viven en <repo>/telegram/executors/*.json y el "
+                "coordinador\n"
+                "      los descubre solo. Llegan con `git pull`: basta el ejecutor "
+                "`actualizar`."
+            )
             continue
         dueno = owner_of(destino)
         # Por servicio y no global: con el contador compartido, escribir algo en
@@ -2439,47 +2447,44 @@ def cmd_push_service_env(args: argparse.Namespace) -> None:
 def cmd_executors(args: argparse.Namespace) -> None:
     """Imprime el catálogo de ejecutores del bot, con ejemplos.
 
-    Existe porque el coordinador no sabe describir un ejecutor: su `/executors`
-    lista el nombre y los encargados, y nada más. Desde el móvil eso obliga a
-    recordar de memoria qué acepta cada uno, que es justo lo que no se recuerda.
+    Lee la convención que usa el coordinador desde 2026-08-22: cada repo declara
+    los suyos en `<repo>/telegram/executors/*.json`, y la descripción va en el
+    MISMO fichero que el ejecutor (campos `descripcion` y `ejemplos`), así que no
+    hay dos sitios que puedan divergir. Antes vivían en el bloque `files` de un
+    descriptor de `services/` y la descripción en un bloque `ayuda` paralelo.
 
-    La descripción vive en el mismo descriptor que define los ejecutores, en un
-    bloque `ayuda` aparte de `files`. Aparte y no dentro a propósito: lo que hay
-    en `files` se escribe tal cual en la máquina, y el coordinador no espera
-    campos que no conoce. Al estar los dos en el mismo fichero, no pueden
-    divergir sin que se note.
+    Esto es la versión de la laptop; desde Telegram lo mismo lo da `/executors`,
+    que ya los describe. Aquí se listan TODOS los repos, no sólo los de este
+    servicio: se consulta para saber qué hay, no qué corre en esta máquina.
     """
-    # Todos por defecto, no los de DO_SERVICES: el catálogo se consulta desde
-    # una máquina cualquiera para saber qué HAY, no qué corre aquí. Filtrando
-    # por lo activo, en la laptop salía vacío y parecía que no había ninguno.
-    servicios = [load_service(n) for n in args.service] if args.service else all_services()
+    raices = [Path(d).expanduser() for d in (args.dir or ["~/src"])]
     hubo = False
-    for svc in servicios:
-        ayuda = svc.get("ayuda") or {}
-        declarados = [
-            v.get("name", "?") for v in svc.get("files", {}).values() if isinstance(v, dict)
-        ]
-        if not declarados:
+    for raiz in raices:
+        if not raiz.is_dir():
+            log(f"(no existe {raiz}, me lo salto)")
             continue
-        hubo = True
-        log(f"Ejecutores de '{svc['name']}':\n")
-        for nombre in declarados:
-            info = ayuda.get(nombre) or {}
-            log(f"  {nombre}")
-            if info.get("que"):
-                log(f"      {info['que']}")
-            else:
-                log("      (sin describir en el descriptor)")
-            for ej in info.get("ejemplos") or []:
-                log(f"      > {nombre}  {ej}" if ej else f"      > {nombre}")
-            log("")
-        sin_describir = [n for n in declarados if n not in ayuda]
-        if sin_describir:
-            log(f"  Sin descripción: {', '.join(sin_describir)}")
+        for carpeta in sorted(raiz.glob("*/telegram/executors")):
+            fichas = sorted(carpeta.glob("*.json"))
+            if not fichas:
+                continue
+            hubo = True
+            log(f"Ejecutores de '{carpeta.parent.parent.name}':\n")
+            for f in fichas:
+                try:
+                    d = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError) as e:
+                    log(f"  {f.name}: NO SE PUDO LEER ({e})\n")
+                    continue
+                log(f"  {d.get('name', f.stem)}")
+                log(f"      {d.get('descripcion') or '(sin describir en su JSON)'}")
+                for ej in d.get("ejemplos") or []:
+                    log(f"      > {d.get('name', f.stem)}  {ej}" if ej else f"      > {d.get('name', f.stem)}")
+                log("")
     if not hubo:
         log(
-            "Ningún servicio declara ejecutores.\n"
-            "  Se definen en el bloque 'files' de un descriptor de services/."
+            "Ningún repo declara ejecutores.\n"
+            "  Se definen en <repo>/telegram/executors/*.json y el coordinador los\n"
+            "  descubre solo (su data/fuentes.json trae ~/src/*/telegram)."
         )
 
 
@@ -2962,14 +2967,14 @@ def main() -> None:
 
     p = sub.add_parser(
         "executors",
-        help="catálogo de ejecutores del bot con ejemplos, para consultarlo "
-        "desde el móvil (el /executors del coordinador no los describe)",
+        help="catálogo de ejecutores del bot con ejemplos, leyendo "
+        "<repo>/telegram/executors/ de cada repo",
     )
     p.add_argument(
-        "--service",
+        "--dir",
         action="append",
         default=[],
-        help="sólo los de este servicio (repetible). Por defecto, todos",
+        help="raíz donde buscar repos (repetible). Por defecto ~/src",
     )
     p.set_defaults(func=cmd_executors)
 

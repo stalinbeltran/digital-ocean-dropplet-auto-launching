@@ -1,0 +1,12 @@
+{
+  "name": "apagar-do",
+  "descripcion": "Destruye los droplets con tag 'ephemeral'. NO toca el mini, que lleva tag 'control'.",
+  "ejemplos": [
+    ""
+  ],
+  "command": "python3 scripts/do_droplet.py destroy --tag ephemeral --yes",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}
