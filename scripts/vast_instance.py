@@ -348,7 +348,8 @@ def bloquear_maquina(machine_id: int, motivo: str, etiqueta: str = "") -> dict:
 
 def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
                              min_ram_gb: float, max_price: float,
-                             excluir_ofertas: set | None = None) -> list:
+                             excluir_ofertas: set | None = None,
+                             cpu: str = "") -> list:
     """`cuantas` ofertas, cada una en una MAQUINA FISICA distinta.
 
     Dos filtros que no son un lujo:
@@ -364,15 +365,40 @@ def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
 
     Ordena por precio, asi que coger una maquina distinta cuesta lo que cueste
     la siguiente oferta: es deliberado -- se paga por independencia.
+
+    `cpu` filtra por nombre de procesador (subcadena, sin mayusculas), y no es
+    un capricho de rendimiento: MEDIDO el 2026-08-23 corriendo el mismo estudio
+    dos veces, el entrenamiento sale IDENTICO bit a bit -- mismo f1 al cuarto
+    decimal y mismo numero de epocas -- entre maquinas de la familia Xeon E5-26xx
+    v3/v4, y DIVERGE al cruzar a Xeon Silver (AVX-512), AMD EPYC o Core i7. La
+    diferencia llego a 0,0457 en f1, mas que el efecto que aquel estudio media.
+    Lo que manda no es la microarquitectura sino el juego de instrucciones
+    vectoriales: un E5-2673 v3 (Haswell) y un E5-2680 v4 (Broadwell) dieron el
+    mismo numero.
+
+    O sea que fijar la familia convierte el ruido de maquina en CERO, y eso es
+    lo que permite repartir un estudio entre muchas maquinas sin pagarlo en
+    precision. El detalle esta en
+    foveal-vision/docs/plan-lr-alto.md §7.4.
+
+    ⚠ OJO CON LA SUBCADENA: lo medido son v3 y v4. "E5-26" deja pasar tambien
+    las v2 (Ivy Bridge), que NO tienen AVX2 y por el propio razonamiento de
+    arriba deberian divergir -- pero eso no se ha comprobado. Si hace falta la
+    garantia, estrecha el filtro ("E5-2680 v4"); costo medido de estrechar a
+    "E5-26": +2 % en el precio medio.
     """
     excluir_ofertas = excluir_ofertas or set()
+    aguja = cpu.strip().lower()
     bloqueadas = maquinas_bloqueadas()
     ofertas = buscar_ofertas(cpus=cpus, max_cpus=max_cpus, min_ram_gb=min_ram_gb,
                              max_price=max_price)
-    elegidas, vistas, saltadas_bloq = [], set(), 0
+    elegidas, vistas, saltadas_bloq, saltadas_cpu = [], set(), 0, 0
     for o in ofertas:
         mid = o.get("machine_id")
         if mid is None or str(o.get("id")) in excluir_ofertas:
+            continue
+        if aguja and aguja not in (o.get("cpu_name") or "").lower():
+            saltadas_cpu += 1
             continue
         if int(mid) in bloqueadas:
             saltadas_bloq += 1
@@ -385,12 +411,15 @@ def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
             break
     if saltadas_bloq:
         log(f"  ({saltadas_bloq} ofertas saltadas por estar su maquina bloqueada)")
+    if saltadas_cpu:
+        log(f"  ({saltadas_cpu} ofertas saltadas por no ser CPU '{cpu}')")
     if len(elegidas) < cuantas:
         die(
             f"Solo hay {len(elegidas)} maquinas DISTINTAS que cumplan "
             f">= {cpus} vCPU"
             + (f" y < {max_cpus}" if max_cpus else "")
             + (f", >= {min_ram_gb:g} GB RAM" if min_ram_gb else "")
+            + (f", CPU '{cpu}'" if cpu else "")
             + f" por debajo de {max_price:.2f} $/h, y hacen falta {cuantas}.\n"
             "  Sube --max-price, afloja --cpus/--min-ram, o mira que hay:\n"
             f"    python3 scripts/vast_instance.py offers --cpus {cpus}\n"

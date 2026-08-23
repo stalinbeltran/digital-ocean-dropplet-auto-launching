@@ -10,6 +10,26 @@
         "RuntimeError: no pude subir el payload"
       ],
       "visto_en": "estudio-lr-alto-L4-s3"
+    },
+    {
+      "machine_id": 45392,
+      "primer_fallo": "2026-08-23T22:43:31+00:00",
+      "ultimo_fallo": "2026-08-23T22:43:31+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: no pude subir el payload"
+      ],
+      "visto_en": "estudio-lr-alto-L4-b-p1"
+    },
+    {
+      "machine_id": 68097,
+      "primer_fallo": "2026-08-23T22:45:55+00:00",
+      "ultimo_fallo": "2026-08-23T22:45:55+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh7.vast.ai:27040"
+      ],
+      "visto_en": "estudio-lr-alto-L4-b-p8"
     }
   ]
 }
