@@ -52,6 +52,16 @@ ROOT = Path(__file__).resolve().parent.parent
 BENCH_DIR = ROOT / "benchmarks"
 PERFIL_DIR = ROOT / "vast-perfiles"
 RESULT_DIR = ROOT / "results"
+# El registro de maquinas que fallaron. Es DATO commiteado, no cache: la maquina
+# de control es efimera (se rehace sin aviso) y lo que no esta en el remoto no
+# existe, asi que un bloqueo aprendido pagando se perderia con ella.
+BLOQUEADAS = ROOT / "vast-bloqueadas.json"
+# CUANTO DURA UN BLOQUEO, y por que lleva fecha de caducidad escrita aqui al
+# lado: en Vast se alquila a hosts de desconocidos que se arreglan, se actualizan
+# y cambian de dueno. Un bloqueo eterno solo crece, y a base de crecer deja el
+# mercado sin ofertas sin decir por que. 30 dias desde el ULTIMO fallo: se
+# olvida solo, y si vuelve a fallar se renueva solo tambien.
+BLOQUEO_DIAS = 30
 # Sin barra final: las rutas la llevan ya, tal cual salen del OpenAPI de Vast.ai
 # (https://docs.vast.ai/api-reference/openapi.json).
 API = "https://console.vast.ai"
@@ -258,6 +268,176 @@ def buscar_ofertas(
     resp = api("POST", "/api/v0/bundles/", consulta)
     ofertas = resp.get("offers") if isinstance(resp, dict) else None
     return [o for o in (ofertas or []) if o.get("resource_type") == "gpu"]
+
+
+def _leer_bloqueadas() -> dict:
+    if not BLOQUEADAS.exists():
+        return {"format_version": 1, "maquinas": []}
+    try:
+        datos = json.loads(BLOQUEADAS.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        # Ruidoso a proposito: un registro ilegible que se ignorara en silencio
+        # volveria a mandar trabajo a las maquinas que ya se sabe que fallan, y
+        # el sintoma seria "el estudio falla a veces", que no lleva hasta aqui.
+        die(f"{BLOQUEADAS} no es JSON valido: {exc}\n"
+            "  Arreglalo o borralo: es el registro de maquinas que fallaron.")
+    if not isinstance(datos.get("maquinas"), list):
+        die(f"{BLOQUEADAS} no tiene una lista 'maquinas'.")
+    return datos
+
+
+def _dias_desde(iso: str) -> float:
+    try:
+        cuando = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except ValueError:
+        return 0.0          # fecha ilegible -> se trata como recien puesto
+    return (datetime.now(timezone.utc) - cuando).total_seconds() / 86400
+
+
+def maquinas_bloqueadas(incluir_caducadas: bool = False) -> dict:
+    """{machine_id: registro} de las que NO se pueden volver a elegir.
+
+    Caducadas fuera por defecto (BLOQUEO_DIAS). `incluir_caducadas` es para
+    ensenar el registro entero, que es otra pregunta.
+    """
+    fuera = {}
+    for m in _leer_bloqueadas()["maquinas"]:
+        mid = m.get("machine_id")
+        if mid is None:
+            continue
+        if incluir_caducadas or _dias_desde(m.get("ultimo_fallo", "")) < BLOQUEO_DIAS:
+            fuera[int(mid)] = m
+    return fuera
+
+
+def bloquear_maquina(machine_id: int, motivo: str, etiqueta: str = "") -> dict:
+    """Apunta (o renueva) una maquina que fallo. Devuelve su registro.
+
+    Renovar en vez de duplicar: un host que falla tres veces es un dato mejor
+    que tres lineas iguales, y `fallos` es lo que deja verlo.
+    """
+    machine_id = int(machine_id)
+    datos = _leer_bloqueadas()
+    ahora = ahora_iso()
+    for m in datos["maquinas"]:
+        if int(m.get("machine_id", -1)) == machine_id:
+            m["fallos"] = int(m.get("fallos", 1)) + 1
+            m["ultimo_fallo"] = ahora
+            motivos = m.setdefault("motivos", [])
+            if motivo and motivo not in motivos:
+                motivos.append(motivo)
+            registro = m
+            break
+    else:
+        registro = {
+            "machine_id": machine_id,
+            "primer_fallo": ahora,
+            "ultimo_fallo": ahora,
+            "fallos": 1,
+            "motivos": [motivo] if motivo else [],
+            "visto_en": etiqueta,
+        }
+        datos["maquinas"].append(registro)
+    datos["maquinas"].sort(key=lambda m: int(m.get("machine_id", 0)))
+    tmp = BLOQUEADAS.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(datos, indent=2, ensure_ascii=False) + "\n",
+                   encoding="utf-8")
+    tmp.replace(BLOQUEADAS)
+    return registro
+
+
+def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
+                             min_ram_gb: float, max_price: float,
+                             excluir_ofertas: set | None = None) -> list:
+    """`cuantas` ofertas, cada una en una MAQUINA FISICA distinta.
+
+    Dos filtros que no son un lujo:
+
+    - **Una por `machine_id`.** El catalogo publica varias ofertas por maquina
+      (una por GPU libre), y coger "las N mas baratas" mete varias replicas en
+      el mismo host: comparten CPU, disco y suerte, asi que si ese host va lento
+      o se cae, se lleva por delante varias a la vez y encima las medidas dejan
+      de ser independientes.
+    - **Ninguna bloqueada** (BLOQUEADAS): el barrido del 2026-08-21 cayo dos
+      veces en la misma oferta rota porque la eleccion coge siempre la mas
+      barata y nada recordaba el fallo anterior.
+
+    Ordena por precio, asi que coger una maquina distinta cuesta lo que cueste
+    la siguiente oferta: es deliberado -- se paga por independencia.
+    """
+    excluir_ofertas = excluir_ofertas or set()
+    bloqueadas = maquinas_bloqueadas()
+    ofertas = buscar_ofertas(cpus=cpus, max_cpus=max_cpus, min_ram_gb=min_ram_gb,
+                             max_price=max_price)
+    elegidas, vistas, saltadas_bloq = [], set(), 0
+    for o in ofertas:
+        mid = o.get("machine_id")
+        if mid is None or str(o.get("id")) in excluir_ofertas:
+            continue
+        if int(mid) in bloqueadas:
+            saltadas_bloq += 1
+            continue
+        if int(mid) in vistas:
+            continue
+        vistas.add(int(mid))
+        elegidas.append(o)
+        if len(elegidas) == cuantas:
+            break
+    if saltadas_bloq:
+        log(f"  ({saltadas_bloq} ofertas saltadas por estar su maquina bloqueada)")
+    if len(elegidas) < cuantas:
+        die(
+            f"Solo hay {len(elegidas)} maquinas DISTINTAS que cumplan "
+            f">= {cpus} vCPU"
+            + (f" y < {max_cpus}" if max_cpus else "")
+            + (f", >= {min_ram_gb:g} GB RAM" if min_ram_gb else "")
+            + f" por debajo de {max_price:.2f} $/h, y hacen falta {cuantas}.\n"
+            "  Sube --max-price, afloja --cpus/--min-ram, o mira que hay:\n"
+            f"    python3 scripts/vast_instance.py offers --cpus {cpus}\n"
+            "  Las bloqueadas:  python3 scripts/vast_instance.py bloqueadas"
+        )
+    return elegidas
+
+
+def cmd_bloqueadas(args: argparse.Namespace) -> None:
+    todas = maquinas_bloqueadas(incluir_caducadas=True)
+    vivas = maquinas_bloqueadas()
+    if not todas:
+        log("Ninguna maquina bloqueada. El registro esta en "
+            f"{BLOQUEADAS.name} y se commitea.")
+        return
+    log(f"{'MAQUINA':>10}  {'FALLOS':>6}  {'ULTIMO FALLO':<20}  {'ESTADO':<10}  MOTIVOS")
+    for mid, m in sorted(todas.items()):
+        dias = _dias_desde(m.get("ultimo_fallo", ""))
+        estado = "activo" if mid in vivas else f"caducado"
+        log(f"{mid:>10}  {m.get('fallos', 1):>6}  "
+            f"{m.get('ultimo_fallo', '?')[:19]:<20}  {estado:<10}  "
+            f"{'; '.join(m.get('motivos', []))[:60]}")
+    log(f"\nUn bloqueo se honra {BLOQUEO_DIAS} dias desde el ultimo fallo "
+        f"({len(vivas)} activos de {len(todas)}).")
+    log(f"Registro: {BLOQUEADAS}  (es dato commiteado: la maquina de control es efimera)")
+
+
+def cmd_bloquear(args: argparse.Namespace) -> None:
+    r = bloquear_maquina(args.machine_id, args.motivo, args.etiqueta)
+    log(f"Maquina {r['machine_id']} bloqueada ({r['fallos']} fallo(s)). "
+        f"No se volvera a elegir durante {BLOQUEO_DIAS} dias.")
+    log(f"Acuerdate de commitear {BLOQUEADAS.name}: esta maquina no es persistente.")
+
+
+def cmd_desbloquear(args: argparse.Namespace) -> None:
+    datos = _leer_bloqueadas()
+    antes = len(datos["maquinas"])
+    datos["maquinas"] = [m for m in datos["maquinas"]
+                         if int(m.get("machine_id", -1)) != int(args.machine_id)]
+    if len(datos["maquinas"]) == antes:
+        log(f"La maquina {args.machine_id} no estaba bloqueada.")
+        return
+    tmp = BLOQUEADAS.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(datos, indent=2, ensure_ascii=False) + "\n",
+                   encoding="utf-8")
+    tmp.replace(BLOQUEADAS)
+    log(f"Maquina {args.machine_id} desbloqueada. Commitea {BLOQUEADAS.name}.")
 
 
 def limite_precio() -> float:
@@ -1472,6 +1652,22 @@ def main() -> None:
         help="condiciones de busqueda guardadas en vast-perfiles/, para no repetirlas",
     )
     p.set_defaults(func=cmd_perfiles)
+
+    p = sub.add_parser(
+        "bloqueadas",
+        help="maquinas que fallaron y no se vuelven a elegir (dato commiteado)",
+    )
+    p.set_defaults(func=cmd_bloqueadas)
+
+    p = sub.add_parser("bloquear", help="apunta una maquina que fallo")
+    p.add_argument("machine_id", type=int)
+    p.add_argument("--motivo", default="", help="que le paso, en una linea")
+    p.add_argument("--etiqueta", default="", help="donde se vio (etiqueta del trabajo)")
+    p.set_defaults(func=cmd_bloquear)
+
+    p = sub.add_parser("desbloquear", help="quita una maquina del registro")
+    p.add_argument("machine_id", type=int)
+    p.set_defaults(func=cmd_desbloquear)
 
     p = sub.add_parser("benchs", help="benchmarks disponibles en benchmarks/")
     p.set_defaults(func=cmd_benchs)
