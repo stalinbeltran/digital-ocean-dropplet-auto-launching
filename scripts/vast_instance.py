@@ -50,6 +50,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BENCH_DIR = ROOT / "benchmarks"
+PERFIL_DIR = ROOT / "vast-perfiles"
 RESULT_DIR = ROOT / "results"
 # Sin barra final: las rutas la llevan ya, tal cual salen del OpenAPI de Vast.ai
 # (https://docs.vast.ai/api-reference/openapi.json).
@@ -282,7 +283,93 @@ def cabecera_ofertas() -> str:
     )
 
 
+# --- perfiles de busqueda: las condiciones de eleccion, como DATO ------------
+#
+# En Vast no se pide una maquina por su nombre: se BUSCA con un rango de vCPU,
+# un minimo de RAM y un tope de precio. Esas condiciones se aprenden pagando
+# -el barrido del 2026-08-21 cayo dos veces en la misma oferta rota porque
+# `sweep` coge siempre la mas barata del rango, y se salio pidiendo --min-ram 8-
+# asi que tienen que quedar escritas donde se puedan volver a usar, no en el
+# README ni en la memoria de nadie.
+#
+# Es dato, no codigo, igual que benchmarks/, types/ y datasets/: anadir un
+# perfil es anadir un fichero.
+
+PERFIL_CAMPOS = ("cpus", "max_cpus", "min_ram", "max_price", "bench", "horas_max",
+                 "disk", "image")
+
+
+def load_perfil(name: str) -> dict:
+    path = PERFIL_DIR / f"{name}.json"
+    if not path.exists():
+        disponibles = ", ".join(sorted(p.stem for p in PERFIL_DIR.glob("*.json")))
+        die(
+            f"No existe el perfil '{name}' (falta {path}).\n"
+            f"  Definidos: {disponibles or 'ninguno'}\n"
+            "  Miralos con: python3 scripts/vast_instance.py perfiles"
+        )
+    try:
+        perfil = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"{path} no es JSON valido: {exc}")
+    perfil["name"] = name
+    return perfil
+
+
+def all_perfiles() -> list[dict]:
+    if not PERFIL_DIR.exists():
+        return []
+    return [load_perfil(p.stem) for p in sorted(PERFIL_DIR.glob("*.json"))]
+
+
+def aplicar_perfil(args: argparse.Namespace) -> None:
+    """Rellena lo que no venga en la linea de comandos con lo del perfil.
+
+    Manda lo mas explicito, como en do_droplet.py: una opcion escrita pisa al
+    perfil, y el perfil pisa al default. Por eso los campos que un perfil puede
+    fijar tienen `default=None` en el parser: es la unica forma de distinguir
+    "no lo pidio" de "lo pidio igual que el default".
+    """
+    nombre = getattr(args, "perfil", None)
+    if not nombre:
+        return
+    perfil = load_perfil(nombre)
+    puestos = []
+    for campo in PERFIL_CAMPOS:
+        if not hasattr(args, campo) or campo not in perfil:
+            continue
+        if getattr(args, campo) is None:
+            setattr(args, campo, perfil[campo])
+            puestos.append(f"{campo}={perfil[campo]}")
+    log(f"Perfil '{nombre}': {', '.join(puestos) or 'nada que aplicar'}")
+    if perfil.get("notas"):
+        log(f"  Ojo: {perfil['notas']}")
+
+
+def cmd_perfiles(args: argparse.Namespace) -> None:
+    perfiles = all_perfiles()
+    if not perfiles:
+        log(
+            "No hay perfiles.\n"
+            "  Se definen en vast-perfiles/<nombre>.json y guardan las condiciones\n"
+            "  de busqueda (cpus, min_ram, max_price, bench) para no repetirlas."
+        )
+        return
+    for perfil in perfiles:
+        log(f"{perfil['name']}")
+        if perfil.get("descripcion"):
+            log(f"  {perfil['descripcion']}")
+        campos = ", ".join(
+            f"{c}={perfil[c]}" for c in PERFIL_CAMPOS if c in perfil
+        )
+        log(f"  {campos or '(sin condiciones)'}")
+        if perfil.get("notas"):
+            log(f"  Ojo: {perfil['notas']}")
+        log("")
+
+
 def cmd_offers(args: argparse.Namespace) -> None:
+    aplicar_perfil(args)
     tope = args.max_price or limite_precio()
     ofertas = buscar_ofertas(
         cpus=args.cpus,
@@ -564,6 +651,7 @@ def elegir_oferta(cpus: int, max_cpus: int, min_ram_gb: float, max_price: float)
 
 
 def cmd_launch(args: argparse.Namespace) -> None:
+    aplicar_perfil(args)
     label = args.label
     tope = args.max_price or limite_precio()
     image = args.image or cfg("VAST_IMAGE")
@@ -1202,6 +1290,9 @@ def medir_en_oferta(
 
 def cmd_bench(args: argparse.Namespace) -> None:
     """Alquila UNA maquina del nivel pedido, mide y la destruye."""
+    aplicar_perfil(args)
+    if not args.bench:
+        die("Dime que medir: --bench <nombre>, o --perfil <nombre> si lo declara.")
     bench = load_bench(args.bench)
     tope = args.max_price or limite_precio()
     oferta = elegir_oferta(args.cpus, args.max_cpus, args.min_ram, tope)
@@ -1233,10 +1324,18 @@ def cmd_sweep(args: argparse.Namespace) -> None:
     solo `>= n` devuelve la mas barata, que a menudo tiene muchos mas nucleos de
     los pedidos, y entonces el barrido mide tres veces lo mismo sin decirlo.
     """
+    aplicar_perfil(args)
+    if not args.bench:
+        die("Dime que medir: --bench <nombre>, o --perfil <nombre> si lo declara.")
     bench = load_bench(args.bench)
     tope = args.max_price or limite_precio()
+    # Los defaults se resuelven AQUI y no en el parser: con `default=None` es
+    # como se distingue "no lo pidio" (y manda el perfil) de "lo pidio igual
+    # que el default" (y manda lo escrito).
+    args.cpus = args.cpus or "2,4,8,16"
+    args.horas_max = 1.0 if args.horas_max is None else args.horas_max
     try:
-        niveles = [int(n) for n in args.cpus.split(",") if n.strip()]
+        niveles = [int(n) for n in str(args.cpus).split(",") if n.strip()]
     except ValueError:
         die(f"--cpus quiere numeros separados por coma, no {args.cpus!r}")
     if not niveles:
@@ -1317,10 +1416,11 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("offers", help="catalogo de maquinas alquilables")
-    p.add_argument("--cpus", type=int, default=0, help="vCPU efectivas minimas")
-    p.add_argument("--max-cpus", type=int, default=0, help="vCPU efectivas maximas")
-    p.add_argument("--min-ram", type=float, default=0.0, metavar="GB")
-    p.add_argument("--max-price", type=float, default=0.0, metavar="USD_HORA")
+    p.add_argument("--perfil", help="condiciones guardadas en vast-perfiles/ (lo explicito manda)")
+    p.add_argument("--cpus", type=int, default=None, help="vCPU efectivas minimas")
+    p.add_argument("--max-cpus", type=int, default=None, help="vCPU efectivas maximas")
+    p.add_argument("--min-ram", type=float, default=None, metavar="GB")
+    p.add_argument("--max-price", type=float, default=None, metavar="USD_HORA")
     p.add_argument("--limit", type=int, default=20, help="cuantas filas imprimir")
     p.add_argument(
         "--by-cpus",
@@ -1342,13 +1442,14 @@ def main() -> None:
 
     p = sub.add_parser("launch", help="alquila una maquina y espera a que sea usable")
     p.add_argument("label", help="etiqueta con la que la reconoceras")
-    p.add_argument("--cpus", type=int, default=0, help="vCPU efectivas minimas")
-    p.add_argument("--max-cpus", type=int, default=0)
-    p.add_argument("--min-ram", type=float, default=0.0, metavar="GB")
+    p.add_argument("--perfil", help="condiciones guardadas en vast-perfiles/ (lo explicito manda)")
+    p.add_argument("--cpus", type=int, default=None, help="vCPU efectivas minimas")
+    p.add_argument("--max-cpus", type=int, default=None)
+    p.add_argument("--min-ram", type=float, default=None, metavar="GB")
     p.add_argument("--offer", help="alquilar esta oferta concreta, sin buscar")
     p.add_argument("--image", help=f"imagen Docker (por defecto {DEFAULTS['VAST_IMAGE']})")
-    p.add_argument("--disk", type=float, default=0.0, metavar="GB")
-    p.add_argument("--max-price", type=float, default=0.0, metavar="USD_HORA")
+    p.add_argument("--disk", type=float, default=None, metavar="GB")
+    p.add_argument("--max-price", type=float, default=None, metavar="USD_HORA")
     p.add_argument("--dry-run", action="store_true", help="ensena la peticion sin enviarla")
     p.set_defaults(func=cmd_launch)
 
@@ -1366,36 +1467,44 @@ def main() -> None:
     p.add_argument("--yes", action="store_true")
     p.set_defaults(func=cmd_destroy)
 
+    p = sub.add_parser(
+        "perfiles",
+        help="condiciones de busqueda guardadas en vast-perfiles/, para no repetirlas",
+    )
+    p.set_defaults(func=cmd_perfiles)
+
     p = sub.add_parser("benchs", help="benchmarks disponibles en benchmarks/")
     p.set_defaults(func=cmd_benchs)
 
     p = sub.add_parser(
         "bench", help="alquila UNA maquina, corre el benchmark y la destruye"
     )
-    p.add_argument("--bench", required=True, help="nombre de un fichero de benchmarks/")
-    p.add_argument("--cpus", type=int, default=0)
-    p.add_argument("--max-cpus", type=int, default=0)
-    p.add_argument("--min-ram", type=float, default=0.0, metavar="GB")
-    p.add_argument("--max-price", type=float, default=0.0, metavar="USD_HORA")
+    p.add_argument("--perfil", help="condiciones guardadas en vast-perfiles/ (lo explicito manda)")
+    p.add_argument("--bench", default=None, help="nombre de un fichero de benchmarks/")
+    p.add_argument("--cpus", type=int, default=None)
+    p.add_argument("--max-cpus", type=int, default=None)
+    p.add_argument("--min-ram", type=float, default=None, metavar="GB")
+    p.add_argument("--max-price", type=float, default=None, metavar="USD_HORA")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_bench)
 
     p = sub.add_parser(
         "sweep", help="una maquina por nivel de CPU: mide, guarda y destruye"
     )
-    p.add_argument("--bench", required=True)
+    p.add_argument("--perfil", help="condiciones guardadas en vast-perfiles/ (lo explicito manda)")
+    p.add_argument("--bench", default=None)
     p.add_argument(
         "--cpus",
-        default="2,4,8,16",
+        default=None,
         help="niveles de vCPU separados por coma (por defecto 2,4,8,16)",
     )
-    p.add_argument("--min-ram", type=float, default=0.0, metavar="GB")
-    p.add_argument("--max-price", type=float, default=0.0, metavar="USD_HORA")
+    p.add_argument("--min-ram", type=float, default=None, metavar="GB")
+    p.add_argument("--max-price", type=float, default=None, metavar="USD_HORA")
     p.add_argument(
         "--horas-max",
         type=float,
-        default=1.0,
-        help="solo para estimar el coste maximo antes de empezar",
+        default=None,
+        help="solo para estimar el coste maximo antes de empezar (por defecto 1)",
     )
     p.add_argument("--yes", action="store_true")
     p.add_argument("--dry-run", action="store_true")

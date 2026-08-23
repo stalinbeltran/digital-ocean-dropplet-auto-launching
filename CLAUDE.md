@@ -100,6 +100,11 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 - [benchmarks/](benchmarks/) — un JSON por benchmark (`envia`, `install`, `run`,
   `recoge`, `metrica`). **Dato, no código**, igual que `services/` y `types/`: medir
   otra cosa es escribir otro fichero, no tocar `vast_instance.py`.
+- [vast-perfiles/](vast-perfiles/) — un JSON por **conjunto de condiciones de búsqueda**
+  en Vast (`cpus`, `min_ram`, `max_price`, `bench`…). En Vast no se pide una máquina por
+  su nombre: se busca, y esas condiciones se aprenden pagando. Se aplican con `--perfil`
+  en `offers`, `launch`, `bench` y `sweep`; **lo explícito manda sobre el perfil, y el
+  perfil sobre el default**, igual que `types/`.
 - [results/](results/) — lo medido, commiteado. Un JSON por máquina y una `tabla.md`
   que **se regenera entera** a partir de ellos; no se edita a mano.
 - [gpu_training_services.md](gpu_training_services.md) — comparativa de proveedores de
@@ -194,6 +199,25 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
 **Léela antes de escribir cualquier código que toque la API de DigitalOcean.**
 
 ## Lo mínimo que hay que tener presente
+
+> **El reparto mini/dev, con el detalle entero, está en
+> [`docs/reparto-mini-dev.md`](docs/reparto-mini-dev.md).** Léelo antes de tocar
+> `types/mini.json` o `types/dev.json`.
+
+- **El superviviente tiene que poder apagar todo lo que el desechable encienda.** El
+  token de cualquier cosa que **dev** pueda ENCENDER tiene que estar también en el
+  **mini**. No para encender: para apagar. dev alquila máquinas que facturan por segundo
+  y dev es desechable; cuando muera, el mini es lo único que queda capaz de enumerar y
+  matar lo que dejó vivo, y un `apagar-vast` sin `VAST_AI_API_TOKEN` es un botón que no
+  hace nada. Si algún día dev enciende algo en un proveedor nuevo, **ese token entra en
+  `types/mini.json` en el mismo commit**. Es la regla del freno y el acelerador, aplicada
+  a las máquinas.
+- **`push_env` es el destino ANCHO de un secreto, no el estrecho.** Escribe en
+  `~/.config/dev-secrets.env`, y eso lo ven **el bot y las sesiones SSH**: el unit arranca
+  con `ExecStart=/bin/bash -lc` y `provision` pone la línea que lo carga al **principio**
+  de `.bashrc`, antes del guard de no-interactiva. El `.env` del servicio (`env_prefix`)
+  es el estrecho: sólo el bot. Un token de herramienta (`do_droplet.py`, `vast_instance.py`,
+  `gh`) va por `push_env`; uno de configuración del servicio (`BOT_TOKEN`) por el puente.
 
 - Base URL `https://api.digitalocean.com/v2/`, auth `Authorization: Bearer $DIGITALOCEAN_TOKEN`.
 - `POST /v2/droplets` devuelve **202 Accepted**, no un droplet listo. Requeridos: `size` e `image`

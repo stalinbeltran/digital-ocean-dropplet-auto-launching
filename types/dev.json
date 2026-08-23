@@ -1,5 +1,20 @@
 {
-  "descripcion": "El droplet de trabajo de siempre: 2 vCPU compartidas y 4 GB de RAM. Sirve para casi todo.",
+  "descripcion": "La maquina de trabajo: Claude Code + el bot Coordinador. Aqui van las peticiones complejas, y desde aqui se alquila y se apaga lo de Vast. Desechable: se rehace en unos minutos.",
   "size": "s-2vcpu-4gb",
-  "image": "ubuntu-24-04-x64"
+  "image": "ubuntu-24-04-x64",
+  "repos": [
+    "stalinbeltran/foveal-vision",
+    "stalinbeltran/image-text-sample-generator"
+  ],
+  "services": [
+    "telegram-coordinator"
+  ],
+  "make_launcher": true,
+  "push_env": [
+    "VAST_AI_API_TOKEN"
+  ],
+  "post": [
+    "cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/vast_instance.py register-key --comment dev"
+  ],
+  "notas": "Lleva tag 'ephemeral' (el default) A PROPOSITO: es lo que hace que `apagar-do` la destruya, y es la mitad desechable del reparto. Para matar solo una de varias, `destroy <nombre> --yes` por nombre. El repo del coordinador y el del lanzador NO se listan en 'repos': el primero lo clona 'services' y el segundo 'make_launcher'. make_launcher va aqui porque desde dev se alquila en Vast, y el token de Vast deja ALQUILAR pero no ENTRAR: por eso el 'post' registra la clave, igual que en bench-control. El token de Vast viaja por push_env, que escribe en ~/.config/dev-secrets.env y lo ve tanto el bot (el unit arranca con `bash -lc`) como una sesion SSH. GITHUB_TOKEN no se declara: provision lo envia solo si la maquina que lanza lo tiene, y hace falta para EMPUJAR desde dev, que es lo unico que salva el trabajo cuando esta maquina se destruya."
 }

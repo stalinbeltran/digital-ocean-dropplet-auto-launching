@@ -639,6 +639,46 @@ haz `git push` desde el droplet antes de destruirlo. Ten en cuenta también que 
 droplet con un servicio dentro es un droplet de larga vida: no lo barras con
 `destroy --tag ephemeral` sin mirar, y recuerda que factura mientras exista.
 
+## Dos máquinas: la que sobrevive y la que se tira
+
+El reparto que hace que esto funcione desde el móvil, con el detalle entero en
+[docs/reparto-mini-dev.md](docs/reparto-mini-dev.md):
+
+| | **mini** | **dev** |
+|---|---|---|
+| para qué | lanzar la de trabajo, ver qué hay vivo, apagarlo | todo el trabajo: Claude Code y las peticiones complejas |
+| vida | siempre encendida, tag `control` | desechable, tag `ephemeral` |
+| Claude Code | no (no cabe en 512 MB) | sí |
+| bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
+| alquila en Vast | no | sí |
+| **apaga** en Vast | **sí** | sí |
+
+Esa última fila es la regla que no es obvia:
+
+> **El token de cualquier cosa que dev pueda ENCENDER tiene que estar también en
+> el mini. No para encender: para apagar.**
+
+dev alquila máquinas que facturan por segundo y dev es desechable. Cuando muera,
+el mini es lo único capaz de enumerar y matar lo que quedó vivo — y un
+`apagar-vast` sin token es un botón que no hace nada.
+
+El día a día son tres mensajes:
+
+```
+lanzar   launch dev          (al Lanzador)   ~5 min, y dev arranca con su bot
+…trabajas hablándole al Coordinador…
+estado                       (al Lanzador)   qué hay vivo en las dos nubes
+lanzar   destroy dev --yes   (al Lanzador)
+```
+
+[types/dev.json](types/dev.json) trae dentro los repos, el servicio, el
+`make_launcher` y el `register-key` de Vast, así que **el lanzamiento cabe en un
+mensaje**. Y [types/mini.json](types/mini.json) declara el token de Vast aunque
+desde el mini no se alquile nada, justo por la regla de arriba.
+
+> ⚠️ `apagar-do` **también destruye dev**, que lleva tag `ephemeral` a propósito.
+> Para matar sólo una de varias, por nombre: `lanzar destroy dev-02 --yes`.
+
 ## La máquina de control: lanzar droplets desde el móvil
 
 > ### El mini no se destruye nunca en una limpieza

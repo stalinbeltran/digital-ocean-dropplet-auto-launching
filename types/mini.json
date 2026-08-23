@@ -1,8 +1,15 @@
 {
-  "descripcion": "La maquina de control de 512 MB, siempre encendida, desde la que se lanzan las demas por Telegram.",
+  "descripcion": "La maquina de control de 512 MB, siempre encendida. Solo hace tres cosas: lanzar la de trabajo, saber que hay vivo y apagarlo. No lleva Claude Code.",
   "size": "s-1vcpu-512mb-10gb",
   "image": "ubuntu-24-04-x64",
   "cloud_init": "cloud-init.mini.yaml",
   "tag": "control",
-  "notas": "El tag 'control' la deja fuera de destroy --tag ephemeral a proposito, y asi debe seguir. Este tipo fija la maquina, no lo que lleva dentro: para que sea lanzador siguen haciendo falta --service telegram-launcher, --push-do-token y --push-env, que estan en el README."
+  "services": [
+    "telegram-launcher"
+  ],
+  "make_launcher": true,
+  "push_env": [
+    "VAST_AI_API_TOKEN"
+  ],
+  "notas": "El tag 'control' la deja fuera de destroy --tag ephemeral a proposito, y asi debe seguir. VAST_AI_API_TOKEN va aqui aunque desde el mini NO se alquile nada: hace falta para APAGAR. Si dev alquila en Vast y dev es desechable, cuando dev muera el mini es el unico que puede barrer lo que quedo facturando, y `apagar-vast` sin token es un boton que no hace nada. GITHUB_TOKEN no se declara pero tiene que existir en la maquina que crea el mini: se propaga solo, y sin el los dev que el mini cree no podran EMPUJAR, que es lo unico que salva su trabajo. Este tipo NO incluye repos de trabajo: foveal-vision y compania van en dev, no aqui -- en 512 MB no cabe Claude Code y no hay nada que hacer con ellos."
 }

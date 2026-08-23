@@ -1,0 +1,8 @@
+{
+  "descripcion": "El barrido de velocidad por vCPU sobre el benchmark foveal-cpu: cuatro niveles, una maquina por nivel, medida y destruida.",
+  "bench": "foveal-cpu",
+  "cpus": "2,4,8,16",
+  "min_ram": 8,
+  "horas_max": 1.0,
+  "notas": "El --min-ram 8 no es un capricho, es lo que costo el nivel alto del 2026-08-21: `sweep` coge siempre la oferta mas barata del rango, asi que un host roto se queda pegado y repetir el mismo comando vuelve a el. Dos intentos cayeron en la oferta 13779915 (una rebotando la clave SSH, otra con un sshd mudo) y se salio estrechando la busqueda, no cableando una lista de ofertas prohibidas. Medido con este perfil: 2 vCPU 58.02 s/epoca, 6 vCPU 16.87, 10 vCPU 16.35, 18 vCPU 13.80; el barrido entero costo 0.0233 $."
+}
