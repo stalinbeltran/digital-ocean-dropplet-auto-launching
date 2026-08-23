@@ -1,4 +1,15 @@
 {
   "format_version": 1,
-  "maquinas": []
+  "maquinas": [
+    {
+      "machine_id": 45390,
+      "primer_fallo": "2026-08-23T18:19:27+00:00",
+      "ultimo_fallo": "2026-08-23T18:19:27+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: no pude subir el payload"
+      ],
+      "visto_en": "estudio-lr-alto-L4-s3"
+    }
+  ]
 }
