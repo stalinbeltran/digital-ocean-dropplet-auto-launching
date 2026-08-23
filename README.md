@@ -1384,9 +1384,23 @@ teclea mal, y un error de dedo ahí crea una máquina que factura y no sirve.
 
 > **Si vienes de una máquina anterior al 2026-08-22**, los ejecutores que
 > `install-executors` copió en su día siguen en `data/executors/` del coordinador
-> y **pisan** a los descubiertos. No rompen nada (son los mismos comandos con un
-> `cd` de más), pero conviene borrarlos: el arranque del bot y `/executors` dicen
-> qué fichero manda y cuál queda pisado.
+> y **pisan** a los descubiertos: en `/executors` salen marcados `⚠️ duplicado` y
+> con el repo `[telegram-coordinator]` en vez del que debería. No rompen nada (son
+> los mismos comandos con un `cd` de más), pero hay que borrarlos. Con `/use shell`,
+> en dos mensajes:
+>
+> ```
+> cd ~/src/telegram-coordinator/data/executors
+> ```
+> ```
+> rm -f lanzar.json actualizar.json ejecutores.json vast.json datos.json estado.json apagar-vast.json apagar-do.json ayuda.json
+> ```
+>
+> Los nombres van **sueltos, sin llaves**: el bot ejecuta con `/bin/sh`, que en
+> Ubuntu es dash y no expande `{a,b}.json`. No hace falta reiniciar —el
+> coordinador relee sus ejecutores en cada mensaje, así que el descubierto releva
+> al borrado en el acto, incluso `actualizar`— y no queda nada que commitear,
+> porque esas copias no estaban versionadas.
 
 ### Cuando no te acuerdes de un comando
 
