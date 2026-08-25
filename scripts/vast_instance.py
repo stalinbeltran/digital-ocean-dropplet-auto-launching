@@ -231,6 +231,7 @@ def buscar_ofertas(
     max_price: float = 0.0,
     limit: int = 64,
     orden: str = "dph_total",
+    min_price: float = 0.0,
 ) -> list[dict]:
     """Ofertas alquilables del marketplace, ya limpias.
 
@@ -245,6 +246,11 @@ def buscar_ofertas(
 
     El nivel de CPU sale de `cpu_cores_effective`, que es lo que de verdad toca a
     la porción alquilada, no los núcleos del host entero.
+
+    ⚠ **Devuelve como mucho 64 ofertas, y son las 64 MÁS BARATAS** (el orden es
+    `dph_total asc`). No es un `limit` que se pueda subir: la API corta ahí. Para
+    ver el catálogo entero hace falta `buscar_ofertas_paginado`, que recorre el
+    precio por tramos — ver allí por qué importa tanto.
     """
     consulta: dict = {
         "limit": min(max(limit, 1), 64),  # la API corta en 64 aunque pidas más
@@ -262,12 +268,130 @@ def buscar_ofertas(
         consulta["cpu_cores_effective"] = rango
     if min_ram_gb:
         consulta["cpu_ram"] = {"gte": int(min_ram_gb * 1024)}
+    precio: dict = {}
+    if min_price:
+        precio["gte"] = min_price
     if max_price:
-        consulta["dph_total"] = {"lte": max_price}
+        precio["lte"] = max_price
+    if precio:
+        consulta["dph_total"] = precio
 
     resp = api("POST", "/api/v0/bundles/", consulta)
     ofertas = resp.get("offers") if isinstance(resp, dict) else None
     return [o for o in (ofertas or []) if o.get("resource_type") == "gpu"]
+
+
+# Tope duro de la API por peticion. No es configurable: pedir mas no da mas.
+TOPE_API = 64
+# Ancho del tramo de vCPU con que se recorre el catalogo (ver
+# buscar_ofertas_paginado). 1 es lo mas fino que tiene sentido: `cpu_cores_effective`
+# es fraccionario pero se agrupa en enteros.
+PASO_VCPU = 1
+# Cuanto vale una lectura del catalogo antes de repetirla. Un recorrido completo
+# son ~24 peticiones (~10 s), y el reparto de una flota pide ofertas una vez por
+# lote y por reintento: sin cache eso multiplica el recorrido por cada lote. Con
+# cache eterna, en cambio, una maquina liberada hace un minuto no se veria nunca.
+# 60 s es el compromiso, y la regla va escrita aqui al lado a proposito.
+CACHE_TTL_S = 60.0
+_cache_catalogo: dict = {}
+
+
+def buscar_ofertas_paginado(
+    cpus: int = 0,
+    max_cpus: int = 0,
+    min_ram_gb: float = 0.0,
+    max_price: float = 0.0,
+    usar_cache: bool = True,
+) -> list[dict]:
+    """El catalogo ENTERO, recorriendolo por tramos de vCPU. Ordenado por precio.
+
+    Por que existe (MEDIDO el 2026-08-25, ver el reporte del pozo):
+
+    `buscar_ofertas` devuelve 64 ofertas como mucho -- la API corta ahi y pedir
+    `limit` mayor no cambia nada -- y son las mas baratas. Con el filtro de
+    familia de CPU que exige el proyecto (`--cpu E5-26`, que es lo que hace que
+    el entrenamiento salga IDENTICO bit a bit entre maquinas) de esas 64 quedaban
+    **19**. O sea que el pozo no lo fijaba el mercado sino el tope de la
+    peticion: habia **156** maquinas E5-26xx alquilables y se veian 19. El 88 %
+    del catalogo era invisible, y eso se pagaba dos veces -- un estudio no podia
+    repartirse en mas de ~19 maquinas, y encima competia por ese puñado con
+    cualquier otro estudio que corriera a la vez.
+
+    POR QUE SE PAGINA POR vCPU Y NO POR PRECIO, que es lo obvio
+    -----------------------------------------------------------
+    La API no tiene `offset`, asi que hay que partir el espacio con un filtro. El
+    precio parece el candidato natural (el orden ya es por precio), pero **el
+    filtro de precio de Vast no es de fiar**. Medido el 2026-08-25 pidiendo
+    `dph_total: {lte: X}` con todo lo demas igual:
+
+        lte=0.06 -> 24 ofertas, la mas cara 0,0630   (se pasa del tope)
+        lte=0.08 -> 64 ofertas, la mas cara 0,0813   (se pasa del tope)
+        lte=0.12 -> 50 ofertas, la mas cara 0,1184
+        lte=0.15 -> 61 ofertas, la mas cara 0,1511   (se pasa del tope)
+
+    Ni respeta el tope ni el numero crece con el: con `lte=0.12` devuelve MENOS
+    que con `lte=0.10`. La explicacion que encaja es que el servidor filtra por
+    un precio distinto del `dph_total` que devuelve (el nuestro incluye el disco
+    que pedimos). Sea cual sea la causa, **paginar por precio termina antes de
+    tiempo**: una pagina corta se lee como "fin del catalogo" y no lo es. Asi es
+    justamente como la primera version de esto daba 18 maquinas para `<=0,12` y
+    57 para `<=0,10` -- menos pozo por subir el tope.
+
+    `cpu_cores_effective` si parte exacto: los tramos [8,9), [9,10)... no se
+    solapan ni dejan hueco, y sobre ellos el resultado si es monotono con el
+    precio (50 / 85 / 99 / 125 / 142 maquinas para 0,08 / 0,10 / 0,12 / 0,15 /
+    0,20 $/h). Por eso el recorrido va por ahi.
+
+    ⚠ EL TOPE DE PRECIO SE APLICA AQUI, no en la API, y por lo de arriba: pasarle
+    un `lte` que no respeta haria perder ofertas buenas en silencio.
+
+    ⚠ Un tramo puede saturar igualmente (medido: [8,9) devolvio 64). Ese se
+    sub-recorre subiendo el SUELO de precio, que es el unico filtro de precio que
+    si se comporto en la medida (`gte` nunca devolvio nada por debajo). Si aun
+    asi no avanza, se dice en voz alta en vez de callarse un hueco.
+    """
+    lo = int(cpus) if cpus else 1
+    hi = int(max_cpus) if max_cpus else 256
+    clave = (lo, hi, float(min_ram_gb), float(max_price))
+    if usar_cache:
+        guardado = _cache_catalogo.get(clave)
+        if guardado and (time.time() - guardado[0]) < CACHE_TTL_S:
+            return list(guardado[1])
+
+    vistas: dict = {}
+
+    def recoger(offs) -> None:
+        for o in offs:
+            if o.get("id") is not None:
+                vistas.setdefault(str(o["id"]), o)
+
+    for c in range(lo, hi, PASO_VCPU):
+        tramo = buscar_ofertas(cpus=c, max_cpus=min(c + PASO_VCPU, hi),
+                               min_ram_gb=min_ram_gb)
+        recoger(tramo)
+        if len(tramo) < TOPE_API:
+            continue
+        # tramo saturado: sub-recorrido subiendo el suelo de precio
+        suelo = max(float(o.get("dph_total") or 0.0) for o in tramo)
+        for _ in range(TOPE_API):
+            sub = buscar_ofertas(cpus=c, max_cpus=min(c + PASO_VCPU, hi),
+                                 min_ram_gb=min_ram_gb, min_price=suelo)
+            recoger(sub)
+            if len(sub) < TOPE_API:
+                break
+            techo = max(float(o.get("dph_total") or 0.0) for o in sub)
+            if techo <= suelo:
+                log(f"  ⚠ el tramo de {c} vCPU tiene {TOPE_API}+ ofertas al mismo "
+                    f"precio ({techo:.4f} $/h): puede quedarse alguna sin ver")
+                break
+            suelo = techo
+
+    fuera = [o for o in vistas.values()
+             if not max_price or float(o.get("dph_total") or 0.0) <= max_price]
+    fuera.sort(key=lambda o: float(o.get("dph_total") or 0.0))
+    if usar_cache:
+        _cache_catalogo[clave] = (time.time(), list(fuera))
+    return fuera
 
 
 def _leer_bloqueadas() -> dict:
@@ -390,8 +514,13 @@ def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
     excluir_ofertas = excluir_ofertas or set()
     aguja = cpu.strip().lower()
     bloqueadas = maquinas_bloqueadas()
-    ofertas = buscar_ofertas(cpus=cpus, max_cpus=max_cpus, min_ram_gb=min_ram_gb,
-                             max_price=max_price)
+    # PAGINADO, y no las 64 de una peticion: con `cpu` puesto, el filtro de
+    # familia se come la mayor parte de una pagina, asi que mirar solo las 64 mas
+    # baratas dejaba el pozo en 19 maquinas cuando habia 143 (medido 2026-08-25,
+    # ver buscar_ofertas_paginado). El pozo lo tiene que fijar el mercado y el
+    # `--max-price`, no el tope de la peticion.
+    ofertas = buscar_ofertas_paginado(cpus=cpus, max_cpus=max_cpus,
+                                      min_ram_gb=min_ram_gb, max_price=max_price)
     elegidas, vistas, saltadas_bloq, saltadas_cpu = [], set(), 0, 0
     for o in ofertas:
         mid = o.get("machine_id")
@@ -580,27 +709,51 @@ def cmd_perfiles(args: argparse.Namespace) -> None:
 def cmd_offers(args: argparse.Namespace) -> None:
     aplicar_perfil(args)
     tope = args.max_price or limite_precio()
-    ofertas = buscar_ofertas(
-        cpus=args.cpus,
-        max_cpus=args.max_cpus,
-        min_ram_gb=args.min_ram,
-        max_price=tope,
-        orden="cpu_cores_effective" if args.by_cpus else "dph_total",
-    )
+    paginado = getattr(args, "paginado", False)
+    if paginado:
+        ofertas = buscar_ofertas_paginado(
+            cpus=args.cpus, max_cpus=args.max_cpus,
+            min_ram_gb=args.min_ram, max_price=tope,
+        )
+        if args.by_cpus:
+            ofertas.sort(key=lambda o: -float(o.get("cpu_cores_effective") or 0))
+    else:
+        ofertas = buscar_ofertas(
+            cpus=args.cpus,
+            max_cpus=args.max_cpus,
+            min_ram_gb=args.min_ram,
+            max_price=tope,
+            orden="cpu_cores_effective" if args.by_cpus else "dph_total",
+        )
+    aguja = (getattr(args, "cpu", "") or "").strip().lower()
+    if aguja:
+        ofertas = [o for o in ofertas
+                   if aguja in (o.get("cpu_name") or "").lower()]
     if not ofertas:
         log(
             f"Ninguna oferta con {args.cpus or 'cualquier'} vCPU por debajo de "
-            f"{tope:.2f} $/h.\n"
+            f"{tope:.2f} $/h" + (f" y CPU '{args.cpu}'" if aguja else "") + ".\n"
             "  Prueba a bajar --cpus, subir --max-price o quitar --min-ram."
         )
         return
     log(cabecera_ofertas())
     for o in ofertas[: args.limit]:
         log(oferta_fila(o))
-    log(
-        f"\n{len(ofertas)} ofertas (la API corta en 64 por consulta). "
-        "El barrido coge la mas barata de cada nivel."
-    )
+    # El POZO es lo que de verdad se puede alquilar a la vez: una maquina FISICA
+    # puede publicar varias ofertas (una por GPU libre) y el reparto coge una por
+    # `machine_id`, asi que contar ofertas engaña. Y las bloqueadas no cuentan.
+    bloqueadas = maquinas_bloqueadas()
+    pozo = {int(o["machine_id"]) for o in ofertas
+            if o.get("machine_id") is not None
+            and int(o["machine_id"]) not in bloqueadas}
+    log(f"\n{len(ofertas)} ofertas -> POZO de {len(pozo)} maquinas fisicas "
+        f"distintas y no bloqueadas"
+        + (f", CPU '{args.cpu}'" if aguja else "")
+        + f", hasta {tope:.2f} $/h.")
+    if not paginado:
+        log("  ⚠ SIN --paginado solo se ven las 64 mas baratas (tope de la API). "
+            "Con el filtro de CPU eso deja fuera la mayor parte del catalogo: "
+            "medido el 2026-08-25, 19 visibles contra 143 reales.")
     log(
         "Se alquila una maquina CON GPU y se usa solo su CPU: en Vast.ai las\n"
         "ofertas sin GPU son de almacenamiento, no de computo (CLAUDE.md)."
@@ -1631,6 +1784,13 @@ def main() -> None:
     p.add_argument("--min-ram", type=float, default=None, metavar="GB")
     p.add_argument("--max-price", type=float, default=None, metavar="USD_HORA")
     p.add_argument("--limit", type=int, default=20, help="cuantas filas imprimir")
+    p.add_argument("--cpu", default="",
+                   help="solo esta CPU (subcadena, p.ej. 'E5-26'): es el filtro "
+                        "que usa el reparto de estudios, asi que es el unico que "
+                        "enseña el pozo de verdad")
+    p.add_argument("--paginado", action="store_true",
+                   help="recorre el catalogo ENTERO por tramos de precio en vez "
+                        "de quedarse en las 64 mas baratas que da la API")
     p.add_argument(
         "--by-cpus",
         action="store_true",
