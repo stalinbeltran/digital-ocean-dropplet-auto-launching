@@ -2,6 +2,26 @@
   "format_version": 1,
   "maquinas": [
     {
+      "machine_id": 37055,
+      "primer_fallo": "2026-08-24T23:57:32+00:00",
+      "ultimo_fallo": "2026-08-24T23:57:32+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh9.vast.ai:18744"
+      ],
+      "visto_en": "estudio-c1"
+    },
+    {
+      "machine_id": 39206,
+      "primer_fallo": "2026-08-24T17:25:15+00:00",
+      "ultimo_fallo": "2026-08-24T17:25:15+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh3.vast.ai:22294"
+      ],
+      "visto_en": "estudio-c7"
+    },
+    {
       "machine_id": 45390,
       "primer_fallo": "2026-08-23T18:19:27+00:00",
       "ultimo_fallo": "2026-08-23T18:19:27+00:00",
@@ -22,6 +42,16 @@
       "visto_en": "estudio-lr-alto-L4-b-p1"
     },
     {
+      "machine_id": 57608,
+      "primer_fallo": "2026-08-24T17:24:21+00:00",
+      "ultimo_fallo": "2026-08-24T17:24:21+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh8.vast.ai:22184"
+      ],
+      "visto_en": "estudio-c14"
+    },
+    {
       "machine_id": 68097,
       "primer_fallo": "2026-08-23T22:45:55+00:00",
       "ultimo_fallo": "2026-08-23T22:45:55+00:00",
@@ -30,6 +60,26 @@
         "RuntimeError: sshd no contesto en ssh7.vast.ai:27040"
       ],
       "visto_en": "estudio-lr-alto-L4-b-p8"
+    },
+    {
+      "machine_id": 68203,
+      "primer_fallo": "2026-08-24T17:24:21+00:00",
+      "ultimo_fallo": "2026-08-24T17:24:21+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh3.vast.ai:22186"
+      ],
+      "visto_en": "estudio-c2"
+    },
+    {
+      "machine_id": 139030,
+      "primer_fallo": "2026-08-24T17:24:21+00:00",
+      "ultimo_fallo": "2026-08-24T17:24:21+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh1.vast.ai:22178"
+      ],
+      "visto_en": "estudio-c9"
     }
   ]
 }
