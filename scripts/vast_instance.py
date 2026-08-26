@@ -473,7 +473,8 @@ def bloquear_maquina(machine_id: int, motivo: str, etiqueta: str = "") -> dict:
 def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
                              min_ram_gb: float, max_price: float,
                              excluir_ofertas: set | None = None,
-                             cpu: str = "") -> list:
+                             cpu: str = "", estricto: bool = True,
+                             usar_cache: bool = True) -> list:
     """`cuantas` ofertas, cada una en una MAQUINA FISICA distinta.
 
     Dos filtros que no son un lujo:
@@ -520,7 +521,8 @@ def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
     # ver buscar_ofertas_paginado). El pozo lo tiene que fijar el mercado y el
     # `--max-price`, no el tope de la peticion.
     ofertas = buscar_ofertas_paginado(cpus=cpus, max_cpus=max_cpus,
-                                      min_ram_gb=min_ram_gb, max_price=max_price)
+                                      min_ram_gb=min_ram_gb, max_price=max_price,
+                                      usar_cache=usar_cache)
     elegidas, vistas, saltadas_bloq, saltadas_cpu = [], set(), 0, 0
     for o in ofertas:
         mid = o.get("machine_id")
@@ -542,6 +544,11 @@ def elegir_ofertas_distintas(cuantas: int, cpus: int, max_cpus: int,
         log(f"  ({saltadas_bloq} ofertas saltadas por estar su maquina bloqueada)")
     if saltadas_cpu:
         log(f"  ({saltadas_cpu} ofertas saltadas por no ser CPU '{cpu}')")
+    if len(elegidas) < cuantas and not estricto:
+        # `estricto=False`: quien llama sabe vivir con menos (el pozo de
+        # estudio_flota rellenandose sobre la marcha). Morir aqui mataria una
+        # flota entera por no poder dar un repuesto, que es peor que darle menos.
+        return elegidas
     if len(elegidas) < cuantas:
         die(
             f"Solo hay {len(elegidas)} maquinas DISTINTAS que cumplan "
