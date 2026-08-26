@@ -69,7 +69,28 @@ API = "https://console.vast.ai"
 DEFAULTS = {
     # La imagen oficial de Vast.ai: Ubuntu con python3, sshd y poco más. Un
     # benchmark que necesite otra cosa la pide en su descriptor.
-    "VAST_IMAGE": "vastai/base-image:@vastai-automatic-tag",
+    #
+    # ⚠ EL TAG VA FIJO, y NO es `@vastai-automatic-tag`. MEDIDO el 2026-08-26:
+    # el tag automático hace que Vast busque una imagen para la CUDA EXACTA que
+    # reporta el host, y `vastai/base-image` **no publica ninguna para CUDA 13.x**.
+    # El alquiler muere con
+    #   no_compatible_tag: No compatible image tag found for vastai/base-image
+    #   with compute capability 860 and CUDA version 13.0
+    # y eso hoy es la MAYORÍA del catálogo: de las 109 máquinas E5-26xx del pozo,
+    # 83 traen CUDA >= 13. En la flota del 25-ago se comió 27 máquinas, y encima
+    # las apuntaba en la lista negra como si fueran ellas las rotas.
+    #
+    # Filtrar por CUDA sería el arreglo obvio y es el equivocado: dejaría el pozo
+    # en 26 de 109. Se fija el tag a una CUDA 12.8, que el driver 13.x ejecuta sin
+    # problema por compatibilidad hacia atrás. Comprobado alquilando de verdad en
+    # las tres generaciones y destruyendo acto seguido: CUDA 12.2 (Quadro P4000),
+    # 12.8 (RTX 4060) y 13.2 (RTX A2000) -> las tres alquilan.
+    #
+    # Y que quede dicho por qué da igual la versión: aquí **no se usa la GPU**.
+    # Se alquila una máquina con GPU porque en Vast las ofertas sin GPU son de
+    # almacenamiento, pero el entrenamiento es en CPU. La CUDA de la imagen sólo
+    # tiene que dejar arrancar el contenedor.
+    "VAST_IMAGE": "vastai/base-image:cuda-12.8.1-auto",
     "VAST_DISK_GB": "24",
     # Freno de coste, hermano de DO_MAX_PRICE_MONTHLY. Aquí en $/hora porque Vast
     # factura por segundo y estas máquinas viven minutos: un mensual no dice

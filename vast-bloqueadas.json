@@ -12,6 +12,26 @@
       "visto_en": "estudio-c4"
     },
     {
+      "machine_id": 27568,
+      "primer_fallo": "2026-08-25T22:28:10+00:00",
+      "ultimo_fallo": "2026-08-25T22:28:10+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh7.vast.ai:21550"
+      ],
+      "visto_en": "estudio-c24"
+    },
+    {
+      "machine_id": 27618,
+      "primer_fallo": "2026-08-25T22:21:53+00:00",
+      "ultimo_fallo": "2026-08-25T22:21:53+00:00",
+      "fallos": 1,
+      "motivos": [
+        "ApiError: HTTP 400 en PUT /api/v0/asks/25240861/: {\"success\":false,\"error\":\"invalid_args\",\"msg\":\"error 404/3603: no_such_ask  Instance type by id 25240861 is not available.\",\"ask_id\":25240861}"
+      ],
+      "visto_en": "estudio-c18"
+    },
+    {
       "machine_id": 31848,
       "primer_fallo": "2026-08-25T10:42:08+00:00",
       "ultimo_fallo": "2026-08-25T10:42:08+00:00",
@@ -30,6 +50,16 @@
         "RuntimeError: sshd no contesto en ssh8.vast.ai:16284"
       ],
       "visto_en": "estudio-c10"
+    },
+    {
+      "machine_id": 35916,
+      "primer_fallo": "2026-08-25T22:22:41+00:00",
+      "ultimo_fallo": "2026-08-25T22:22:41+00:00",
+      "fallos": 1,
+      "motivos": [
+        "ApiError: HTTP 400 en PUT /api/v0/asks/25468214/: {\"success\":false,\"error\":\"invalid_args\",\"msg\":\"error 404/3603: no_such_ask  Instance type by id 25468214 is not available.\",\"ask_id\":25468214}"
+      ],
+      "visto_en": "estudio-c30"
     },
     {
       "machine_id": 37055,
@@ -72,6 +102,16 @@
       "visto_en": "estudio-c0"
     },
     {
+      "machine_id": 42772,
+      "primer_fallo": "2026-08-25T22:26:30+00:00",
+      "ultimo_fallo": "2026-08-25T22:26:30+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh4.vast.ai:21386"
+      ],
+      "visto_en": "estudio-c2"
+    },
+    {
       "machine_id": 45390,
       "primer_fallo": "2026-08-23T18:19:27+00:00",
       "ultimo_fallo": "2026-08-23T18:19:27+00:00",
@@ -100,6 +140,16 @@
         "RuntimeError: sshd no contesto en ssh9.vast.ai:19350"
       ],
       "visto_en": "estudio-c8"
+    },
+    {
+      "machine_id": 55028,
+      "primer_fallo": "2026-08-25T22:23:56+00:00",
+      "ultimo_fallo": "2026-08-25T22:23:56+00:00",
+      "fallos": 1,
+      "motivos": [
+        "ApiError: la oferta ya no está disponible: se la ha llevado otro entre la búsqueda y la compra.\n  En un marketplace es normal; reintenta y saldrá otra.\n  Respuesta: {\"success\":false,\"error\":\"ask_not_f"
+      ],
+      "visto_en": "estudio-c48"
     },
     {
       "machine_id": 57608,
@@ -140,6 +190,16 @@
         "RuntimeError: sshd no contesto en ssh2.vast.ai:16672"
       ],
       "visto_en": "estudio-c10"
+    },
+    {
+      "machine_id": 68387,
+      "primer_fallo": "2026-08-25T22:27:11+00:00",
+      "ultimo_fallo": "2026-08-25T22:27:11+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh2.vast.ai:21460"
+      ],
+      "visto_en": "estudio-c13"
     },
     {
       "machine_id": 136633,
@@ -210,6 +270,16 @@
         "RuntimeError: sshd no contesto en ssh8.vast.ai:16276"
       ],
       "visto_en": "estudio-c9"
+    },
+    {
+      "machine_id": 145281,
+      "primer_fallo": "2026-08-25T22:27:03+00:00",
+      "ultimo_fallo": "2026-08-25T22:27:03+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh4.vast.ai:21446"
+      ],
+      "visto_en": "estudio-c10"
     }
   ]
 }
