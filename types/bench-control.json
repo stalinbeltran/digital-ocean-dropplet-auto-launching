@@ -3,7 +3,8 @@
   "size": "s-2vcpu-4gb",
   "image": "ubuntu-24-04-x64",
   "repos": [
-    "stalinbeltran/foveal-vision"
+    "stalinbeltran/foveal-vision",
+    "stalinbeltran/foveal-vision-data"
   ],
   "push_env": [
     "VAST_AI_API_TOKEN"
@@ -12,5 +13,5 @@
   "post": [
     "cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/vast_instance.py register-key --comment bench-control"
   ],
-  "notas": "El `post` es la mitad que falta y que siempre se olvidaba: el token de Vast.ai deja ALQUILAR pero no ENTRAR, porque una instancia acepta las claves registradas en el momento de crearla. Sin ese register-key se alquilan maquinas a las que su creador no puede conectarse -- existen, facturan y no sirven. Es el mismo problema que resuelve --make-launcher en DigitalOcean, y por eso van juntos aqui. El dataset NO hace falta empujarlo: viaja en el repo del lanzador y lo resuelve datasets/."
+  "notas": "El `post` es la mitad que falta y que siempre se olvidaba: el token de Vast.ai deja ALQUILAR pero no ENTRAR, porque una instancia acepta las claves registradas en el momento de crearla. Sin ese register-key se alquilan maquinas a las que su creador no puede conectarse -- existen, facturan y no sirven. Es el mismo problema que resuelve --make-launcher en DigitalOcean, y por eso van juntos aqui. El dataset NO hace falta empujarlo: viaja en el repo del lanzador y lo resuelve datasets/. foveal-vision-data va aqui por lo mismo que en dev: esta maquina 'recoge y commitea', y sin el repo de datos clonado lo recogido cae en un directorio que git ignora. La descripcion de este tipo ya decia que commitea; ahora tiene donde."
 }

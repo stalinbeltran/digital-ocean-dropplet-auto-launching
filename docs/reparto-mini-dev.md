@@ -12,7 +12,7 @@ demás sale de ahí, incluida la regla nueva de los tokens.
 | tamaño | 512 MB (`s-1vcpu-512mb-10gb`) | 2 vCPU / 4 GB |
 | Claude Code | **no** — no cabe en 512 MB | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
-| repos de trabajo | ninguno | foveal-vision, image-text-sample-generator… |
+| repos de trabajo | ninguno | foveal-vision, foveal-vision-**data**, image-text-sample-generator |
 | alquila en Vast | **no** | sí |
 | **apaga** en Vast | **sí** | sí |
 
@@ -84,6 +84,20 @@ lanzar   destroy dev --yes   (al Lanzador)
 `register-key` de Vast, así que **el lanzamiento cabe en un mensaje** y no hay
 que recordar la versión larga — que es la clase de cosa que se teclea mal desde
 el móvil y crea una máquina que factura y no sirve.
+
+⚠ **Y por eso lo que tiene que estar siempre va en el TIPO, nunca en el comando.**
+`foveal-vision-data` —donde se guarda todo lo que se mide— faltaba en la lista, y
+lo que pasa entonces no se ve: `fv.settings.data_root()` cae al repo de código,
+donde `runs/` y `sweeps/` están en `.gitignore`, así que un estudio corre entero,
+escribe sus resultados y no los commitea en ninguna parte. Ni un error. Medido el
+2026-08-27 en un dev recién rehecho. La regla que deja: **si para que algo se
+guarde hay que acordarse de un `--repo`, tarde o temprano no se guarda.**
+
+⚠ Un tipo que cambia sólo llega a las máquinas que se creen DESPUÉS, y sólo si el
+mini tiene el repo del lanzador al día: es él quien lee `types/dev.json` al
+lanzar. Tras tocar un tipo, `actualizar` en el Lanzador (un `git pull` en todos
+sus repos) y ya. El mini no necesita el repo de datos —no mide nada—, necesita
+saber que dev sí.
 
 Si algo se cortó a mitad y quedó algo encendido: `apagar-vast` (todas las de
 Vast) y `apagar-do` (los droplets `ephemeral`, **nunca el mini**).
