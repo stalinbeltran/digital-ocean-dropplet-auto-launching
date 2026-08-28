@@ -512,6 +512,16 @@
       "visto_en": "estudio-c6"
     },
     {
+      "machine_id": 91962,
+      "primer_fallo": "2026-08-28T01:30:11+00:00",
+      "ultimo_fallo": "2026-08-28T01:30:11+00:00",
+      "fallos": 1,
+      "motivos": [
+        "ApiError: HTTP 400 en PUT /api/v0/asks/36328630/: {\"success\":false,\"error\":\"invalid_args\",\"msg\":\"error 404/3603: no_such_ask  Instance type by id 36328630 is not available.\",\"ask_id\":36328630}"
+      ],
+      "visto_en": "dr-c0"
+    },
+    {
       "machine_id": 93452,
       "primer_fallo": "2026-08-26T22:30:56+00:00",
       "ultimo_fallo": "2026-08-26T22:30:56+00:00",
