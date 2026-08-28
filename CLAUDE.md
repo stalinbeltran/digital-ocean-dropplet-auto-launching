@@ -88,6 +88,14 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
   repite `load_env`, `api()` y los ayudantes de SSH a propósito, para que cada script
   corra suelto en una máquina recién nacida. `sweep` es el comando que justifica el
   fichero: alquila una máquina por nivel de CPU, mide, guarda y destruye.
+- [scripts/estado_nubes.py](scripts/estado_nubes.py) — «qué hay vivo AHORA en las dos
+  nubes»: la unión de `do_droplet.py list` y `vast_instance.py list`, en **un** sitio.
+  No comparte código con ninguno de los dos (objetivo 12): los invoca como procesos, lo
+  que además evita que una nube ilegible tape la salida de la otra. Existe porque esa
+  unión la piden **dos** ejecutores del bot —`estado` y el `list` de `lanzar`—, y copiada
+  en los dos JSON, añadir un proveedor arreglaría uno y dejaría el otro contando de
+  menos. Los ejecutores lo llaman con `--exit0`, por lo de siempre: el coordinador lee un
+  código != 0 como «el ejecutor falló» y entonces no llega nada al chat.
 - [scripts/dataset.py](scripts/dataset.py) — el registro de datos: `list`, `pack`,
   `fetch`, `check`. Resuelve el problema de que **el dato no está en el repo del
   proyecto** y una máquina nueva se queda sin él. Es el único módulo que

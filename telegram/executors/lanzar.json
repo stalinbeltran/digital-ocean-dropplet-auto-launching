@@ -1,14 +1,15 @@
 {
   "name": "lanzar",
-  "descripcion": "Cualquier comando de do_droplet.py, sobre DigitalOcean. Un tipo que se llame igual que el droplet trae solo sus repos, variables y pasos finales.",
+  "descripcion": "Cualquier comando de do_droplet.py, sobre DigitalOcean. Un tipo que se llame igual que el droplet trae solo sus repos, variables y pasos finales. `list` a secas enseña LAS DOS nubes (lo mismo que el ejecutor `estado`), porque desde el movil la pregunta nunca es 'que droplets hay' sino 'que estoy pagando'; con argumentos (`list --tag x`) sigue siendo solo DigitalOcean, que es de quien son las etiquetas.",
   "ejemplos": [
-    "launch bench-control",
     "list",
+    "list --tag ephemeral",
+    "launch bench-control",
     "types",
     "destroy bench-control --yes",
     "ssh bench-control --cmd 'uptime'"
   ],
-  "command": "python3 scripts/do_droplet.py {{input}}",
+  "command": "set -- {{input}}; if [ $# -eq 1 ] && [ \"$1\" = list ]; then exec python3 scripts/estado_nubes.py --exit0; fi; exec python3 scripts/do_droplet.py \"$@\"",
   "encargados": [
     "echo"
   ],

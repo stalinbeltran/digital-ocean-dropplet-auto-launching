@@ -1,10 +1,10 @@
 {
   "name": "estado",
-  "descripcion": "Que hay vivo AHORA en las dos nubes, con su gasto por hora. Mirelo si algo se corto a medias.",
+  "descripcion": "Que hay vivo AHORA en las dos nubes, con su gasto por hora. Mirelo si algo se corto a medias. Es lo mismo que `lanzar list`: los dos llaman a scripts/estado_nubes.py, que es donde esta definido que 'las nubes' son dos.",
   "ejemplos": [
     ""
   ],
-  "command": "python3 scripts/do_droplet.py list; echo; python3 scripts/vast_instance.py list",
+  "command": "python3 scripts/estado_nubes.py --exit0",
   "encargados": [
     "echo"
   ],

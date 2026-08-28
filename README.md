@@ -1392,10 +1392,10 @@ comandos salen en `/executors`. **No hay paso de instalación ni reinicio.**
 | ejecutor | qué hace |
 |---|---|
 | `actualizar` | `git pull` en todos los repos y reinicia lo que cambió |
-| `lanzar` | cualquier subcomando de `do_droplet.py` |
+| `lanzar` | cualquier subcomando de `do_droplet.py`. `list` a secas enseña **las dos nubes**, igual que `estado` |
 | `vast` | cualquier subcomando de `vast_instance.py` |
 | `datos` | cualquier subcomando de `dataset.py` |
-| `estado` | droplets **y** instancias de Vast, con su gasto por hora |
+| `estado` | droplets **y** instancias de Vast, con su gasto por hora (lo mismo que `lanzar list`) |
 | `apagar-vast` | destruye **todas** las instancias de Vast |
 | `apagar-do` | destruye los droplets con tag `ephemeral` (**el mini no lo lleva**) |
 
