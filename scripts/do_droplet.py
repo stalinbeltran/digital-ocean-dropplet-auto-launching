@@ -2371,6 +2371,75 @@ def cmd_install_executors(args: argparse.Namespace) -> None:
         log(f"  {reiniciar_unidad(unit, propia=unit == unidad_propia())}")
 
 
+def cmd_install_service(args: argparse.Namespace) -> None:
+    """DENTRO de una máquina: instala un servicio de `services/` sin rehacerla.
+
+    El hueco que tapa: `update` trae el código y reinicia lo que YA está
+    instalado, pero una unidad NUEVA sólo la escribía `provision`, desde la
+    máquina lanzadora. Así que declarar un servicio en `types/dev.json` llegaba a
+    los droplets futuros y no al que lo declaró, y la única salida era rehacer
+    una máquina que estaba perfectamente viva. Pasó al añadir
+    `foveal-vision-web` (2026-08-29).
+
+    ⚠ Se reusa `build_service_section`, el MISMO generador que usa `provision`.
+    Un segundo escritor de la misma unidad diverge del primero, y el que se
+    depura luego es siempre el que no escribiste tú.
+
+    La instalación puede tardar (un `npm ci` o un venv de torch son minutos), así
+    que la salida va en directo en vez de capturarse: desde el móvil, un comando
+    mudo diez minutos no se distingue de uno colgado.
+    """
+    base = dentro_del_droplet("install-service")
+    servicios = selected_services(args.service)
+    if not servicios:
+        die(
+            "Dime qué servicio instalar: --service foveal-vision-web\n"
+            "  (o pon DO_SERVICES en el .env de esta máquina)"
+        )
+
+    # El dueño de ~/src es quien tiene que ser dueño del servicio: deducirlo del
+    # disco es correcto aquí porque la pregunta es literalmente "de quién son
+    # estos repos", no "dónde vive la configuración".
+    dev_user = owner_of(base) or cfg("DO_DEV_USER")
+    if not dev_user or dev_user == "root":
+        die(f"No sé de qué usuario son los repos de {base}; pon DO_DEV_USER en el .env.")
+
+    faltan = [s["name"] for s in servicios if not (base / s["dir"]).is_dir()]
+    if faltan:
+        die(
+            f"No están clonados los repos de: {', '.join(faltan)}.\n"
+            f"  Clónalos en {base} y repite; instalar una unidad sobre un "
+            "directorio que no existe sólo produce un servicio que no arranca."
+        )
+
+    lineas = [
+        "set -eu",
+        "umask 077",
+        f"DEV_USER={shq(dev_user)}",
+        'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+        '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+    ]
+    for svc in servicios:
+        lineas += build_service_section(svc, dev_user)
+    guion = "\n".join(lineas) + "\n"
+
+    log(f"Instalando en {socket.gethostname()}: "
+        f"{', '.join(s['name'] for s in servicios)}")
+    cmd = ["bash", "-s"] if os.geteuid() == 0 else ["sudo", "-n", "bash", "-s"]
+    try:
+        proc = subprocess.run(cmd, input=guion, text=True, timeout=args.timeout)
+    except subprocess.TimeoutExpired:
+        die(f"Se agotó el tiempo ({args.timeout}s). El servicio puede haber quedado a medias:\n"
+            f"  systemctl status {servicios[0]['name']}")
+    except OSError as exc:
+        die(str(exc))
+    if proc.returncode != 0:
+        die(f"La instalación falló (código {proc.returncode}).")
+    log("Listo. Estado y logs:")
+    for svc in servicios:
+        log(f"  systemctl status {svc['name']}  ·  journalctl -u {svc['name']} -n 30")
+
+
 def cmd_push_service_env(args: argparse.Namespace) -> None:
     """Añade o rota variables en el `.env` de un servicio, sin borrar el resto.
 
@@ -3007,6 +3076,25 @@ def main() -> None:
         help="servicio de services/ (repetible). Por defecto, DO_SERVICES",
     )
     p.set_defaults(func=cmd_install_executors)
+
+    p = sub.add_parser(
+        "install-service",
+        help="DENTRO de una máquina: instala un servicio de services/ que "
+        "todavía no está, sin rehacer el droplet",
+    )
+    p.add_argument(
+        "--service",
+        action="append",
+        default=[],
+        help="servicio de services/ (repetible). Por defecto, DO_SERVICES",
+    )
+    p.add_argument(
+        "--timeout",
+        type=int,
+        default=3600,
+        help="segundos máximos (un npm ci o un venv de torch son minutos)",
+    )
+    p.set_defaults(func=cmd_install_service)
 
     p = sub.add_parser(
         "push-dir",

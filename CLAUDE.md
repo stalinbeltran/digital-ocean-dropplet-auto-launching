@@ -392,6 +392,28 @@ Lo que hay que respetar:
   SSH a la máquina, `do_droplet.py` no veía el token y `register-key` fallaba con un "falta
   el token" que no se entiende. Con ello, quien pueda hablarle a ese bot o entrar a esa
   máquina puede gastar dinero en la cuenta: la allowlist es la única barrera.
+- **Pero `update` NO instala un servicio que todavía no está** — y ese hueco costó
+  entenderlo. Trae el código y reinicia lo que ya existe; una unidad **nueva** sólo la
+  escribía `provision`, desde la máquina lanzadora. Así que declarar un servicio en
+  `types/dev.json` llegaba a los droplets **futuros** y no al que lo declaraba, cuya única
+  salida era rehacer una máquina perfectamente viva. De ahí `install-service`, que corre
+  **dentro** de la máquina y reusa `build_service_section`, **el mismo generador que usa
+  `provision`**: un segundo escritor de la misma unidad diverge del primero, y el que se
+  depura después es siempre el que no escribiste tú.
+  ```bash
+  python3 scripts/do_droplet.py install-service --service foveal-vision-web
+  ```
+- **`dev` lleva DOS servicios desde el 2026-08-29**, y pueden convivir porque son repos
+  distintos: `telegram-coordinator` y `foveal-vision-web` (la web app de `foveal-vision`,
+  API + UI en `:8010`). El límite de `selected_services()` es el **directorio**, no la
+  cantidad. Lo que el lanzador sabe de esa app es lo mínimo —repo, cómo se instala, cómo se
+  arranca—: el **cómo** vive entero en `foveal-vision/scripts/web_app.py`, que es de quien
+  la produce y no de quien la transporta (R7).
+  ⚠ **El puerto lo abre el `install` del servicio en `ufw`, no `cloud-init`**: cloud-init
+  vale para **todas** las máquinas y ese puerto sólo tiene sentido donde corre ese servicio.
+  Y ⚠ **el API de esa app borra datos sin preguntar**, así que se niega a arrancar expuesto
+  sin token; el token puede viajar desde aquí con `FVW_WEB_TOKEN` (`env_prefix: "FVW_"`),
+  que es la única forma de que **sobreviva** a rehacer el dev.
 - **Un servicio no se entera de que su repo cambió.** El código está cargado en el
   proceso desde que arrancó: `git pull` sin `systemctl restart` deja al servicio
   corriendo lo viejo, y no hay ningún síntoma que lo delate salvo que el arreglo

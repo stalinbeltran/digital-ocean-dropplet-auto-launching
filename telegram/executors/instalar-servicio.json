@@ -1,0 +1,12 @@
+{
+  "name": "instalar-servicio",
+  "descripcion": "Instala en ESTA maquina un servicio de services/ que todavia no esta, sin rehacerla. `actualizar` trae codigo y reinicia lo instalado; una unidad NUEVA solo la escribia provision desde la lanzadora.",
+  "ejemplos": [
+    "--service foveal-vision-web"
+  ],
+  "command": "python3 scripts/do_droplet.py install-service {{input}} 2>&1; true",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}
