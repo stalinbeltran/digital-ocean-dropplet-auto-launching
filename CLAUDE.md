@@ -414,6 +414,23 @@ Lo que hay que respetar:
   Y ⚠ **el API de esa app borra datos sin preguntar**, así que se niega a arrancar expuesto
   sin token; el token puede viajar desde aquí con `FVW_WEB_TOKEN` (`env_prefix: "FVW_"`),
   que es la única forma de que **sobreviva** a rehacer el dev.
+- **Un servicio que se sirve por HTTP declara `url`, y `launch` lo anuncia al terminar.**
+  Hasta el 2026-08-30 la máquina nacía con la app servida y el puerto abierto en `ufw`, y
+  **el resumen del lanzamiento no la mencionaba**: había que entrar a preguntar por una
+  dirección que la propia máquina ya sabía. La dirección no se puede escribir en el
+  descriptor —lleva la IP, que nace con el droplet, y el token, que se genera dentro—, así
+  que el descriptor declara el **comando** (`"url": "python3 scripts/web_app.py url"`) y el
+  lanzador lo ejecuta dentro, como el usuario de desarrollo. Mismo reparto que `install` y
+  `start`: el **cómo** es de quien produce, no de quien transporta (R7).
+  ⚠ **Como root NO funciona**, y ése es el detalle del que depende todo: el token vive en
+  `~/.config` del usuario de desarrollo, así que con root `~` es `/root` y el comando
+  contesta «no hay token» en una máquina donde sí lo hay (medido el 2026-08-30 en un dev
+  con `foveal-vision-web`: como `deploy`, la URL y exit 0; como root, exit 1).
+  ⚠ **Y esa dirección lleva el token dentro, o sea que ES la llave**: se imprime en la
+  terminal y, si lanzaste desde Telegram, queda en el chat. El freno es cerrar el puerto
+  (`web_app.py cerrar`, o el ejecutor `fvweb`), que no mata el proceso.
+  Ocho tests en `tests/test_url_servicio.py` —los primeros del repo—: `python3
+  tests/test_url_servicio.py`.
 - **Un servicio no se entera de que su repo cambió.** El código está cargado en el
   proceso desde que arrancó: `git pull` sin `systemctl restart` deja al servicio
   corriendo lo viejo, y no hay ningún síntoma que lo delate salvo que el arreglo

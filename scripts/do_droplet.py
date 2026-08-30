@@ -972,9 +972,26 @@ def cmd_launch(args: argparse.Namespace) -> None:
             # en el de root: hay que cambiar de usuario para encontrarlas.
             log(f"\n  Dentro:  su - {dev_user}   →   cd ~/src/<repo> && claude")
             log(f"  (o pon DO_SSH_USER={dev_user} en .env y entrarás ahí directamente)")
+        hubo_url = False
         for svc in selected_services(args.service):
             log(f"\n  Servicio '{svc['name']}' corriendo. Estado y logs:")
             log(f"  python scripts/do_droplet.py service logs {svc['name']}")
+            # Sin `port` no hubo SSH, así que no hay a quién preguntarle.
+            if not svc["url"] or not port:
+                continue
+            direccion, aviso = url_de_servicio(
+                svc, name, ip, port, cfg("DO_DEV_USER")
+            )
+            if direccion:
+                log(f"  Ábrelo:  {direccion}")
+                hubo_url = True
+            else:
+                log(f"  AVISO: {aviso}")
+        if hubo_url:
+            # Va aquí y no en el descriptor porque vale para cualquier servicio
+            # que se publique: si la dirección lleva el token dentro, ES la
+            # llave, y se acaba de imprimir en una terminal (o en un chat).
+            log("\n  (si esa dirección lleva token, ES la llave: quien la tenga, entra)")
     log(f"\n  Al terminar:    python scripts/do_droplet.py destroy {name}")
     log("  (el droplet factura por segundo mientras exista)")
     log("=" * 62)
@@ -1402,6 +1419,26 @@ def run_remote_script(ip: str, port: int, script: str) -> int:
     return proc.returncode
 
 
+def run_remote_split(ip: str, port: int, script: str) -> tuple[int, str, str]:
+    """Como run_remote_capture, pero con stdout y stderr SEPARADOS.
+
+    Existe porque hay salidas que se leen a máquina y no a ojo: cuando lo que
+    vuelve es un DATO (una dirección), mezclarlo con el saludo de un `.bashrc` o
+    con un aviso de ssh lo corrompe. Quien sólo quiere enseñárselo al usuario
+    sigue usando `run_remote_capture`, que los junta como siempre.
+    """
+    proc = subprocess.run(
+        ssh_command(ip, port, user="root") + ["bash -s"],
+        input=script.encode("utf-8"),
+        capture_output=True,
+    )
+    return (
+        proc.returncode,
+        proc.stdout.decode("utf-8", errors="replace"),
+        proc.stderr.decode("utf-8", errors="replace"),
+    )
+
+
 def run_remote_capture(ip: str, port: int, script: str) -> tuple[int, str]:
     """Como run_remote_script, pero devolviendo también lo que imprimió.
 
@@ -1409,13 +1446,8 @@ def run_remote_capture(ip: str, port: int, script: str) -> tuple[int, str]:
     privada se genera DENTRO del droplet y no sale de ahí nunca; lo que vuelve
     es la pública, que no es secreta, para registrarla en la cuenta.
     """
-    proc = subprocess.run(
-        ssh_command(ip, port, user="root") + ["bash -s"],
-        input=script.encode("utf-8"),
-        capture_output=True,
-    )
-    salida = (proc.stdout + proc.stderr).decode("utf-8", errors="replace")
-    return proc.returncode, salida
+    code, salida, err = run_remote_split(ip, port, script)
+    return code, salida + err
 
 
 # Repo del propio lanzador. Una máquina que va a lanzar droplets lo necesita
@@ -1568,6 +1600,10 @@ def load_service(name: str) -> dict:
     # El repo se clona en ~/src/<nombre del repo>, igual que los de DO_REPOS.
     svc.setdefault("dir", svc["repo"].rstrip("/").split("/")[-1].removesuffix(".git"))
     svc.setdefault("install", "")
+    # Cómo se PRESENTA el servicio: un comando que imprime la dirección con la
+    # que se abre. Opcional; sin él, `launch` no anuncia ninguna. El detalle de
+    # por qué es un comando y no un patrón de URL, en `url_de_servicio`.
+    svc.setdefault("url", "")
     svc.setdefault("env_prefix", "")
     svc.setdefault("env_file", ".env")
     # Ficheros que el servicio necesita y que no están en su repo. Sin esto hay
@@ -1742,6 +1778,68 @@ def build_service_section(svc: dict, dev_user: str) -> list[str]:
         "fi",
     ]
     return parts
+
+
+def url_de_servicio(
+    svc: dict, name: str, ip: str, port: int, dev_user: str
+) -> tuple[str, str]:
+    """La dirección con la que se abre el servicio, preguntándosela a ÉL.
+
+    Devuelve `(direccion, aviso)`, y exactamente uno de los dos trae texto.
+
+    El lanzador no sabe de puertos, de tokens ni de formatos de dirección: sabe
+    pedirle a cada servicio que se presente. El descriptor declara el comando
+    (`url`) y el repo del servicio lo implementa, que es el mismo reparto que
+    `install` y `start` — la lógica vive en quien produce, no en quien
+    transporta. Cablear aquí `http://<ip>:8010/?t=…` habría metido en el
+    lanzador el puerto y el formato del token de un proyecto concreto, y habría
+    que tocarlo cada vez que cambie cualquiera de los dos.
+
+    ⚠ Corre como el usuario de desarrollo y NO como root, y de eso depende que
+    funcione: el token de la puerta suele vivir en el `~/.config` de ESE usuario,
+    así que con root `~` apunta a `/root` y el comando contestaría "no hay token"
+    en una máquina donde sí lo hay.
+
+    ⚠ El contrato es la ÚLTIMA línea no vacía de stdout, no toda la salida: el
+    comando corre con shell de login (que es como ve `dev-secrets.env`), y un
+    `.bashrc` que salude ensuciaría la dirección. Por eso hace falta
+    `run_remote_split`: con stderr mezclado, un aviso de ssh valdría por
+    respuesta.
+
+    ⚠ Y si esa línea no trae esquema (`://`) se trata como fallo. Imprimir algo
+    con pinta de dirección que no lo es manda al usuario a una página que no
+    carga con todo lo de arriba diciendo "listo", y un dato que parece bueno y no
+    lo es cuesta más que no darlo.
+
+    ⚠ La dirección puede llevar una CREDENCIAL dentro (la web app de
+    foveal-vision manda su token como `?t=`, que es la única forma de pasárselo a
+    un móvil). Vuelve por el canal cifrado de ssh y por stdin, nunca en la línea
+    de comandos —que se ve en el `ps` del droplet—, pero al imprimirla queda en
+    la terminal y, si se lanzó desde Telegram, en el chat.
+
+    Nunca es fatal: para cuando esto corre la máquina ya está creada y
+    aprovisionada, y quedarse sin saber la dirección es una molestia, mientras
+    que tumbar el lanzamiento por ello sería peor (criterio de `ejecutar_post`).
+    """
+    dentro = f'cd "$HOME/src/{svc["dir"]}" && {svc["url"]}'
+    script = "\n".join(
+        [
+            "set -eu",
+            f"DEV_USER={shq(dev_user)}",
+            f'sudo -u "$DEV_USER" -H bash -lc {shq(dentro)}',
+        ]
+    )
+    code, salida, err = run_remote_split(ip, port, script)
+    lineas = [l.strip() for l in salida.splitlines() if l.strip()]
+    if code == 0 and lineas and "://" in lineas[-1]:
+        return lineas[-1], ""
+    pistas = [l.strip() for l in (salida + "\n" + err).splitlines() if l.strip()]
+    return "", (
+        f"{svc['name']}: no pude preguntarle su dirección "
+        f"({pistas[-1] if pistas else 'no imprimió nada'}).\n"
+        f"  Pregúntasela desde dentro:  python scripts/do_droplet.py ssh {name} "
+        f"--cmd {shq(dentro)}"
+    )
 
 
 def push_env_names(valores: list[str]) -> list[str]:

@@ -577,6 +577,7 @@ como unidad de systemd. Lo que cambia va en el descriptor:
 | `repo` | **Obligatorio.** `owner/repo`. Se clona solo en `~/src/<repo>`; no hace falta repetirlo en `DO_REPOS` |
 | `start` | **Obligatorio.** Comando de arranque, ejecutado dentro del repo |
 | `install` | Se ejecuta una vez antes de arrancar (`npm ci`, `pip install -r ...`) |
+| `url` | Comando que imprime **la dirección con la que se abre** el servicio. `launch` lo ejecuta dentro del droplet al terminar y la anuncia. Sin él no se anuncia ninguna |
 | `env_prefix` | Puente de configuración: cada `MI_ALGO=x` del `.env` del lanzador se escribe como `ALGO=x` en el `.env` del servicio, dentro del droplet, en modo 600 |
 | `env_file` | Nombre de ese fichero. Por defecto `.env` |
 
@@ -600,6 +601,43 @@ python scripts/do_droplet.py service restart telegram-coordinator
 **no puede vivir en su repo ni en `cloud-init.yaml`**: el `user_data` lo lee
 cualquier usuario del droplet sin sudo. Viaja por el mismo canal que los tokens,
 por SSH y por stdin.
+
+#### `url`: que la máquina nueva te diga por dónde se entra
+
+Un servicio que sirve algo por HTTP no vale de nada si no sabes su dirección, y
+la dirección **no se puede escribir en el descriptor**: lleva dentro la IP, que
+nace con el droplet, y a veces un token, que se genera dentro. Así que se le
+pregunta a él:
+
+```json
+{ "url": "python3 scripts/web_app.py url" }
+```
+
+`launch` ejecuta ese comando **dentro del droplet**, como el usuario de
+desarrollo y en el directorio del repo, y pega en el resumen final lo que
+imprima:
+
+```
+  Servicio 'foveal-vision-web' corriendo. Estado y logs:
+  python scripts/do_droplet.py service logs foveal-vision-web
+  Ábrelo:  http://142.93.1.59:8010/?t=NzbaWhYEOX6vT8oD4fAYKITV
+```
+
+El contrato es **la última línea no vacía de stdout**, y sólo si el comando
+salió con 0 y eso trae `://`. Las tres condiciones hacen falta: el comando corre
+con shell de login (que es como ve `dev-secrets.env`), así que un `.bashrc` que
+salude escribe por delante; y publicar la salida de un comando que falló
+mandaría a una página que no carga con el resumen diciendo «listo». Si algo de
+eso no se cumple, `launch` **avisa y sigue** — la máquina ya está creada, y
+tumbar el lanzamiento por no saber una dirección sería peor.
+
+⚠ **Va en el descriptor y no en `do_droplet.py`** a propósito: el puerto y el
+formato del token son del proyecto, no del transporte. El lanzador no sabe qué
+es un token; sabe pedirle a cada servicio que se presente.
+
+⚠ **Y si esa dirección lleva token, ES la llave**: se imprime en la terminal y,
+si lanzaste desde Telegram, queda en el chat. `launch` lo dice en voz alta
+debajo. Quien la lea, entra.
 
 ### El servicio incluido: `telegram-coordinator`
 
