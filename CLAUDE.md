@@ -8,6 +8,23 @@ Automatización del lanzamiento de **Droplets de DigitalOcean** bajo demanda: cr
 esperar a que esté operativa, dejarla lista para trabajar y destruirla. Todo el ciclo vive en un
 único script de Python sin dependencias, más el `cloud-init.yaml` que configura el primer arranque.
 
+## ⚠ Este repo es una pieza de un sistema de seis, y el CENTRAL es otro
+
+Lo que **no es de ningún repo en concreto** —los reportes de todos los estudios, qué está
+decidido y qué sigue abierto, y qué pieza hace qué— vive en
+[`estudios-redes-neuronales`](https://github.com/stalinbeltran/estudios-redes-neuronales).
+Se enlaza, no se copia.
+
+| Si quieres saber… | Mira en |
+|---|---|
+| **qué está fijado hoy** y qué sigue abierto | [`ESTADO.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/ESTADO.md) |
+| **qué se corrió, cuándo y qué costó** | [`reportes/README.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/reportes/README.md) |
+| **qué repo hace qué** | su [`README.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/README.md) |
+
+⚠ **Y si algo que se hace aquí termina en un estudio o una medición, su reporte va allí**, no
+aquí — sea cual sea el repo desde el que se lanzó. Un reporte guardado en el repo que lo dispara
+es invisible para quien clona otro.
+
 ## Objetivos del proyecto
 
 Por qué existe esto y contra qué se juzga cualquier cambio. **Esta lista se amplía**: cuando
