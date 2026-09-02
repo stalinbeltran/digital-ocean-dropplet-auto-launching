@@ -432,6 +432,16 @@
       "visto_en": "estudio-c6"
     },
     {
+      "machine_id": 66901,
+      "primer_fallo": "2026-09-01T21:55:37+00:00",
+      "ultimo_fallo": "2026-09-01T21:55:37+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh1.vast.ai:23966"
+      ],
+      "visto_en": "dr-c7"
+    },
+    {
       "machine_id": 68090,
       "primer_fallo": "2026-08-26T06:20:35+00:00",
       "ultimo_fallo": "2026-08-26T06:20:35+00:00",
@@ -702,6 +712,16 @@
       "visto_en": "estudio-c9"
     },
     {
+      "machine_id": 142449,
+      "primer_fallo": "2026-09-01T21:54:47+00:00",
+      "ultimo_fallo": "2026-09-01T21:54:47+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh3.vast.ai:23916"
+      ],
+      "visto_en": "dr-c4"
+    },
+    {
       "machine_id": 142696,
       "primer_fallo": "2026-08-31T00:21:16+00:00",
       "ultimo_fallo": "2026-08-31T00:21:16+00:00",
@@ -730,6 +750,16 @@
         "RuntimeError: sshd no contesto en ssh4.vast.ai:21446"
       ],
       "visto_en": "estudio-c10"
+    },
+    {
+      "machine_id": 145588,
+      "primer_fallo": "2026-09-01T21:50:18+00:00",
+      "ultimo_fallo": "2026-09-01T21:50:18+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh6.vast.ai:23526"
+      ],
+      "visto_en": "dr-c6"
     },
     {
       "machine_id": 146005,
@@ -800,6 +830,36 @@
         "ApiError: HTTP 400 en PUT /api/v0/asks/48836270/: {\"success\":false,\"error\":\"invalid_args\",\"msg\":\"error 404/3603: no_such_ask  Instance type by id 48836270 is not available.\",\"ask_id\":48836270}"
       ],
       "visto_en": "estudio-wd-v-s5"
+    },
+    {
+      "machine_id": 148608,
+      "primer_fallo": "2026-09-01T21:56:59+00:00",
+      "ultimo_fallo": "2026-09-01T21:56:59+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh9.vast.ai:24064"
+      ],
+      "visto_en": "dr-c0"
+    },
+    {
+      "machine_id": 148625,
+      "primer_fallo": "2026-09-01T21:50:15+00:00",
+      "ultimo_fallo": "2026-09-01T21:50:15+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh7.vast.ai:23536"
+      ],
+      "visto_en": "dr-c7"
+    },
+    {
+      "machine_id": 148630,
+      "primer_fallo": "2026-09-01T21:57:28+00:00",
+      "ultimo_fallo": "2026-09-01T21:57:28+00:00",
+      "fallos": 1,
+      "motivos": [
+        "RuntimeError: sshd no contesto en ssh7.vast.ai:24078"
+      ],
+      "visto_en": "dr-c12"
     },
     {
       "machine_id": 148632,
