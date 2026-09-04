@@ -2391,6 +2391,118 @@ def cmd_push_do_token(args: argparse.Namespace) -> None:
     log("  bash -lc 'python3 scripts/do_droplet.py list'")
 
 
+def cmd_push_github_token(args: argparse.Namespace) -> None:
+    """Rota el token de GitHub de un droplet ya creado, en sus TRES sitios.
+
+    Existe porque el token de GitHub no vive en un sitio, vive en tres, y
+    `push-secret` solo alcanza al primero:
+
+      1. `~/.config/dev-secrets.env` -GITHUB_TOKEN y GH_TOKEN-, que es lo que
+         ven las sesiones SSH y los ejecutores del bot;
+      2. `~/.git-credentials`, de donde saca git el token al hacer `pull` y
+         `push` por https;
+      3. la sesion de `gh`, si la maquina lo lleva instalado.
+
+    Dejar el 2 sin tocar es la trampa: el entorno tiene el token nuevo, todo
+    parece correcto, y `git pull` sigue mandando el viejo. Con un token revocado
+    eso es un `update` que falla por autenticacion en una maquina donde el token
+    nuevo si esta, el mismo sintoma despistado de siempre.
+
+    La alternativa -`provision`- reescribiria `dev-secrets.env` entero y borraria
+    del destino lo que esta maquina no tenga a mano (el DO_TOKEN del mini, el de
+    Vast). Esto toca solo las lineas del token de GitHub y deja el resto igual.
+
+    El token viaja por SSH dentro del script que va por **stdin**, nunca como
+    argumento: lo de la linea de comandos sale en el `ps` del destino.
+
+    Repetir el comando ROTA el token: quita las lineas anteriores y pone las
+    nuevas.
+    """
+    valor = os.environ.get(args.from_env, "").strip()
+    if not valor:
+        die(
+            f"La variable '{args.from_env}' no tiene valor en esta maquina.\n"
+            "  Es la que se iba a enviar como GITHUB_TOKEN al destino.\n"
+            "  Ponla en .env (que esta gitignoreado) antes de enviarla."
+        )
+
+    dev_user = cfg("DO_DEV_USER")
+    droplet, ip, port = resolve_target(args.name or "", args.port or 0)
+    log(f"Enviando el token de GitHub a '{droplet['name']}' ({ip}:{port}).")
+
+    script = "\n".join(
+        [
+            "set -eu",
+            "umask 077",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+            'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.config"',
+            # El token se lee a una variable desde un heredoc con el delimitador
+            # entrecomillado: no se expande ni se interpreta nada de lo que
+            # traiga, y aparece una sola vez en el script pese a ir a tres sitios.
+            "GHT=$(cat <<'FIN_TOKEN'",
+            valor,
+            "FIN_TOKEN",
+            ")",
+            "",
+            "# --- 1) los secretos de la maquina (sesiones SSH y ejecutores del bot)",
+            'F="$H/.config/dev-secrets.env"',
+            'T="$F.nuevo"',
+            "# Se copia el fichero SIN las lineas del token y se le anaden las",
+            "# nuevas: sirve igual para ponerlo la primera vez que para rotarlo,",
+            "# y ningun otro secreto del destino se toca.",
+            'if [ -f "$F" ]; then',
+            '  grep -v -e "^export GITHUB_TOKEN=" -e "^export GH_TOKEN=" "$F"'
+            ' > "$T" || true',
+            "else",
+            '  : > "$T"',
+            "fi",
+            # Aqui el valor va entrecomillado por shq y no por "$GHT": lo que se
+            # escribe es una linea que luego SOURCEA un shell, asi que tiene que
+            # sobrevivir a que la lea bash, no solo a que la escriba printf.
+            # GH_TOKEN lo lee gh; GITHUB_TOKEN lo esperan casi todas las demas.
+            "cat >> \"$T\" <<'FIN_VARS'",
+            f"export GITHUB_TOKEN={shq(valor)}",
+            f"export GH_TOKEN={shq(valor)}",
+            "FIN_VARS",
+            'mv "$T" "$F"',
+            'chmod 600 "$F"',
+            'chown "$DEV_USER:$DEV_USER" "$F"',
+            'echo "  dev-secrets.env: GITHUB_TOKEN y GH_TOKEN puestos"',
+            "",
+            *bloque_cargar_secretos(),
+            "",
+            "# --- 2) las credenciales de git, que es lo que usa `git pull`",
+            'sudo -u "$DEV_USER" -H git config --global credential.helper store',
+            'printf "https://x-access-token:%s@github.com\\n" "$GHT"'
+            ' > "$H/.git-credentials"',
+            'chmod 600 "$H/.git-credentials"',
+            'chown "$DEV_USER:$DEV_USER" "$H/.git-credentials"',
+            'echo "  .git-credentials: reescrito"',
+            "",
+            "# --- 3) la sesion de gh, si la hay",
+            "# Que un fallo aqui no de el comando por perdido: lo importante -git",
+            "# y el entorno- ya esta puesto, y la maquina de control no lleva gh.",
+            "if ! command -v gh >/dev/null; then",
+            '  echo "  gh: no instalado en esta maquina, git si tiene el token"',
+            'elif printf "%s\\n" "$GHT" | '
+            'sudo -u "$DEV_USER" -H gh auth login --with-token 2>/dev/null; then',
+            '  echo "  gh: $(sudo -u "$DEV_USER" -H gh api user --jq .login '
+            '2>/dev/null || echo "?")"',
+            "else",
+            '  echo "  gh: no acepto el token (git si lo tiene)"',
+            "fi",
+        ]
+    )
+
+    if run_remote_script(ip, port, script) != 0:
+        die("Fallo el envio del token. La salida de ssh esta justo arriba.")
+    log("\nListo. Para comprobar que git autentica, sin sacar el token a pantalla:")
+    log(f"  python scripts/do_droplet.py ssh {droplet['name']} --cmd \\")
+    log("    'cd ~/src/digital-ocean-dropplet-auto-launching && git fetch && echo OK'")
+
+
 def cmd_install_executors(args: argparse.Namespace) -> None:
     """DENTRO de una máquina: reescribe los ficheros que declara un servicio.
 
@@ -3115,6 +3227,22 @@ def main() -> None:
         "para mandar un token de sólo lectura guardado aparte, p. ej. DO_TOKEN_RO",
     )
     p.set_defaults(func=cmd_push_do_token)
+
+    p = sub.add_parser(
+        "push-github-token",
+        help="rota el token de GitHub de un droplet ya creado en sus tres sitios "
+        "(dev-secrets.env, .git-credentials y gh) sin tocar sus demas secretos. "
+        "push-secret solo llega al primero y deja a git con el viejo",
+    )
+    p.add_argument("name", nargs="?")
+    p.add_argument("--port", type=int)
+    p.add_argument(
+        "--from-env",
+        default="GITHUB_TOKEN",
+        metavar="VAR",
+        help="variable de ESTA maquina cuyo valor se envia como GITHUB_TOKEN",
+    )
+    p.set_defaults(func=cmd_push_github_token)
 
     p = sub.add_parser(
         "push-service-env",

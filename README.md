@@ -1533,6 +1533,35 @@ python scripts/do_droplet.py push-secret VAST_AI_API_TOKEN --name mini          
 de usar la máquina: sesión interactiva, shell de login y `ssh maquina 'comando'`.
 Los dos conservan lo que ya hubiera y repetirlos rota el valor.
 
+### Rotar el token de GitHub: son tres sitios, no uno
+
+Cuando cambias el PAT de GitHub en tu `.env`, `push-secret GITHUB_TOKEN` **no
+basta**. En cada máquina el token vive en tres sitios:
+
+1. `~/.config/dev-secrets.env` (`GITHUB_TOKEN` y `GH_TOKEN`) — lo que ven las
+   sesiones SSH y los ejecutores del bot;
+2. `~/.git-credentials` — de donde lo saca **git** al hacer `pull` y `push`;
+3. la sesión de `gh`, si la máquina lo lleva.
+
+Dejar el 2 sin tocar es la trampa: el entorno tiene el nuevo, todo parece
+correcto, y `git pull` sigue mandando el viejo. Con el anterior ya revocado, eso
+es un `actualizar` que falla por autenticación en una máquina donde el token
+nuevo sí está. Un comando por máquina, y toca los tres:
+
+```powershell
+python scripts/do_droplet.py push-github-token mini
+python scripts/do_droplet.py push-github-token dev
+```
+
+Conserva el resto de secretos del destino (a diferencia de `provision`, que
+reescribe `dev-secrets.env` entero) y repetirlo rota el token. Para comprobar
+que git autentica de verdad, sin sacar el token a pantalla:
+
+```powershell
+python scripts/do_droplet.py ssh mini --cmd `
+  'cd ~/src/digital-ocean-dropplet-auto-launching && git fetch && gh api user --jq .login'
+```
+
 ### Antes de gastar nada
 
 ```bash

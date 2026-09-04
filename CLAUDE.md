@@ -504,6 +504,14 @@ Lo que hay que respetar:
   morder con el de Vast el 2026-08-20: `vast list` funcionaba desde Telegram y fallaba
   con "falta el token" entrando por SSH a esa misma máquina. Son `push-service-env` y
   `push-secret`, y para un token que use tanto el bot como tú, **hay que mandar los dos**.
+- **El de GitHub tiene TRES destinos, y el tercero no es una variable de entorno.**
+  Además de `dev-secrets.env` (donde van `GITHUB_TOKEN` y `GH_TOKEN`) está
+  `~/.git-credentials`, que es de donde saca el token **git** al hacer `pull` y `push`,
+  y la sesión de `gh`. Rotarlo con `push-secret` deja el entorno al día y a git con el
+  viejo: todo *parece* correcto y el `actualizar` del bot falla por autenticación en una
+  máquina donde el token nuevo sí está. Por eso existe `push-github-token`, que escribe
+  en los tres y conserva el resto de secretos del destino. Enviado a `mini` y `dev` el
+  2026-09-04 tras rotar el PAT; comprobado con `git fetch` y `gh api user` en las dos.
 - **`--push-env` lee el entorno de la máquina QUE LANZA, no el tuyo.** Desde el mini, eso
   es el `.env` del bot con el prefijo `TGL_` quitado. Si falta la variable, `launch` crea
   el droplet igual y sólo avisa: nace sin poder alquilar y se descubre tarde, ya dentro.
