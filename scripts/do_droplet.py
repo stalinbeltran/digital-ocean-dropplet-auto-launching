@@ -834,6 +834,12 @@ def cmd_launch(args: argparse.Namespace) -> None:
 
     keys = selected_keys()
 
+    # El token de GitHub, antes de crear nada y por lo mismo que el volumen: una
+    # máquina que nace sin sus repos privados factura igual que una buena y no
+    # lo dice. Con --dry-run no hace falta, que no crea nada.
+    if not args.dry_run and not args.no_provision:
+        comprobar_github_token(args.sin_github)
+
     # El volumen se comprueba antes de crear el droplet: si la región no cuadra
     # o el nombre está mal escrito, el fallo tiene que salir gratis y no
     # dejarte una máquina facturando sin el disco que ibas a usar.
@@ -930,9 +936,10 @@ def cmd_launch(args: argparse.Namespace) -> None:
             f"  https://cloud.digitalocean.com/droplets/{droplet_id}/console"
         )
 
+    provision_ok = True
     if port and not args.no_provision:
         log("")
-        cmd_provision(
+        provision_ok = cmd_provision(
             argparse.Namespace(
                 name=name,
                 port=port,
@@ -941,7 +948,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 push_do_token=args.push_do_token,
                 push_env=args.push_env,
                 make_launcher=args.make_launcher,
+                sin_github=args.sin_github,
                 skip_wait=False,
+                desde_launch=True,
             )
         )
 
@@ -995,6 +1004,19 @@ def cmd_launch(args: argparse.Namespace) -> None:
     log(f"\n  Al terminar:    python scripts/do_droplet.py destroy {name}")
     log("  (el droplet factura por segundo mientras exista)")
     log("=" * 62)
+
+    if not provision_ok:
+        # Aquí al final y no en cuanto se supo: la máquina ya existe y factura,
+        # así que el resumen de arriba -IP, cómo entrar, cómo destruirla- tiene
+        # que salir entero antes de morir. Y se muere: un lanzamiento que sale
+        # con 0 se lee como "está lista", y no lo está. Desde el bot, además, el
+        # código != 0 es lo único que hace llegar este texto al chat.
+        die(
+            f"'{name}' EXISTE Y FACTURA, pero nació a medias: le falta algún repo\n"
+            "  (los nombres están arriba, en la salida del aprovisionamiento).\n"
+            f"  Arregla el token y repite:  python scripts/do_droplet.py provision {name}\n"
+            f"  O destrúyela:               python scripts/do_droplet.py destroy {name}"
+        )
 
 
 def ejecutar_post(name: str, ip: str, port: int, comandos) -> None:
@@ -1884,21 +1906,126 @@ def bloque_cargar_secretos() -> list[str]:
     ]
 
 
+# Código con el que sale el script de aprovisionamiento cuando se hizo TODO
+# menos clonar algún repo. Tiene número propio porque no es lo mismo que "no se
+# aprovisionó": la máquina quedó utilizable, pero a medias, y eso hay que
+# decirlo alto en vez de dejarlo en un AVISO entre cien líneas de salida.
+PROVISION_INCOMPLETO = 3
+
+# Lo que contesta GitHub sobre el token, cacheado: lo preguntan `launch` (antes
+# de crear nada) y `provision` (antes de tocar la máquina), y la respuesta es la
+# misma.
+_GITHUB_ESTADO: tuple[str, str] | None = None
+
+
+def github_token_estado(tok: str) -> tuple[str, str]:
+    """Le pregunta a GitHub si el token SIRVE, no si está. Devuelve el veredicto.
+
+    ('ok', login) | ('rechazado', detalle) | ('duda', detalle).
+
+    Un token caducado o revocado tiene exactamente el mismo aspecto que uno
+    bueno: mismo prefijo `github_pat_`, misma longitud, y se copia igual de bien
+    a sus tres destinos. Lo único que los distingue es preguntar. Medido el
+    2026-09-06: el `mini` llevaba días transportando a los droplets que creaba
+    un token que GitHub rechazaba con 401, y no lo dijo ni el envío ni el
+    aprovisionamiento.
+
+    'duda' no es 'ok': un 403 por rate limit o una red caída significan que no
+    lo sé, y no saber ni puede bloquear un lanzamiento ni puede pasar por bueno.
+    """
+    global _GITHUB_ESTADO
+    if _GITHUB_ESTADO is not None:
+        return _GITHUB_ESTADO
+    req = urllib.request.Request(
+        "https://api.github.com/user",
+        headers={
+            "Authorization": f"Bearer {tok}",
+            "Accept": "application/vnd.github+json",
+            # GitHub exige User-Agent: sin él contesta 403 y parecería otra cosa.
+            "User-Agent": "do_droplet.py",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            login = json.loads(resp.read().decode("utf-8")).get("login", "?")
+        _GITHUB_ESTADO = ("ok", login)
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            _GITHUB_ESTADO = ("rechazado", "HTTP 401: Bad credentials")
+        else:
+            _GITHUB_ESTADO = ("duda", f"GitHub contestó HTTP {e.code}")
+    except (urllib.error.URLError, OSError) as e:
+        _GITHUB_ESTADO = ("duda", f"no pude preguntar a GitHub: {e}")
+    return _GITHUB_ESTADO
+
+
+def comprobar_github_token(sin_github: bool = False) -> str:
+    """Token de GitHub que se va a enviar, o muerte si el que hay no sirve.
+
+    Se llama ANTES de crear el droplet y ANTES de tocar una máquina ya creada,
+    por lo mismo que se comprueba el volumen: un token muerto no da ningún
+    síntoma inmediato -los repos privados no se clonan y ya está-, así que la
+    máquina nace sin la mitad de su trabajo y el fallo aparece días después
+    como un `git push` que no autentica.
+
+    Y reescribir `dev-secrets.env` con un token muerto además BORRA el que
+    hubiera en el destino, que podía ser bueno; de ahí que bloquee también en
+    `provision` y no sólo en `launch`.
+    """
+    if sin_github:
+        log("  --sin-github: no se envía token de GitHub. Los repos privados no se clonarán.")
+        return ""
+    tok = os.environ.get("GITHUB_TOKEN", "").strip()
+    if not tok:
+        log(
+            "  AVISO: no hay GITHUB_TOKEN. No podrás clonar repos privados.\n"
+            "  Créalo en https://github.com/settings/personal-access-tokens"
+        )
+        return ""
+    estado, detalle = github_token_estado(tok)
+    if estado == "ok":
+        log(f"  GitHub: el token sirve (usuario {detalle}).")
+        return tok
+    if estado == "duda":
+        log(f"  AVISO: no he podido comprobar el GITHUB_TOKEN ({detalle}). Sigo igual.")
+        return tok
+    die(
+        f"El GITHUB_TOKEN de esta máquina no sirve: {detalle}.\n"
+        "  No se ha creado ni tocado nada; parar aquí es lo barato. Con ese token\n"
+        "  la máquina nacería sin sus repos privados y sin poder empujar nada.\n"
+        "  OJO con la pista falsa: `credential.helper store` borra la credencial\n"
+        "  en cuanto GitHub la rechaza una vez, así que ~/.git-credentials queda\n"
+        "  en 0 bytes y eso se lee como 'nunca llegó el token', que es justo lo\n"
+        "  contrario de lo que pasó.\n"
+        "  Arréglalo:\n"
+        "    1. token nuevo en https://github.com/settings/personal-access-tokens\n"
+        "       (Contents: read and write)\n"
+        "    2. GITHUB_TOKEN=... en el .env de ESTA máquina\n"
+        "    3. a cada máquina viva:  python scripts/do_droplet.py push-github-token <nombre>\n"
+        "       (escribe los TRES destinos: dev-secrets.env, .git-credentials y gh)\n"
+        "  Si de verdad quieres una máquina sin GitHub, repítelo con --sin-github."
+    )
+
+
 def build_provision_script(
     repos: list[str],
     services: list[dict] | None = None,
     push_do_token: bool = False,
     push_env: list[str] | None = None,
+    github_token: str = "",
 ) -> str:
     """Script que deja el droplet listo para trabajar.
 
     Todo lo secreto se escribe con umask 077 y acaba en modo 600 del usuario de
     desarrollo. Nada de esto puede ir en cloud-init: el user_data lo sirve la API
     de metadatos y lo lee cualquier proceso del droplet sin privilegios.
+
+    El token de GitHub llega como argumento y no se lee del entorno aquí: quien
+    llama ya lo ha comprobado con `comprobar_github_token()`, y volver a leerlo
+    sería la forma de saltarse esa comprobación sin enterarse.
     """
     dev_user = cfg("DO_DEV_USER")
     claude_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
-    github_token = os.environ.get("GITHUB_TOKEN", "").strip()
 
     exports = ["# Generado por do_droplet.py provision. Modo 600, no lo copies."]
     if claude_token:
@@ -1985,6 +2112,8 @@ def build_provision_script(
         parts += [
             "",
             "# --- repos",
+            # Los que no se puedan clonar se apuntan aquí y se cobran al final.
+            "FALTAN=''",
             'install -d -m 755 -o "$DEV_USER" -g "$DEV_USER" "$H/src"',
         ]
         for repo in repos:
@@ -2000,7 +2129,7 @@ def build_provision_script(
                 f'  echo "  clonando {slug}…"',
                 f'  sudo -u "$DEV_USER" -H git clone -q '
                 f'https://github.com/{slug}.git "$DEST" '
-                f'|| echo "  AVISO: no pude clonar {slug}"',
+                f'|| FALTAN="$FALTAN {slug}"',
                 "fi",
             ]
 
@@ -2020,16 +2149,49 @@ def build_provision_script(
         '  echo "  claude: no instalado en esta máquina"',
         "fi",
     ]
+
+    if repos:
+        # Un repo que no se clona no da NINGÚN síntoma después: no hay error, no
+        # hay servicio caído, sólo falta un directorio que nadie mira hasta que
+        # se necesita. Hasta el 2026-09-06 esto era un AVISO en mitad de la
+        # salida y el script seguía saliendo con 0, así que el lanzamiento daba
+        # por bueno el trabajo con la máquina ya rota. Se cobra al final -lo
+        # hecho, hecho está- y con código propio. Por stderr, porque es lo
+        # único que llega al chat cuando quien lanza el comando es el bot.
+        parts += [
+            "",
+            'if [ -n "$FALTAN" ]; then',
+            '  echo "" >&2',
+            '  echo "La máquina quedó A MEDIAS: no pude clonar:$FALTAN" >&2',
+            '  echo "  Lo demás -credenciales, servicios- sí está puesto." >&2',
+            '  echo "  Suele ser el GITHUB_TOKEN de la máquina lanzadora'
+            ' (caducado o revocado), o un repo que dejó de ser público." >&2',
+            f"  exit {PROVISION_INCOMPLETO}",
+            "fi",
+        ]
+
     return "\n".join(parts) + "\n"
 
 
-def cmd_provision(args: argparse.Namespace) -> None:
+def cmd_provision(args: argparse.Namespace) -> bool:
+    """Deja la máquina lista. Devuelve False si quedó a medias (algún repo sin clonar).
+
+    Devuelve en vez de morir porque a `launch` le queda trabajo por delante -el
+    volumen, los pasos finales del tipo, y sobre todo el resumen con la IP y la
+    orden de destruir la máquina que acaba de crear-. Llamado a pelo sí muere,
+    que es lo que espera quien lo escribe en una terminal o en el bot.
+    """
     name = args.name or cfg("DO_DROPLET_NAME")
 
     # La configuración se valida antes de ir a buscar el droplet: un servicio mal
     # escrito debe fallar al instante y no tras esperar a que arranque la máquina.
     repos = args.repo or [r for r in cfg("DO_REPOS").split(",") if r.strip()]
     services = selected_services(getattr(args, "service", []) or [])
+
+    # Y el token de GitHub, antes de tocar la máquina: esto reescribe
+    # dev-secrets.env ENTERO, así que aprovisionar con un token muerto borra del
+    # destino el que hubiera, que podía ser bueno.
+    github_token = comprobar_github_token(getattr(args, "sin_github", False))
 
     # Una máquina lanzadora necesita las tres cosas a la vez, y pedirlas por
     # separado es la forma de que falte una y no se note hasta que falla:
@@ -2059,12 +2221,6 @@ def cmd_provision(args: argparse.Namespace) -> None:
             "  Genéralo UNA vez en tu máquina con:  claude setup-token\n"
             "  y pégalo en .env. Sin él, Claude Code pedirá login en el droplet."
         )
-    if not os.environ.get("GITHUB_TOKEN", "").strip():
-        log(
-            "  AVISO: no hay GITHUB_TOKEN. No podrás clonar repos privados.\n"
-            "  Créalo en https://github.com/settings/personal-access-tokens"
-        )
-
     if getattr(args, "push_do_token", False):
         log("  AVISO: se envía también el DO_TOKEN. Quien tenga acceso a esta")
         log("         máquina podrá crear y destruir droplets en tu cuenta.")
@@ -2077,16 +2233,31 @@ def cmd_provision(args: argparse.Namespace) -> None:
             services,
             getattr(args, "push_do_token", False),
             getattr(args, "push_env", []),
+            github_token,
         ),
     )
-    if code != 0:
+    # Faltar repos no es lo mismo que no haber aprovisionado: la máquina sirve,
+    # pero le falta trabajo. Se sigue hasta el final y se cobra al salir.
+    incompleto = code == PROVISION_INCOMPLETO
+    if code != 0 and not incompleto:
         die(f"El aprovisionamiento falló (código {code}).")
 
     if make_launcher:
         log("\nDejando la máquina en condiciones de lanzar droplets…")
         hacer_lanzador(name, ip, port)
 
+    if incompleto:
+        if getattr(args, "desde_launch", False):
+            return False
+        die(
+            f"'{name}' quedó A MEDIAS: le falta algún repo (los nombres, arriba).\n"
+            "  Lo demás -credenciales, servicios- sí está puesto.\n"
+            "  Arregla el token y repite este mismo comando; clonar lo que falta\n"
+            "  no toca lo que ya está."
+        )
+
     log("Aprovisionamiento terminado.")
+    return True
 
 
 # ----------------------------------------------------- actualizar desde dentro
@@ -3167,6 +3338,13 @@ def main() -> None:
         action="store_true",
         help="no inyectar credenciales ni clonar repos",
     )
+    p.add_argument(
+        "--sin-github",
+        action="store_true",
+        help="no enviar ningún token de GitHub, y no comprobarlo. La salida de "
+        "emergencia cuando el token está caducado y aun así hace falta la "
+        "máquina: nacerá sin los repos privados",
+    )
     p.set_defaults(func=cmd_launch)
 
     p = sub.add_parser(
@@ -3209,6 +3387,13 @@ def main() -> None:
         "--skip-wait",
         action="store_true",
         help="no esperar al testigo de instalación de cloud-init",
+    )
+    p.add_argument(
+        "--sin-github",
+        action="store_true",
+        help="no enviar ningún token de GitHub, y no comprobarlo. La salida de "
+        "emergencia cuando el token está caducado y aun así hace falta la "
+        "máquina: nacerá sin los repos privados",
     )
     p.set_defaults(func=cmd_provision)
 

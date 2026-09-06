@@ -1553,6 +1553,17 @@ python scripts/do_droplet.py push-github-token mini
 python scripts/do_droplet.py push-github-token dev
 ```
 
+⚠ **Y no diagnostiques mirando `~/.git-credentials`.** `credential.helper store`
+borra la credencial en cuanto GitHub la rechaza una vez, así que el fichero queda
+en **0 bytes** — que se lee como «nunca llegó el token», justo lo contrario de lo
+que pasó. Un token revocado tiene el mismo aspecto que uno bueno (mismo prefijo,
+misma longitud): lo único que los distingue es preguntarle a GitHub. Desde el
+2026-09-06 no hace falta acordarse — `launch` y `provision` se lo preguntan solos
+antes de crear ni tocar nada y se niegan si contesta 401, porque una máquina que
+nace sin sus repos privados factura igual que una buena y no lo dice. Si lo que
+falla es la consulta (rate limit, red), avisan y siguen; y `--sin-github` lanza sin
+token cuando aun así hace falta la máquina.
+
 Conserva el resto de secretos del destino (a diferencia de `provision`, que
 reescribe `dev-secrets.env` entero) y repetirlo rota el token. Para comprobar
 que git autentica de verdad, sin sacar el token a pantalla:
@@ -1590,6 +1601,23 @@ python3 scripts/vast_instance.py destroy --all --yes      # el botón de pánico
 - **Un benchmark es un fichero, no código.** [benchmarks/foveal-cpu.json](benchmarks/foveal-cpu.json)
   dice qué enviar, cómo instalar, qué ejecutar y de dónde recoger el número.
   Medir otra cosa es escribir otro JSON, igual que con `services/` y `types/`.
+
+## Pruebas
+
+Sin framework y sin `pip install`: se ejecutan con el Python que ya tienes.
+
+```powershell
+python tests/test_url_servicio.py
+python tests/test_provision_incompleto.py
+```
+
+Salen 0 si todo pasa, 1 si algo falla, así que se pueden encadenar. Fijan las
+dos cosas que pueden romperse sin que se note: que `launch` anuncie la dirección
+del servicio sólo cuando de verdad la sabe, y que una máquina que nace a medias
+—sin alguno de sus repos— lo diga en vez de darse por buena. La comprobación de
+sintaxis del script de aprovisionamiento necesita un `bash` que arranque (Git
+Bash vale, el de WSL sin distribución no); si no lo hay, ese caso se salta y lo
+dice.
 
 ## Coste
 

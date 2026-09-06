@@ -512,6 +512,27 @@ Lo que hay que respetar:
   máquina donde el token nuevo sí está. Por eso existe `push-github-token`, que escribe
   en los tres y conserva el resto de secretos del destino. Enviado a `mini` y `dev` el
   2026-09-04 tras rotar el PAT; comprobado con `git fetch` y `gh api user` en las dos.
+- **Un token no se comprueba mirándolo: se le pregunta a su API.** El 2026-09-06 el
+  `GITHUB_TOKEN` del **mini** estaba revocado y todo *parecía* correcto: formato bueno, 93
+  caracteres, y `provision` copiándolo a sus tres destinos sin una queja. Lo que se rompió
+  fue el `git clone` de **`foveal-vision-data`, que es PRIVADO** (comprobado el 2026-09-06
+  contra la API: 200 con token, 404 anónimo) — o sea que el dev nació **sin el sitio donde
+  se guarda lo medido**, que es exactamente la avería del 2026-08-27 entrando por otra
+  puerta. Y `provision` lo dijo con un `AVISO` entre cien líneas y **salió con 0**, así que
+  el lanzamiento dio el trabajo por bueno. Desde entonces:
+  - `launch` y `provision` preguntan a `https://api.github.com/user` **antes** de crear ni
+    tocar nada, y mueren si contesta 401. `--sin-github` es la salida de emergencia (nace
+    sin los repos privados) para cuando hace falta la máquina y no hay token que valga.
+  - **No saber no es saber que va bien, ni al revés**: un 403 (rate limit) o una red caída
+    avisan y siguen. Bloquear por no poder preguntar dejaría sin lanzar desde el móvil.
+  - Un repo que no se clona hace que el script salga con `PROVISION_INCOMPLETO` (3) y lo
+    diga **por stderr**, que es lo único que el coordinador publica en el chat cuando el
+    código no es 0. `launch` imprime su resumen entero —IP, cómo entrar, cómo destruirla— y
+    **después** muere: la máquina ya existe y factura.
+  ⚠ **Y la pista engaña.** `credential.helper store` borra la credencial en cuanto GitHub la
+  rechaza una vez, así que `~/.git-credentials` queda en **0 bytes**, que se lee como «nunca
+  llegó el token» — lo contrario de lo que pasó. No diagnostiques por ahí: pregúntale a
+  GitHub.
 - **`--push-env` lee el entorno de la máquina QUE LANZA, no el tuyo.** Desde el mini, eso
   es el `.env` del bot con el prefijo `TGL_` quitado. Si falta la variable, `launch` crea
   el droplet igual y sólo avisa: nace sin poder alquilar y se descubre tarde, ya dentro.
