@@ -20,6 +20,8 @@ Se enlaza, no se copia.
 | **qué está fijado hoy** y qué sigue abierto | [`ESTADO.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/ESTADO.md) |
 | **qué se corrió, cuándo y qué costó** | [`reportes/README.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/reportes/README.md) |
 | **qué repo hace qué** | su [`README.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/README.md) |
+| **qué variables pide cada proyecto** y cuáles son secretos de verdad | [`docs/secretos-inventario.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/docs/secretos-inventario.md) |
+| **cómo conseguir todos los tokens desde cero** si se pierden | [`docs/secretos-desde-cero.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/docs/secretos-desde-cero.md) |
 
 ⚠ **Y si algo que se hace aquí termina en un estudio o una medición, su reporte va allí**, no
 aquí — sea cual sea el repo desde el que se lanzó. Un reporte guardado en el repo que lo dispara
