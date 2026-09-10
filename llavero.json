@@ -81,6 +81,11 @@
       "nombre": "TGL2_ALLOWED_USER_IDS",
       "obligatoria": false,
       "porque": "idem, para el bot de staging."
+    },
+    {
+      "nombre": "DO_SSH_USER",
+      "obligatoria": false,
+      "porque": "NO es un secreto, y va aqui igual porque es lo unico del viejo mini que se perdio al rehacerlo con efecto real. Medido el 2026-09-10 comparando el mini original con el renacido: de las 24 variables que tenia, 9 no viajaban, 8 las aporta ahora el tipo (repos, size, image, region, tag, servicios) y esta no. Sin ella, `do_droplet.py ssh <maquina>` desde la flota entra como root en vez de como el usuario de desarrollo, y en el home de root no esta dev-secrets.env: el sintoma es un 'falta el token' en una maquina donde el token si esta, que es la trampa mejor documentada de este repo."
     }
   ]
 }

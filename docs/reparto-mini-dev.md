@@ -1,41 +1,55 @@
-# El reparto: qué va en el mini y qué va en dev
+# Los ROLES: qué hace el mini y qué hace dev
 
-**Fecha:** 2026-08-23. **Estado:** implementado (`types/mini.json`, `types/dev.json`).
+**Fecha:** 2026-08-23. **Actualizado:** 2026-09-10.
+**Estado:** describe los ROLES. La parte de **privilegios quedó superada** por
+[`flota-simetrica.md`](flota-simetrica.md), implementado y probado ese día.
 
-Dos máquinas, y una sola idea detrás: **una sobrevive y la otra se tira**. Todo lo
-demás sale de ahí, incluida la regla nueva de los tokens.
+> ⚠ **Este documento ya NO dice quién puede qué.** Desde el 2026-09-10 mini y dev pueden
+> exactamente lo mismo: mismo llavero, misma clave de flota, y cada una crea, repara y
+> destruye a la otra — **comprobado destruyendo el mini de verdad desde un dev y
+> volviéndolo a crear**. Lo que sigue describe para qué se usa cada una, que es otra cosa.
+
+Dos máquinas, una sola idea: **una está siempre encendida y la otra se tira**. Ojo con la
+diferencia respecto de antes, porque es toda la diferencia: es **disponibilidad**, no
+permisos.
 
 | | **mini** | **dev** |
 |---|---|---|
-| para qué | lanzar la de trabajo, saber qué hay vivo, apagarlo | todo el trabajo: Claude Code y las peticiones complejas |
+| para qué se usa | pedirle máquinas: lanzar, ver qué hay vivo, apagarlo | el trabajo: Claude Code y las peticiones complejas |
 | vida | siempre encendida, tag `control` | desechable, tag `ephemeral` |
-| tamaño | 512 MB (`s-1vcpu-512mb-10gb`) | 2 vCPU / 4 GB |
-| Claude Code | **no** — no cabe en 512 MB | sí |
+| tamaño | 512 MB (`s-1vcpu-512mb-10gb`), 4 $/mes | 2 vCPU / 4 GB, 24 $/mes |
+| Claude Code | **no** — en 512 MB lo mata el kernel | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
-| repos de trabajo | ninguno | foveal-vision, foveal-vision-**data**, image-text-sample-generator |
-| alquila en Vast | **no** | sí |
-| **apaga** en Vast | **sí** | sí |
+| **llavero, repos, clave de flota, crear y destruir** | **iguales** | **iguales** |
 
-Esa última fila es la que no es obvia, y es la regla nueva.
+Las **tres** diferencias que quedan, y el motivo de cada una:
+
+1. **La talla**, de donde sale lo de Claude Code. Es la única que el dueño aceptó como
+   permanente.
+2. **El tag**, que decide qué se lleva `apagar-do`. Es una etiqueta de barrido.
+3. **El bot**, que **no es opcional**: Telegram sólo admite un proceso haciendo long
+   polling por token y el segundo recibe un **409**. Con un solo bot, una de las dos se
+   queda muda.
 
 ---
 
-## La regla: el superviviente tiene que poder apagar todo
+## La regla vieja, y qué la sustituye
 
-> **El token de cualquier cosa que dev pueda ENCENDER tiene que estar también en
-> el mini. No para encender: para apagar.**
+Aquí decía: *«el token de cualquier cosa que dev pueda ENCENDER tiene que estar también
+en el mini. No para encender: para apagar»*. Sigue siendo cierto, pero **se quedaba
+corta**, y lo que faltaba costó descubrirlo:
 
-El razonamiento es corto y no admite excepción: dev alquila máquinas en Vast que
-facturan por segundo, y dev es desechable. Si dev muere —lo destruyes tú, se
-queda sin disco, lo que sea— **el mini es lo único que queda capaz de enumerar y
-matar lo que dev dejó encendido**. Un `apagar-vast` sin `VAST_AI_API_TOKEN` en el
-mini es un botón que no hace nada, y el síntoma es una factura.
+> **La regla de hoy: si una variable hace falta para CREAR una máquina de la flota, va en
+> [`llavero.json`](../llavero.json).**
 
-Por eso `types/mini.json` declara `push_env: ["VAST_AI_API_TOKEN"]` aunque desde
-el mini no se alquile nada nunca. Y por eso, si algún día dev puede encender algo
-en un proveedor nuevo, **ese token entra en el mini en el mismo commit**. Es la
-misma forma que la regla de «el freno nunca llega después del acelerador», pero
-aplicada a las máquinas en vez de a los comandos.
+La vieja cubría los tokens que encienden algo. No cubría los que no encienden nada y sin
+los cuales la máquina **nace coja**. Medido el 2026-09-10: el mini llevaba `TG_*` y no
+`TGL_*`, o sea que sabía parir un dev y **no sabía parir un mini**; y de sus 19 variables,
+`types/mini.json` declaraba **una** — las demás se habían empujado a mano, así que el mini
+no se reconstruía desde el repo.
+
+El caso de Vast sigue valiendo como ejemplo y ahora es una consecuencia, no una regla
+aparte: `VAST_AI_API_TOKEN` es obligatorio en el llavero, así que lo llevan las dos.
 
 ## Un secreto tiene dos destinos, y el ancho es `push_env`
 
@@ -108,7 +122,24 @@ Vast) y `apagar-do` (los droplets `ephemeral`, **nunca el mini**).
 > es una línea en `types/dev.json` (`"tag": "trabajo"`), pero entonces destruirla
 > es siempre por nombre.
 
-## Reemplazar el mini: cuidado con el 409
+## Rehacer el mini: probado, y cuesta una IP
+
+**Comprobado el 2026-09-10**: un dev destruyó el mini con `destroy mini --yes` y lo volvió
+a crear con `launch mini --type mini`, con su llavero, sus repos y su bot. Comparado con la
+foto tomada antes: **ningún secreto se perdió**. De las 24 variables que tenía, 9 no
+viajaron, y 8 de esas las aporta ahora el tipo (repos, size, image, region, tag, servicios).
+
+⚠ **Lo que sí cambia es la IP** — medido: de `67.205.158.85` a `159.89.83.184`. Todo lo que
+apunte a la vieja deja de resolver.
+
+⚠ **Y la novena variable enseñó algo**: `DO_SSH_USER` no viajaba y no la aportaba el tipo,
+así que el mini renacido caía al default `root`. El síntoma habría sido el de siempre —
+`ssh` entrando como root, sin `dev-secrets.env` en su home, y un «falta el token» en una
+máquina donde el token sí está. Está en el llavero desde entonces, aunque no sea un
+secreto: **el llavero es «lo que hace falta para que la máquina nazca entera», no sólo
+«lo que hay que esconder»**.
+
+## Reemplazar el mini estando el viejo vivo: cuidado con el 409
 
 Lanzar un mini nuevo mientras el viejo vive **no funciona con el mismo bot**:
 Telegram sólo admite un proceso haciendo long polling por token, y el segundo se
@@ -155,8 +186,11 @@ frase en un README que nadie relee.
 
 ## Lo que NO va en el mini
 
-Repos de trabajo, el dataset, el volumen, Claude Code. En 512 MB no caben y no
-hay nada que hacer con ellos: el mini no mide, no entrena y no conversa.
+Sólo **Claude Code**, y el volumen de bloques. Los repos de trabajo **sí van** desde el
+2026-09-10, tras medirlo: los siete pesan 365,7 MB clonados contra 4,4 GB libres de los
+8,7 del disco. Si algún día `foveal-vision-data` (334 MB, el que crece) apretara, **ésa es
+la primera línea que se corta** — el mini no mide nada — y se anota aquí como excepción en
+vez de dejarlo en una conversación.
 
 **Hueco conocido**, que sale de la federación de ejecutores: el mini ofrece `c` y
 `creset` en `/executors` y **fallan**, porque vienen de `data/executors/` del

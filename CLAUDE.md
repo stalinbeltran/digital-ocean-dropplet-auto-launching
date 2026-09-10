@@ -74,7 +74,8 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
 ## Estructura
 
 - [scripts/do_droplet.py](scripts/do_droplet.py) — CLI de todo el ciclo de vida
-  (`keygen`, `register-key`, `types`, `sizes`, `launch`, `provision`, `list`, `ssh`,
+  (`keygen`, `register-key`, `clave-flota`, `autorizar-flota`, `types`, `sizes`,
+  `launch`, `provision`, `list`, `ssh`, `remoto`, `flota`, `llavero`, `entornos`,
   `update`, `destroy`). `update` es la excepción: actúa sobre la máquina donde se
   ejecuta, no sobre la API, y se lanza dentro del droplet.
   **Sólo stdlib a propósito**: debe correr en cualquier máquina con Python 3.9+
@@ -93,6 +94,12 @@ aparezca un objetivo nuevo, añádelo aquí en vez de dejarlo sólo en la conver
   `data/fuentes.json` trae `~/src/*/telegram`): llegan con `git pull`, sin copiarlos ni
   reiniciar nada. Cada uno lleva su `descripcion` y sus `ejemplos` en el mismo fichero, y
   **no** lleva `cd`: el cwd ya es la raíz de este repo.
+- [llavero.json](llavero.json) — los secretos que lleva **cualquier** máquina de la
+  flota, con `obligatoria` y `porque` por variable. **Dato, no código**: añadir un
+  secreto es añadir una línea. Un tipo lo pide con `"llavero": true`.
+- [entornos/](entornos/) — un JSON por **proyecto cuyo `.env` se genera** del llavero
+  (`dir`, `fichero`, y por variable `nombre`/`desde`). **Dato, no código.** Es lo que
+  hace que los `.env` de varios proyectos no haya que copiarlos entre máquinas.
 - [types/](types/) — un JSON por **tipo de máquina** (`size`, y opcionalmente `image`,
   `region`, `cloud_init`, `tag`, `notas`). Mismo trato que `services/`: **dato, no
   código**, añadir un tipo es añadir un fichero. Se eligen con `--type` o `DO_TYPE`.
@@ -227,27 +234,77 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
 
 ## Lo mínimo que hay que tener presente
 
-> **El reparto mini/dev, con el detalle entero, está en
-> [`docs/reparto-mini-dev.md`](docs/reparto-mini-dev.md).** Léelo antes de tocar
-> `types/mini.json` o `types/dev.json`.
+> **mini y dev son la MISMA máquina en dos tallas, no dos clases con permisos
+> distintos.** El diseño y la prueba de aceptación están en
+> [`docs/flota-simetrica.md`](docs/flota-simetrica.md) — **implementado y probado
+> end-to-end el 2026-09-10**. Léelo antes de tocar `types/mini.json` o `types/dev.json`.
+> [`docs/reparto-mini-dev.md`](docs/reparto-mini-dev.md) describe los ROLES; su tabla de
+> «quién puede qué» quedó superada.
 >
-> ⚠ **Y ese reparto está en revisión.** El diseño para que mini y dev sean **la misma
-> máquina con dos tallas** —mismo llavero, acceso SSH en los dos sentidos, cualquiera
-> capaz de rehacer a la otra, con Claude Code como única diferencia— está en
-> [`docs/flota-simetrica.md`](docs/flota-simetrica.md) (2026-09-10, **diseñado y sin
-> implementar**). Lo que allí se mide y que aquí conviene saber ya: el dev **nunca** ha
-> podido entrar en el mini (su clave se registra después de que el mini exista), y
-> **ninguna de las dos máquinas puede parir un mini**, porque las `TGL_*` no están en
-> el llavero de nadie.
+> Las **únicas tres diferencias**, y ninguna es de permisos: la **talla** (y de ahí que
+> el mini no lleve Claude Code, que en 512 MB lo mata el kernel), el **tag** (`control`
+> contra `ephemeral`, que es qué se barre) y el **bot** (Lanzador contra Coordinador,
+> que es obligatorio: Telegram devuelve **409** al segundo proceso que haga polling con
+> el mismo token).
 
-- **El superviviente tiene que poder apagar todo lo que el desechable encienda.** El
-  token de cualquier cosa que **dev** pueda ENCENDER tiene que estar también en el
-  **mini**. No para encender: para apagar. dev alquila máquinas que facturan por segundo
-  y dev es desechable; cuando muera, el mini es lo único que queda capaz de enumerar y
-  matar lo que dejó vivo, y un `apagar-vast` sin `VAST_AI_API_TOKEN` es un botón que no
-  hace nada. Si algún día dev enciende algo en un proveedor nuevo, **ese token entra en
-  `types/mini.json` en el mismo commit**. Es la regla del freno y el acelerador, aplicada
-  a las máquinas.
+- **Si una variable hace falta para CREAR una máquina de la flota, va en el llavero.**
+  [`llavero.json`](llavero.json) declara lo que lleva **cualquiera** de las dos; un tipo
+  lo pide con `"llavero": true`, y sólo lo piden `mini` y `dev`. Falta una obligatoria y
+  `launch`/`provision` **mueren antes de crear ni tocar nada** — no avisan: mueren.
+  `--sin-llavero` es la salida de emergencia.
+  Esta regla **sustituye** a la vieja del freno y el acelerador («el token de lo que dev
+  pueda encender va también en el mini, para poder apagarlo»), que era un caso particular
+  y se quedaba corta: no cubría las variables que no encienden nada y sin las cuales la
+  máquina nace coja. Lo que costó descubrirlo, medido el 2026-09-10: el mini llevaba
+  `TG_*` y no `TGL_*`, o sea que sabía parir un dev y **no sabía parir un mini**; y de sus
+  19 variables `types/mini.json` declaraba **una**, así que no se reconstruía del repo.
+- **El acceso entre máquinas NO puede depender del orden de nacimiento.** Un droplet
+  acepta las claves registradas **en el momento de crearlo**, así que una clave por
+  máquina significa que la que nace después nunca entra en la que nació antes: medido el
+  2026-09-10, el dev **nunca** había podido entrar en el mini, y no por un olvido. De ahí
+  la **clave de flota**: una sola, registrada una vez (`clave-flota`), que llevan todas.
+  `hacer_lanzador()` la reusa en vez de generar un par nuevo — antes registraba uno por
+  dev y había **26 `lanzador-dev` muertas** de 31 claves en la cuenta.
+  ⚠ `autorizar-flota` manda la pública **y la privada**, y las dos hacen falta: una
+  máquina que sólo deja entrar no es un par. Y la pública va a **root además de** al
+  usuario de desarrollo, porque todo el aprovisionamiento entra como root.
+- **Lo que actúa DENTRO de una máquina se puede pedir desde fuera con `remoto`.**
+  `remoto mini update`, `remoto dev install-service --service X`. Corre como el usuario
+  de desarrollo y con `bash -lc`; sin el shell de **login** no se carga `dev-secrets.env`
+  y el comando de allí falla con un «falta el token» en una máquina donde el token sí
+  está.
+- **La paridad se comprueba, no se supone: `flota`.** Dice qué le falta a cada máquina
+  viva del llavero, si tiene la clave de flota y qué servicios corre. Sólo **nombres**,
+  ningún valor, y sale `!= 0` si falta algo obligatorio — que es lo único que hace que el
+  aviso llegue al chat de Telegram.
+- **⚠ CUALQUIER máquina de la flota puede destruir a las demás, y NADA lo impide.**
+  Comprobado el 2026-09-10 destruyendo el mini de verdad desde un dev: `destroy mini
+  --yes` funcionó a la primera. `cmd_destroy` sólo pide `--yes`; la regla «nunca
+  destruyas el mini» vive **sólo en esta documentación** y no hay una línea de código que
+  la aplique. Antes lo hacía improbable que el token estuviera en pocos sitios; con la
+  paridad está en todas, así que **la regla ahora depende enteramente de que quien lea
+  esto la respete**.
+- **Rehacer el mini funciona, y cuesta una IP.** El dev lo destruyó y lo volvió a crear
+  con el mismo nombre, con su llavero y su bot. Pero **la IP cambia** (medido: de
+  `67.205.158.85` a `159.89.83.184`), así que todo lo que apunte a la vieja deja de
+  resolver. Lo que NO se pierde: nada del llavero, porque está declarado y viaja; lo que
+  hubiera que no esté en `llavero.json` **sí** se pierde, y ésa es la razón de que el
+  llavero exista.
+- **Un `.env` de proyecto se GENERA del llavero, no se copia entre máquinas.**
+  [`entornos/`](entornos/), un JSON por proyecto, con `desde` (nombre en el llavero) y
+  `nombre` (dentro del proyecto). **El nombre de destino lo declara quien lo CONSUME**,
+  no quien lo transporta: `CWEB_TS_AUTHKEY` aquí es `TS_AUTHKEY` allí porque así lo lee
+  `tailscale-unir.mjs`. Copiar en vez de generar exigiría saber cuál de las dos copias es
+  la buena, y **las fechas mienten**: el `.env` de un dev recién nacido es el más nuevo y
+  el más vacío.
+  ⚠ Y antes de escribir un `.env` se le pregunta a **git** si lo ignora; si no lo ignora,
+  **no se escribe**. Es estructural y no disciplinaria: falla en el momento del error y
+  no en el `git push` de tres semanas después.
+- **Mover secretos entre máquinas: `llavero comparar|enviar|traer|olvidar`.** `traer`
+  sólo **añade** (nunca pisa un valor local salvo `--pisar`), `enviar` sólo **mezcla**, y
+  borrar es un comando **aparte** — para que borrar no pueda ser efecto secundario de
+  sincronizar. No hay `sync` a propósito: uno que decide solo es uno que un día decide
+  mal, y con secretos eso no se nota hasta que algo deja de autenticar.
 - **`push_env` es el destino ANCHO de un secreto, no el estrecho.** Escribe en
   `~/.config/dev-secrets.env`, y eso lo ven **el bot y las sesiones SSH**: el unit arranca
   con `ExecStart=/bin/bash -lc` y `provision` pone la línea que lo carga al **principio**
@@ -551,13 +608,17 @@ Lo que hay que respetar:
   enviado al mini.
 - **Las máquinas de larga vida no llevan el tag de los efímeros.** El mini se crea con
   `--tag control` justamente para que `destroy --tag ephemeral --yes` no se lo lleve.
-- **NUNCA destruyas el droplet `mini` en una limpieza.** "Borra todos los droplets",
-  "limpia lo que quede" o cualquier barrido significan **las máquinas de trabajo**, nunca la
-  de control. El mini sólo se destruye si el usuario lo pide **por su nombre y a propósito**
-  (`destroy mini`). Si te lo encuentras en una lista que ibas a barrer, exclúyelo y dilo; si
-  crees que hay que tocarlo, pregunta antes. Es la máquina desde la que el usuario lanza
-  todo cuando no tiene la laptop delante: borrarla estando fuera de casa lo deja sin ninguna
-  vía de crear ni destruir droplets, y rehacerla exige volver a la laptop.
+- **NUNCA destruyas el droplet `mini` en una limpieza**, y desde el 2026-09-10 el motivo
+  es OTRO. Ya no es que sea la única con privilegios —son iguales— ni que rehacerla exija
+  la laptop —un dev la rehace en 5 minutos, probado—. Es que es **la única siempre
+  encendida**, y que rehacerla **le cambia la IP**: lo que apuntara a la vieja deja de
+  resolver, y si el usuario está fuera de casa se queda sin mando mientras tanto.
+  "Borra todos los droplets", "limpia lo que quede" o cualquier barrido significan **las
+  máquinas de trabajo**, nunca la de control. El mini sólo se destruye si el usuario lo
+  pide **por su nombre y a propósito**. Si te lo encuentras en una lista que ibas a
+  barrer, exclúyelo y dilo; si crees que hay que tocarlo, pregunta antes.
+  ⚠ **Y no cuentes con que algo te pare**: `cmd_destroy` no comprueba el tag `control` ni
+  ningún otro. Comprobado el 2026-09-10 destruyendo el mini desde un dev.
 
 ## Vast.ai: lo aprendido hasta ahora
 
