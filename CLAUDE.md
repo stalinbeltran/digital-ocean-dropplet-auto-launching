@@ -764,3 +764,23 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
 > los scopes aceptan `volume create` y luego dan 403 al listar), y un mapa de los helpers de
 > `do_droplet.py`, que son 128 KB sin índice y ya costaron un `TypeError` por escribir de
 > memoria contra la API propia (`f7c2849`).
+
+## Pendientes abiertos
+
+Lo que está decidido que hay que hacer y todavía no se ha hecho. **No lo hagas por tu
+cuenta**: cada uno dice de quién es. Cuando se cierre, se borra de aquí y lo que se
+aprendió se anota donde corresponda.
+
+- **⏳ DEL USUARIO: repasar la lista de ejecutores y quitar los que no usa.** Anotado el
+  2026-09-10. Hay **40 ejecutores** cargados en una máquina de la flota (medido ese día en
+  el journal del mini, de tres fuentes: `telegram-coordinator`, este repo y
+  `foveal-vision`), de los cuales **11 los declara este repo** (`telegram/executors/`).
+  El usuario dice que varios no los usa nunca y probablemente sobran.
+  Por qué importa y no es limpieza cosmética: la lista es lo que el bot enseña con
+  `/executors`, y es de donde se elige con `/use` — **y la sesión abierta decide qué corre
+  el texto que llegue**, incluido el que entra por `data/entrada/` sin pasar por Telegram.
+  Una lista larga de cosas que nadie usa hace más fácil abrir la sesión equivocada.
+  ⚠ **La decisión de cuáles sobran es SUYA, no tuya**: desde fuera, un ejecutor que no se
+  ha usado en meses y uno que es el freno de una emergencia se parecen mucho (`apagar-do`
+  y `apagar-vast` son exactamente eso). Si te lo pide, lo que sí puedes aportar es el
+  dato: cuáles existen, qué repo declara cada uno y cuáles aparecen en el log de mensajes.
