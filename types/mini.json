@@ -1,15 +1,23 @@
 {
-  "descripcion": "La maquina de control de 512 MB, siempre encendida. Solo hace tres cosas: lanzar la de trabajo, saber que hay vivo y apagarlo. No lleva Claude Code.",
+  "descripcion": "La maquina de control de 512 MB, siempre encendida. Mismos privilegios que dev: mismo llavero, mismos repos y misma capacidad de crear, reparar y destruir a la otra. Lo unico que NO lleva es Claude Code, que en 512 MB lo mata el kernel.",
   "size": "s-1vcpu-512mb-10gb",
   "image": "ubuntu-24-04-x64",
   "cloud_init": "cloud-init.mini.yaml",
   "tag": "control",
+  "llavero": true,
+  "repos": [
+    "stalinbeltran/foveal-vision",
+    "stalinbeltran/image-text-sample-generator",
+    "stalinbeltran/foveal-vision-data",
+    "stalinbeltran/estudios-redes-neuronales"
+  ],
   "services": [
     "telegram-launcher"
   ],
   "make_launcher": true,
-  "push_env": [
-    "VAST_AI_API_TOKEN"
+  "post": [
+    "cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/vast_instance.py register-key --comment mini",
+    "cd ~/src/digital-ocean-dropplet-auto-launching && python3 scripts/do_droplet.py entornos aplicar --entorno telegram-launcher"
   ],
-  "notas": "El tag 'control' la deja fuera de destroy --tag ephemeral a proposito, y asi debe seguir. VAST_AI_API_TOKEN va aqui aunque desde el mini NO se alquile nada: hace falta para APAGAR. Si dev alquila en Vast y dev es desechable, cuando dev muera el mini es el unico que puede barrer lo que quedo facturando, y `apagar-vast` sin token es un boton que no hace nada. GITHUB_TOKEN no se declara pero tiene que existir en la maquina que crea el mini: se propaga solo, y sin el los dev que el mini cree no podran EMPUJAR, que es lo unico que salva su trabajo. Este tipo NO incluye repos de trabajo: foveal-vision y compania van en dev, no aqui -- en 512 MB no cabe Claude Code y no hay nada que hacer con ellos."
+  "notas": "PARIDAD desde el 2026-09-10 (docs/flota-simetrica.md). Hasta entonces esto era la maquina con privilegios y dev la que obedecia, y el precio estaba medido: el dev NUNCA pudo entrar aqui -su clave se registra durante SU provision, siempre despues de que esta maquina exista- y NADIE sabia parir un mini, porque las TGL_* no estaban en el llavero de nadie. Lo que queda distinto y por que: (1) el tag 'control' la deja fuera de destroy --tag ephemeral, que es disponibilidad y no privilegio; (2) el bot es el Lanzador (TGL_) y no el Coordinador (TG_) porque Telegram solo admite un proceso haciendo long polling por token y el segundo recibe un 409 -o sea que DOS bots no es comodidad, es obligatorio-; (3) cloud-init.mini.yaml no instala Claude Code y anade 1 GB de swap. Los repos SI van iguales ahora: medido el 2026-09-10, los siete pesan 365,7 MB clonados contra 4,4 GB libres de los 8,7 del disco, o sea que caben con mas de diez veces de margen. Si algun dia foveal-vision-data (334 MB, el que crece) apretara el disco, ESA es la primera linea que se corta aqui, porque el mini no mide nada -- y se anota como excepcion en vez de dejarlo en una conversacion. El llavero va entero para que esta maquina pueda parir un dev Y otro mini; sin TGL_BOT_TOKEN aqui, un mini nuevo nace mudo. NUNCA la destruyas en una limpieza: los privilegios ya dan igual, pero sigue siendo la unica SIEMPRE ENCENDIDA, y borrarla estando fuera de casa deja sin ninguna via de crear ni destruir droplets."
 }

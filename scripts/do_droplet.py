@@ -270,9 +270,190 @@ def cmd_keygen(args: argparse.Namespace) -> None:
     log("\nSiguiente paso: python scripts/do_droplet.py register-key")
 
 
+# Nombre de la clave compartida por toda la flota en la cuenta de DigitalOcean, y
+# fichero donde vive. UNA clave registrada UNA vez, en vez de una por maquina: el
+# acceso entre maquinas dependia del ORDEN DE NACIMIENTO, y eso no se arregla con
+# mas claves sino con una que exista antes que todas. Medido el 2026-09-10: el
+# mini tenia tres claves autorizadas y ninguna era del dev, porque la del dev se
+# registra durante SU provision, que es siempre despues de que el mini exista.
+NOMBRE_CLAVE_FLOTA = "flota"
+FICHERO_CLAVE_FLOTA = "~/.ssh/do_flota"
+
+
+def ruta_clave_flota() -> Path:
+    return Path(cfg("DO_FLEET_KEY_FILE") or FICHERO_CLAVE_FLOTA).expanduser()
+
+
+def ruta_publica(privada: Path) -> Path:
+    """La .pub de una clave. Aparte porque `with_suffix` NO vale aqui.
+
+    `Path("~/.ssh/do_flota").with_suffix(".pub")` da lo que uno espera, pero con
+    un fichero como `id_ed25519.old` se comeria el `.old`. Concatenar es lo que
+    hace ssh-keygen y lo unico que no sorprende.
+    """
+    return Path(str(privada) + ".pub")
+
+
 def cmd_keys(args: argparse.Namespace) -> None:
+    claves = account_keys()
+    if getattr(args, "prune", ""):
+        return _podar_claves(claves, args.prune, getattr(args, "yes", False))
+    for key in claves:
+        marca = "  <- flota" if key["name"] == NOMBRE_CLAVE_FLOTA else ""
+        log(f"{key['id']:<12} {key['name']:<28} {key['fingerprint']}{marca}")
+
+
+def _podar_claves(claves: list[dict], patron: str, yes: bool) -> None:
+    """Borra de la cuenta las claves cuyo NOMBRE encaje con el patron.
+
+    Existe porque `hacer_lanzador()` registraba un par nuevo EN CADA dev, y los
+    dev se destruyen mientras las claves se quedan: medidas 26 `lanzador-dev` el
+    2026-09-10 de un total de 31. Con `DO_SSH_KEYS=` vacio (todas), cada droplet
+    nuevo nacia con las 31 dentro, 26 de maquinas que ya no existen.
+
+    Nunca toca la clave de la flota ni la de esta maquina, encaje lo que encaje
+    el patron: son las dos que dejarian sin acceso a las maquinas nuevas.
+    """
+    import fnmatch
+
+    protegidos_nombre = {NOMBRE_CLAVE_FLOTA}
+    protegidos_material = set()
+    for fichero in (Path(cfg("DO_SSH_KEY_FILE")).expanduser(), ruta_clave_flota()):
+        pub = ruta_publica(fichero)
+        if pub.exists():
+            trozos = pub.read_text(encoding="utf-8").strip().split()
+            if len(trozos) >= 2:
+                protegidos_material.add(trozos[1])
+
+    candidatas = [
+        k
+        for k in claves
+        if k["name"] not in protegidos_nombre
+        and k["public_key"].split()[1] not in protegidos_material
+        and fnmatch.fnmatch(k["name"], patron)
+    ]
+
+    if not candidatas:
+        log(f"Ninguna clave encaja con '{patron}' (sin contar las protegidas).")
+        return
+    log(f"Encajan {len(candidatas)} claves con '{patron}':")
+    for key in candidatas:
+        log(f"  {key['id']:<12} {key['name']:<28} {key['fingerprint']}")
+    log(
+        "\nBorrarlas NO echa a nadie de una maquina que ya existe: sus claves ya\n"
+        "  estan copiadas en el authorized_keys de cada droplet. Lo unico que\n"
+        "  cambia es que dejan de meterse en los droplets NUEVOS."
+    )
+    if not yes and not confirmar(f"Borrar {len(candidatas)} claves. Escribe 'si': "):
+        log("No se borra nada.")
+        return
+    for key in candidatas:
+        api("DELETE", f"/v2/account/keys/{key['id']}")
+        log(f"  borrada {key['name']} ({key['id']})")
+    log(f"Listo: {len(candidatas)} borradas, {len(claves) - len(candidatas)} quedan.")
+
+
+def cmd_clave_flota(args: argparse.Namespace) -> None:
+    """Genera y registra la clave compartida de la flota. Idempotente.
+
+    Es `keygen` + `register-key` de una sola clave con NOMBRE FIJO, y el valor
+    esta en el nombre fijo: cualquier droplet creado despues la lleva en root y
+    en el usuario de desarrollo, porque `DO_SSH_KEYS=` vacio significa "todas las
+    de la cuenta". A partir de ahi, cualquier maquina de la flota entra en
+    cualquier otra sin que importe cual nacio primero.
+
+    La decision incomoda, dicha entera: una clave compartida significa que quien
+    entre en una maquina de la flota entra en las demas. Se acepta porque YA era
+    asi -esa maquina lleva DO_TOKEN, y con el se puede destruir el mini, hacerle
+    una snapshot o crear una maquina nueva con la clave que uno quiera-. La clave
+    de flota no sube el techo del dano; solo lo hace utilizable para lo que
+    queremos.
+    """
+    path = ruta_clave_flota()
+    pub = ruta_publica(path)
+    if path.exists():
+        log(f"Ya existe {path}, no se toca.")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ["ssh-keygen", "-t", "ed25519", "-f", str(path), "-N", "",
+             "-C", NOMBRE_CLAVE_FLOTA],
+            check=True,
+        )
+        log(f"Par de claves de la flota creado en {path}")
+
+    publica = pub.read_text(encoding="utf-8").strip()
+    material = publica.split()[1]
     for key in account_keys():
-        log(f"{key['id']:<12} {key['name']:<28} {key['fingerprint']}")
+        if key["public_key"].split()[1] == material:
+            log(f"Ya estaba registrada en la cuenta como '{key['name']}'.")
+            break
+    else:
+        key = api(
+            "POST", "/v2/account/keys",
+            {"name": NOMBRE_CLAVE_FLOTA, "public_key": publica},
+        )["ssh_key"]
+        log(f"Registrada en la cuenta: '{key['name']}' (id {key['id']}).")
+
+    log(
+        "\nLos droplets creados A PARTIR DE AHORA la aceptaran solos.\n"
+        "  Los que YA existen, no, y por eso hace falta el otro comando:\n"
+        "    python scripts/do_droplet.py autorizar-flota <maquina>"
+    )
+
+
+def cmd_autorizar_flota(args: argparse.Namespace) -> None:
+    """Autoriza la clave de la flota DENTRO de una maquina que ya existia.
+
+    Es el arranque en frio del problema: el `mini` de hoy nacio antes que la
+    clave, asi que no la tiene y nunca la tendria. Esto no rehace la maquina, la
+    repara.
+
+    Autoriza para root Y para el usuario de desarrollo, y las dos hacen falta:
+    `run_remote_script` entra SIEMPRE como root -hay que escribir en el home de
+    otro usuario y hacer chown-, asi que autorizar solo a `deploy` deja fuera
+    `push-secret`, `push-github-token`, `push-dir` y `provision`, que son
+    justamente los que importan.
+    """
+    pub = ruta_publica(ruta_clave_flota())
+    if not pub.exists():
+        die(
+            f"No existe {pub}. Crea la clave de la flota primero:\n"
+            "  python scripts/do_droplet.py clave-flota"
+        )
+    publica = pub.read_text(encoding="utf-8").strip()
+    droplet, ip, port = resolve_target(args.name or "", args.port or 0)
+    usuarios = args.usuario or ["root", cfg("DO_DEV_USER")]
+    log(f"Autorizando la clave de la flota en '{droplet['name']}' para: "
+        + ", ".join(usuarios))
+
+    lineas = ["set -eu", f"PUB={shq(publica)}",
+              'MAT=$(printf "%s" "$PUB" | cut -d" " -f2)']
+    for usuario in usuarios:
+        lineas += [
+            f"U={shq(usuario)}",
+            'H=$(getent passwd "$U" | cut -d: -f6)',
+            'if [ -z "$H" ]; then echo "  $U: no existe, me lo salto"; else',
+            '  install -d -m 700 -o "$U" -g "$U" "$H/.ssh"',
+            '  touch "$H/.ssh/authorized_keys"',
+            # Se compara el MATERIAL de la clave y no la linea entera: el
+            # comentario del final cambia entre maquinas y no distingue una
+            # clave de otra.
+            '  if grep -q "$MAT" "$H/.ssh/authorized_keys"; then',
+            '    echo "  $U: ya estaba autorizada"',
+            "  else",
+            # El \n va DOBLE: lo tiene que ver printf en el droplet, no Python
+            # aqui. Con uno solo, el script remoto llega partido en dos lineas.
+            '    printf "%s\\n" "$PUB" >> "$H/.ssh/authorized_keys"',
+            '    chown "$U:$U" "$H/.ssh/authorized_keys"',
+            '    chmod 600 "$H/.ssh/authorized_keys"',
+            '    echo "  $U: autorizada"',
+            "  fi",
+            "fi",
+        ]
+    if run_remote_script(ip, port, "\n".join(lineas)) != 0:
+        die("Fallo al autorizar. La salida de ssh esta justo arriba.")
+    log(f"\nListo: cualquier maquina de la flota entra ya en '{droplet['name']}'.")
 
 
 def cmd_register_key(args: argparse.Namespace) -> None:
@@ -828,6 +1009,11 @@ def cmd_launch(args: argparse.Namespace) -> None:
     args.push_env = lista_unida(args.push_env, tipo.get("push_env"))
     args.make_launcher = args.make_launcher or bool(tipo.get("make_launcher"))
     args.push_do_token = args.push_do_token or bool(tipo.get("push_do_token"))
+    # El llavero lo pide el TIPO, no el comando: una máquina de la flota lo lleva
+    # siempre, y tener que acordarse de una opción para que lo lleve es la forma
+    # de que un día no lo lleve. `--llavero` suelto sirve para una máquina que no
+    # tiene tipo.
+    args.llavero = args.llavero or tipo_pide_llavero(tipo)
     size = None if args.no_check else comprobar_size(
         maquina["size"], maquina["region"], args.accept_cost
     )
@@ -839,6 +1025,11 @@ def cmd_launch(args: argparse.Namespace) -> None:
     # lo dice. Con --dry-run no hace falta, que no crea nada.
     if not args.dry_run and not args.no_provision:
         comprobar_github_token(args.sin_github)
+        # Y el llavero, aqui y no dentro de provision: si a esta maquina le
+        # faltan secretos obligatorios, el droplet no se llega a crear. Fallar
+        # gratis es lo barato; fallar con la maquina ya facturando, no.
+        if args.llavero:
+            comprobar_llavero(args.sin_llavero)
 
     # El volumen se comprueba antes de crear el droplet: si la región no cuadra
     # o el nombre está mal escrito, el fallo tiene que salir gratis y no
@@ -949,6 +1140,8 @@ def cmd_launch(args: argparse.Namespace) -> None:
                 push_env=args.push_env,
                 make_launcher=args.make_launcher,
                 sin_github=args.sin_github,
+                llavero=args.llavero,
+                sin_llavero=args.sin_llavero,
                 skip_wait=False,
                 desde_launch=True,
             )
@@ -1477,6 +1670,70 @@ def run_remote_capture(ip: str, port: int, script: str) -> tuple[int, str]:
 REPO_LANZADOR = "stalinbeltran/digital-ocean-dropplet-auto-launching"
 
 
+def _mandar_clave_flota(
+    name: str, ip: str, port: int, dev_user: str, privada: Path
+) -> None:
+    """Copia la clave de la flota al droplet y la deja como su clave de trabajo.
+
+    Escribe TRES cosas, y las tres hacen falta:
+      - la privada en `~/.ssh/do_flota`, modo 600 del usuario de desarrollo;
+      - la publica al lado, que es lo que `register-key` mira desde dentro;
+      - `DO_FLEET_KEY_FILE` y `DO_SSH_KEY_FILE` en dev-secrets.env, para que
+        `ssh_command()` de esa maquina la use sin que nadie se lo diga.
+
+    Sin la tercera, la maquina tendria la clave y seguiria intentando entrar con
+    otra: el fichero existe, el acceso no funciona, y no hay ningun error que lo
+    explique.
+    """
+    texto_privada = privada.read_text(encoding="utf-8")
+    texto_publica = ruta_publica(privada).read_text(encoding="utf-8").strip()
+    destino = FICHERO_CLAVE_FLOTA.replace("~/", "")
+
+    script = "\n".join(
+        [
+            "set -eu",
+            "umask 077",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            '[ -n "$H" ] || { echo "no existe el usuario $DEV_USER" >&2; exit 1; }',
+            f'KEY="$H/{destino}"',
+            'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.ssh"',
+            # Heredoc con el delimitador entrecomillado: una clave privada lleva
+            # `$` y backslashes, y sin las comillas el shell los expandiria.
+            'cat > "$KEY" <<\'FIN_CLAVE\'',
+            texto_privada.rstrip("\n"),
+            "FIN_CLAVE",
+            'cat > "$KEY.pub" <<\'FIN_PUB\'',
+            texto_publica,
+            "FIN_PUB",
+            'chmod 600 "$KEY"',
+            'chmod 644 "$KEY.pub"',
+            'chown "$DEV_USER:$DEV_USER" "$KEY" "$KEY.pub"',
+            # Y que la use: si no, la clave esta puesta y la maquina sigue
+            # intentando entrar con otra.
+            'F="$H/.config/dev-secrets.env"',
+            'install -d -m 700 -o "$DEV_USER" -g "$DEV_USER" "$H/.config"',
+            'touch "$F"',
+            'grep -v "^export DO_FLEET_KEY_FILE=" "$F" > "$F.tmp" || true',
+            'grep -v "^export DO_SSH_KEY_FILE=" "$F.tmp" > "$F.tmp2" || true',
+            'mv "$F.tmp2" "$F"; rm -f "$F.tmp"',
+            f'echo "export DO_FLEET_KEY_FILE=$H/{destino}" >> "$F"',
+            f'echo "export DO_SSH_KEY_FILE=$H/{destino}" >> "$F"',
+            'chmod 600 "$F"',
+            'chown "$DEV_USER:$DEV_USER" "$F"',
+            'echo "  clave de la flota puesta en $KEY"',
+        ]
+    )
+    if run_remote_script(ip, port, script) != 0:
+        log(
+            "  AVISO: no pude poner la clave de la flota. La maquina puede CREAR\n"
+            "         droplets pero quiza no entrar en ellos."
+        )
+        return
+    log(f"  '{name}' usa la clave de la flota: entra en cualquier maquina de la")
+    log("  flota, y cualquiera entra en ella. No se registra ninguna clave nueva.")
+
+
 def hacer_lanzador(name: str, ip: str, port: int) -> None:
     """Deja al droplet en condiciones de crear y usar otros droplets.
 
@@ -1487,9 +1744,27 @@ def hacer_lanzador(name: str, ip: str, port: int) -> None:
     ANTES de lanzar nada. Sin esto se crean máquinas a las que su creador no
     puede conectarse: existen, facturan y no sirven.
 
-    La privada se genera en el destino y no viaja: aquí sólo vuelve la pública.
+    Hay DOS caminos, y el bueno es el primero:
+
+    1. **Si esta maquina tiene la clave de la flota, se manda esa.** Una sola
+       clave, registrada una vez en la cuenta, que llevan todas las maquinas.
+       Es lo que rompe la dependencia del ORDEN DE NACIMIENTO: sin ella, la
+       clave de un dev se registra durante SU provision -siempre despues de que
+       el mini exista- y por eso el dev nunca ha podido entrar en el mini.
+       Ademas se acaba el goteo: 26 claves `lanzador-dev` muertas en la cuenta
+       el 2026-09-10, una por cada dev que existio alguna vez.
+    2. **Si no la hay, como siempre**: se genera un par EN el destino y vuelve
+       la publica para registrarla. Se conserva para no dejar sin arreglo una
+       maquina lanzada con `--sin-llavero` o desde un sitio sin clave de flota.
+
+    En el camino 1 la privada SI viaja, por SSH y por stdin como los tokens, a
+    un fichero 600. En el 2 no viaja nunca: se genera en el destino y solo
+    vuelve la publica, que no es secreta.
     """
     dev_user = cfg("DO_DEV_USER")
+    flota = ruta_clave_flota()
+    if flota.exists() and ruta_publica(flota).exists():
+        return _mandar_clave_flota(name, ip, port, dev_user, flota)
     key_file = cfg("DO_SSH_KEY_FILE").replace("~", "$H", 1) if cfg(
         "DO_SSH_KEY_FILE"
     ).startswith("~") else "$H/.ssh/do_droplet"
@@ -1864,6 +2139,99 @@ def url_de_servicio(
     )
 
 
+LLAVERO_PATH = ROOT / "llavero.json"
+
+
+def cargar_llavero() -> list[dict]:
+    """Lee llavero.json: lo que lleva CUALQUIER máquina de la flota.
+
+    Dato, no código, como `types/` y `services/`. Existe porque hasta el
+    2026-09-10 lo que una máquina llevaba era la unión de tres cosas que no se
+    miraban juntas en ningún sitio -lo que `build_provision_script` escribe a
+    pelo, el `push_env` del tipo y el barrido por prefijo de `env_prefix`- y la
+    tercera no declara nombres: barre el entorno. Si no encuentra nada, no falla:
+    suelta un AVISO entre cien líneas y sigue.
+
+    Lo que eso producía, medido ese día en el `mini`: llevaba `TG_*` y no
+    `TGL_*`, o sea que sabía parir un dev y no sabía parir un mini. Y de sus 19
+    variables, `types/mini.json` declaraba UNA.
+    """
+    if not LLAVERO_PATH.exists():
+        die(
+            f"Falta {LLAVERO_PATH}, que es donde se declara qué secretos lleva\n"
+            "  una máquina de la flota. Sin él no se puede comprobar nada."
+        )
+    try:
+        datos = json.loads(LLAVERO_PATH.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"{LLAVERO_PATH} no es JSON válido: {exc}")
+    variables = datos.get("variables")
+    if not isinstance(variables, list) or not variables:
+        die(f"{LLAVERO_PATH}: falta la lista 'variables' o está vacía.")
+    for var in variables:
+        if not isinstance(var, dict) or not var.get("nombre"):
+            die(f"{LLAVERO_PATH}: cada variable necesita al menos 'nombre'.")
+        var.setdefault("obligatoria", False)
+        var.setdefault("porque", "")
+    return variables
+
+
+def tipo_pide_llavero(tipo: dict) -> bool:
+    """Si este tipo de máquina lleva el llavero entero.
+
+    Explícito y no deducido de `make_launcher`: un secreto no viaja a donde no
+    hace falta (objetivo 5), y hay máquinas que lanzan cosas sin ser de la flota.
+    """
+    return bool(tipo.get("llavero"))
+
+
+def comprobar_llavero(sin_llavero: bool = False) -> list[tuple[str, str]]:
+    """Pares (nombre, valor) del llavero presentes aquí, o muerte si falta uno obligatorio.
+
+    Se llama ANTES de crear el droplet y ANTES de tocar una máquina ya creada,
+    por lo mismo que `comprobar_github_token()`: una máquina que nace sin la
+    mitad de su llavero factura igual que una buena y no lo dice. El síntoma
+    llega días después y no se parece a la causa.
+
+    Muere en vez de avisar a propósito. El precedente está medido: hasta el
+    2026-09-06 un repo sin clonar era un `AVISO` en mitad de la salida con
+    `exit 0`, así que el lanzamiento daba por bueno el trabajo con la máquina ya
+    rota.
+    """
+    variables = cargar_llavero()
+    presentes: list[tuple[str, str]] = []
+    faltan: list[dict] = []
+    for var in variables:
+        valor = os.environ.get(var["nombre"], "").strip()
+        if valor:
+            presentes.append((var["nombre"], valor))
+        elif var["obligatoria"]:
+            faltan.append(var)
+
+    if faltan and sin_llavero:
+        log(
+            f"  --sin-llavero: faltan {len(faltan)} secretos obligatorios y se sigue "
+            "igual.\n  La máquina nacerá coja: "
+            + ", ".join(v["nombre"] for v in faltan)
+        )
+        return presentes
+    if faltan:
+        detalle = "\n".join(f"    {v['nombre']:<26} {v['porque']}" for v in faltan)
+        die(
+            f"A esta máquina le faltan {len(faltan)} secretos del llavero, y sin ellos\n"
+            "  la que se cree nacería coja. No se ha creado ni tocado nada.\n\n"
+            f"{detalle}\n\n"
+            "  Arréglalo poniéndolos en el .env de ESTA máquina. De dónde sale cada\n"
+            "  uno está en el manual del repo central:\n"
+            "    estudios-redes-neuronales/docs/secretos-desde-cero.md\n"
+            "  Si es otra máquina la que los tiene, tráetelos:\n"
+            "    python scripts/do_droplet.py llavero traer <maquina>\n"
+            "  Y si de verdad quieres una máquina coja, repítelo con --sin-llavero."
+        )
+    log(f"  Llavero: {len(presentes)}/{len(variables)} variables listas para viajar.")
+    return presentes
+
+
 def push_env_names(valores: list[str]) -> list[str]:
     """Nombres de variables a copiar, aceptando repetición y comas."""
     nombres: list[str] = []
@@ -2013,6 +2381,7 @@ def build_provision_script(
     push_do_token: bool = False,
     push_env: list[str] | None = None,
     github_token: str = "",
+    llavero: list[tuple[str, str]] | None = None,
 ) -> str:
     """Script que deja el droplet listo para trabajar.
 
@@ -2027,20 +2396,32 @@ def build_provision_script(
     dev_user = cfg("DO_DEV_USER")
     claude_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
 
-    exports = ["# Generado por do_droplet.py provision. Modo 600, no lo copies."]
+    # Un solo diccionario en vez de ir apilando líneas: el llavero, el token de
+    # GitHub y `push_env` se solapan (GITHUB_TOKEN está en los tres caminos), y
+    # con líneas sueltas el fichero salía con `export X=` repetido. No rompe
+    # -al sourcear gana la última- pero hace ilegible el destino y esconde
+    # justo lo que uno va a mirar cuando algo no autentica.
+    valores: dict[str, str] = {}
+
+    # El llavero primero: es la base sobre la que lo explícito manda.
+    for nombre, valor in llavero or []:
+        valores[nombre] = valor
+
     if claude_token:
-        exports.append(f"export CLAUDE_CODE_OAUTH_TOKEN={shq(claude_token)}")
+        valores["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
     if github_token:
         # GH_TOKEN lo lee gh; GITHUB_TOKEN lo esperan casi todas las herramientas.
-        exports.append(f"export GITHUB_TOKEN={shq(github_token)}")
-        exports.append(f"export GH_TOKEN={shq(github_token)}")
+        valores["GITHUB_TOKEN"] = github_token
+        valores["GH_TOKEN"] = github_token
+
+    exports = ["# Generado por do_droplet.py provision. Modo 600, no lo copies."]
     if push_do_token:
         # Sólo para la máquina de control, y sólo pidiéndolo a mano: con este
         # token el droplet puede crear y destruir máquinas en la cuenta, o sea
         # gastar dinero. Va aquí y no sólo en el .env del bot para que también
         # lo tengan las sesiones de la máquina; si no, `register-key` desde
         # dentro falla con un "falta el token" que despista.
-        exports.append(f"export DO_TOKEN={shq(token())}")
+        valores["DO_TOKEN"] = token()
 
     # Config del lanzador que se lleva la máquina de control, para que los
     # droplets que cree ella salgan iguales que los que creas tú: mismos repos,
@@ -2051,7 +2432,12 @@ def build_provision_script(
         if not valor:
             log(f"  AVISO: --push-env {nombre} no tiene valor aquí, no se envía.")
             continue
-        exports.append(f"export {nombre}={shq(valor)}")
+        valores[nombre] = valor
+
+    # Ordenadas por nombre: el destino se lee con los ojos cuando algo no
+    # autentica, y un orden que depende de en qué rama se añadió cada una
+    # convierte un `diff` entre dos máquinas en ruido.
+    exports += [f"export {n}={shq(v)}" for n, v in sorted(valores.items())]
 
     parts = [
         "set -eu",
@@ -2193,6 +2579,15 @@ def cmd_provision(args: argparse.Namespace) -> bool:
     # destino el que hubiera, que podía ser bueno.
     github_token = comprobar_github_token(getattr(args, "sin_github", False))
 
+    # El llavero, por lo mismo y en el mismo sitio. Sólo si quien llama lo pidió:
+    # `provision` a pelo sobre una máquina que no es de la flota no tiene por qué
+    # exigir los secretos de una que sí lo es.
+    llavero = (
+        comprobar_llavero(getattr(args, "sin_llavero", False))
+        if getattr(args, "llavero", False)
+        else []
+    )
+
     # Una máquina lanzadora necesita las tres cosas a la vez, y pedirlas por
     # separado es la forma de que falte una y no se note hasta que falla:
     # el token (para crear), el repo del lanzador (el programa que crea) y un
@@ -2234,6 +2629,7 @@ def cmd_provision(args: argparse.Namespace) -> bool:
             getattr(args, "push_do_token", False),
             getattr(args, "push_env", []),
             github_token,
+            llavero,
         ),
     )
     # Faltar repos no es lo mismo que no haber aprovisionado: la máquina sirve,
@@ -2838,9 +3234,22 @@ def cmd_push_service_env(args: argparse.Namespace) -> None:
     if not prefijo:
         die(f"El servicio '{svc['name']}' no declara env_prefix: no hay puente de nombres.")
 
+    # El llavero entero de una vez: es el camino de REPARACION de una maquina
+    # viva. `provision` tambien lo escribe, pero reescribe dev-secrets.env con
+    # `cat >`, asi que usarlo para anadir borra del destino lo que el emisor no
+    # tenga a mano. Esto solo toca las lineas que nombra.
+    if getattr(args, "llavero", False):
+        pares = comprobar_llavero(getattr(args, "sin_llavero", False))
+        if not pares:
+            die("El llavero de esta maquina esta vacio: no hay nada que enviar.")
+        return _escribir_secretos(args, pares)
+
     nombres = push_env_names(args.vars)
     if not nombres:
-        die("Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN")
+        die(
+            "Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN\n"
+            "  O manda el llavero entero:  push-secret --llavero --name <maquina>"
+        )
 
     pares = []
     for nombre in nombres:
@@ -2972,6 +3381,17 @@ def cmd_push_secret(args: argparse.Namespace) -> None:
             )
         pares.append((nombre, valor))
 
+    return _escribir_secretos(args, pares)
+
+
+def _escribir_secretos(args: argparse.Namespace, pares: list[tuple[str, str]]) -> None:
+    """Escribe pares en dev-secrets.env del destino, MEZCLANDO y sin borrar nada.
+
+    Vive aparte porque lo usan los dos caminos -unas pocas variables por nombre y
+    el llavero entero- y no pueden divergir: si uno de los dos se dejara la linea
+    que carga el fichero en .bashrc, el secreto existiria en la maquina y no lo
+    leeria nadie, que es el fallo que mas cuesta reconocer.
+    """
     dev_user = cfg("DO_DEV_USER")
     droplet, ip, port = resolve_target(args.name or "", args.port or 0)
     log(
@@ -3141,6 +3561,552 @@ def cmd_authorize_key(args: argparse.Namespace) -> None:
     log(f"Ahora esa máquina puede entrar aquí como {Path.home().name}.")
 
 
+ENTORNOS_DIR = ROOT / "entornos"
+
+
+def load_entorno(name: str) -> dict:
+    """Lee entornos/<nombre>.json: el .env de UN proyecto, declarado.
+
+    Dato, no codigo, como types/ y services/. Resuelve el problema de que varios
+    proyectos tengan cada uno su .env y haya que llevarlos de una maquina a otra
+    en los dos sentidos.
+
+    La forma es la que evita la trampa: el .env NO se copia entre maquinas, se
+    GENERA del llavero. Copiarlo exigiria saber cual de las dos copias es la
+    buena, y no hay forma de saberlo -las fechas mienten: el .env de un dev
+    recien nacido es el mas NUEVO y el mas VACIO-. Ademas es la forma exacta del
+    fallo que ya pago este repo: `provision` reescribe dev-secrets.env con
+    `cat >`, asi que emitir desde una maquina a la que le falta un token lo BORRA
+    en el destino.
+
+    Y como se regenera, perder un .env no cuesta nada; por eso nadie tiene la
+    tentacion de commitearlo "por si acaso", que es de donde salen la mitad de
+    los secretos filtrados.
+    """
+    path = ENTORNOS_DIR / f"{name}.json"
+    if not path.exists():
+        disponibles = ", ".join(sorted(p.stem for p in ENTORNOS_DIR.glob("*.json")))
+        die(
+            f"No existe el entorno '{name}' (falta {path}).\n"
+            f"  Definidos: {disponibles or 'ninguno'}"
+        )
+    try:
+        ent = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"{path} no es JSON valido: {exc}")
+    if not ent.get("dir"):
+        die(f"{path}: falta el campo obligatorio 'dir'.")
+    ent["name"] = name
+    ent.setdefault("fichero", ".env")
+    ent.setdefault("variables", [])
+    for var in ent["variables"]:
+        if not var.get("nombre"):
+            die(f"{path}: cada variable necesita 'nombre'.")
+        # `desde` es el nombre en el LLAVERO; `nombre`, el de dentro del .env del
+        # proyecto. Son distintos a proposito y no es burocracia: la key de
+        # Tailscale se llama CWEB_TS_AUTHKEY en el llavero y TS_AUTHKEY dentro
+        # del proyecto, y el nombre de destino lo declara quien la CONSUME.
+        var.setdefault("desde", var["nombre"])
+        var.setdefault("obligatoria", False)
+        var.setdefault("porque", "")
+    return ent
+
+
+def all_entornos() -> list[dict]:
+    if not ENTORNOS_DIR.exists():
+        return []
+    return [load_entorno(p.stem) for p in sorted(ENTORNOS_DIR.glob("*.json"))]
+
+
+def git_ignora(repo: Path, fichero: str) -> bool | None:
+    """Si git ignora ese fichero en ese repo. None = no hay repo que preguntar.
+
+    Es la red contra las filtraciones, y es ESTRUCTURAL y no disciplinaria:
+    antes de escribir un .env se le pregunta a git si lo ignora, y si no, no se
+    escribe. Falla en el momento en que se comete el error y no en el `git push`
+    de dentro de tres semanas, y no depende de que nadie recuerde nada.
+
+    No es teorico: el 2026-09-10, `claude-code-webapp-mobile` -repo PUBLICO cuyo
+    .gitignore entero era `node_modules/`- leia TS_AUTHKEY de un .env. El
+    fichero no existia aun; el dia que existiera, git lo habria rastreado.
+    """
+    if not (repo / ".git").exists():
+        return None
+    proc = subprocess.run(
+        ["git", "-C", str(repo), "check-ignore", "-q", fichero],
+        capture_output=True,
+    )
+    # 0 = ignorado, 1 = NO ignorado, 128 = no es un repo.
+    return proc.returncode == 0 if proc.returncode in (0, 1) else None
+
+
+def cmd_entornos(args: argparse.Namespace) -> None:
+    if args.accion == "list":
+        return _entornos_list()
+    base = dentro_del_droplet("entornos " + args.accion)
+    if args.accion == "aplicar":
+        return _entornos_aplicar(base, args)
+    return _entornos_comprobar(base, args)
+
+
+def _entornos_list() -> None:
+    entornos = all_entornos()
+    if not entornos:
+        log("No hay entornos declarados en entornos/.")
+        return
+    for ent in entornos:
+        obl = sum(1 for v in ent["variables"] if v["obligatoria"])
+        log(f"\n{ent['name']}  ->  ~/src/{ent['dir']}/{ent['fichero']}")
+        if ent.get("descripcion"):
+            log(f"  {ent['descripcion']}")
+        log(f"  {len(ent['variables'])} variables ({obl} obligatorias)")
+        for var in ent["variables"]:
+            flecha = "" if var["desde"] == var["nombre"] else f"  <- {var['desde']}"
+            marca = "*" if var["obligatoria"] else " "
+            log(f"    {marca} {var['nombre']}{flecha}")
+
+
+def _entornos_aplicar(base: Path, args: argparse.Namespace) -> None:
+    """Regenera los .env de los proyectos declarados, desde el llavero."""
+    entornos = all_entornos()
+    if args.entorno:
+        entornos = [e for e in entornos if e["name"] in args.entorno]
+    if not entornos:
+        log("No hay entornos que aplicar.")
+        return
+
+    # Dos entornos que escriben el MISMO fichero se pisan, y el que gana depende
+    # del orden alfabetico: `telegram-coordinator` y `telegram-launcher` son el
+    # mismo repo con otro bot, asi que aplicarlos juntos dejaria al mini con el
+    # bot del dev o al reves, y el sintoma seria un 409 en el que nadie pensaria.
+    # Mismo criterio que `selected_services`, que ya rechaza dos servicios del
+    # mismo directorio: se para y se pide que elijan.
+    por_destino: dict[str, str] = {}
+    for ent in entornos:
+        clave = f"{ent['dir']}/{ent['fichero']}"
+        otro = por_destino.get(clave)
+        if otro:
+            die(
+                f"'{otro}' y '{ent['name']}' escriben los dos en ~/src/{clave}.\n"
+                "  El segundo pisaria al primero, y cual gana dependeria del orden\n"
+                "  alfabetico. Elige uno:\n"
+                f"    entornos aplicar --entorno {otro}\n"
+                f"    entornos aplicar --entorno {ent['name']}"
+            )
+        por_destino[clave] = ent["name"]
+
+    escritos = fallos = 0
+    for ent in entornos:
+        repo = base / ent["dir"]
+        destino = repo / ent["fichero"]
+        if not repo.is_dir():
+            log(f"  {ent['name']}: no existe {repo}, me lo salto")
+            continue
+
+        ignorado = git_ignora(repo, ent["fichero"])
+        if ignorado is False:
+            log(
+                f"  {ent['name']}: NO ESCRITO. git NO ignora {ent['fichero']} en "
+                f"{repo}.\n"
+                f"    Escribirlo ahi lo pondria en camino de un commit. Arregla su\n"
+                f"    .gitignore primero:  echo '{ent['fichero']}' >> {repo}/.gitignore"
+            )
+            fallos += 1
+            continue
+
+        lineas, faltan = [], []
+        for var in ent["variables"]:
+            valor = os.environ.get(var["desde"], "").strip()
+            if valor:
+                lineas.append(f"{var['nombre']}={valor}")
+            elif var["obligatoria"]:
+                faltan.append(f"{var['nombre']} (desde {var['desde']})")
+
+        if faltan:
+            log(f"  {ent['name']}: faltan obligatorias: {', '.join(faltan)}")
+            fallos += 1
+        if not lineas:
+            log(f"  {ent['name']}: ninguna variable con valor, no se escribe nada")
+            continue
+
+        cabecera = [
+            "# Generado por do_droplet.py entornos aplicar. NO lo edites a mano:",
+            "# se regenera del llavero (~/.config/dev-secrets.env) y se pierde.",
+        ]
+        destino.write_text("\n".join(cabecera + lineas) + "\n", encoding="utf-8")
+        destino.chmod(0o600)
+        escritos += 1
+        log(f"  {ent['name']}: {len(lineas)} variables en {destino}")
+
+    log(f"\n{escritos} .env escrito(s), {fallos} con problemas.")
+    if fallos:
+        raise SystemExit(1)
+
+
+def _entornos_comprobar(base: Path, args: argparse.Namespace) -> None:
+    """Audita los .env declarados contra git: ignorados AHORA y en la HISTORIA."""
+    problemas = 0
+    for ent in all_entornos():
+        repo = base / ent["dir"]
+        if not repo.is_dir():
+            continue
+        ignorado = git_ignora(repo, ent["fichero"])
+        # La historia importa aparte: un secreto commiteado una vez y borrado
+        # despues SIGUE en la historia y sigue filtrado. Borrar el fichero no lo
+        # arregla; hay que rotar el secreto.
+        proc = subprocess.run(
+            ["git", "-C", str(repo), "log", "--all", "--oneline", "--", ent["fichero"]],
+            capture_output=True, text=True,
+        )
+        historia = [l for l in proc.stdout.splitlines() if l.strip()]
+        estado = {True: "ignorado", False: "NO IGNORADO", None: "no es repo git"}[ignorado]
+        log(f"{ent['name']:<28} {ent['fichero']:<12} {estado}")
+        if ignorado is False:
+            problemas += 1
+        if historia:
+            log(f"    ⚠ ESTUVO COMMITEADO en {len(historia)} commit(s). Rota el secreto:")
+            for linea in historia[:5]:
+                log(f"      {linea}")
+            problemas += 1
+    if problemas:
+        die(f"\n{problemas} problema(s). Un .env en git es un secreto filtrado.")
+    log("\nTodos los .env declarados estan fuera de git, ahora y en la historia.")
+
+
+def cmd_llavero(args: argparse.Namespace) -> None:
+    """Mueve el llavero entre maquinas, en los dos sentidos y sin borrar nada.
+
+    Las dos reglas que hacen seguro el "en los dos sentidos", y que son el
+    motivo de que no exista un `sync`:
+
+    1. `traer` solo ANADE: nunca pisa un valor que aqui ya exista, salvo
+       `--pisar NOMBRE`. La union crece y nada desaparece, asi que un dev recien
+       nacido y vacio no puede hacer dano: no tiene nada que imponer.
+    2. La direccion la eliges tu. Un `sync` que decide solo es un `sync` que un
+       dia decide mal, y con secretos eso no se nota hasta que algo deja de
+       autenticar.
+
+    Y ninguno de los dos BORRA jamas: quitar una variable es `llavero olvidar`,
+    un comando aparte, para que borrar no pueda ser efecto secundario de
+    sincronizar.
+    """
+    if args.accion == "comparar":
+        return _llavero_comparar(args)
+    if args.accion == "enviar":
+        return _llavero_enviar(args)
+    if args.accion == "traer":
+        return _llavero_traer(args)
+    return _llavero_olvidar(args)
+
+
+def _llavero_estado(args: argparse.Namespace):
+    variables = cargar_llavero()
+    dev_user = cfg("DO_DEV_USER")
+    droplet, ip, port = resolve_target(args.maquina or "", args.port or 0)
+    alli = _estado_llavero_remoto(ip, port, dev_user)
+    aqui = {v["nombre"] for v in variables if os.environ.get(v["nombre"], "").strip()}
+    return variables, droplet, ip, port, aqui, alli
+
+
+def _llavero_comparar(args: argparse.Namespace) -> None:
+    variables, droplet, _ip, _port, aqui, alli = _llavero_estado(args)
+    obligatorias = {v["nombre"] for v in variables if v["obligatoria"]}
+    nombre = droplet["name"]
+    log(f"Comparando el llavero de ESTA maquina con el de '{nombre}'.")
+    log("Solo NOMBRES: ningun valor se lee ni se imprime.\n")
+    log(f"  {'variable':<28} {'aqui':<6} {nombre}")
+    for var in variables:
+        n = var["nombre"]
+        marca = "*" if var["obligatoria"] else " "
+        log(f"  {marca}{n:<27} {'si' if n in aqui else '--':<6} "
+            f"{'si' if n in alli else '--'}")
+    solo_aqui = sorted(aqui - alli)
+    solo_alli = sorted(alli & {v['nombre'] for v in variables} - aqui)
+    log("")
+    if solo_aqui:
+        log(f"  Solo aqui  ({len(solo_aqui)}): {', '.join(solo_aqui)}")
+        log(f"    -> llavero enviar {nombre}")
+    if solo_alli:
+        log(f"  Solo alli  ({len(solo_alli)}): {', '.join(solo_alli)}")
+        log(f"    -> llavero traer {nombre}")
+    if not solo_aqui and not solo_alli:
+        log("  Iguales. No hay nada que mover.")
+    faltan = sorted(obligatorias - aqui - alli)
+    if faltan:
+        log(f"\n  ⚠ No estan en NINGUNA de las dos: {', '.join(faltan)}")
+        log("    Eso no lo arregla mover nada; hay que reemitirlas. Manual:")
+        log("    estudios-redes-neuronales/docs/secretos-desde-cero.md")
+
+
+def _llavero_enviar(args: argparse.Namespace) -> None:
+    args.llavero = True
+    args.name = args.maquina
+    args.vars = []
+    cmd_push_secret(args)
+
+
+def _llavero_traer(args: argparse.Namespace) -> None:
+    """Trae al .env de ESTA maquina las variables que solo estan alli.
+
+    Es el unico camino que LEE valores de otra maquina, y por eso solo anade.
+    """
+    variables, droplet, ip, port, aqui, alli = _llavero_estado(args)
+    conocidas = {v["nombre"] for v in variables}
+    pisar = set(push_env_names(args.pisar or []))
+    candidatas = sorted((alli & conocidas) - aqui | (pisar & alli))
+    if not candidatas:
+        log(f"'{droplet['name']}' no tiene nada del llavero que aqui falte.")
+        return
+
+    dev_user = cfg("DO_DEV_USER")
+    script = "\n".join(
+        [
+            "set -eu",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            'F="$H/.config/dev-secrets.env"',
+            '[ -f "$F" ] || { echo "no hay llavero alli" >&2; exit 1; }',
+        ]
+        + [f'grep "^export {n}=" "$F" || true' for n in candidatas]
+    )
+    code, salida, err = run_remote_split(ip, port, script)
+    if code != 0:
+        die(f"No pude leer el llavero de '{droplet['name']}': {err.strip()}")
+
+    env_file = ROOT / ".env"
+    texto = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+    anadidas = []
+    for linea in salida.splitlines():
+        linea = linea.strip()
+        if not linea.startswith("export "):
+            continue
+        cuerpo = linea[len("export "):]
+        nombre = cuerpo.split("=", 1)[0]
+        valor = cuerpo.split("=", 1)[1].strip()
+        # El origen entrecomilla con shq; el .env de aqui no lleva comillas.
+        if len(valor) >= 2 and valor[0] == valor[-1] == "'":
+            valor = valor[1:-1].replace("'\"'\"'", "'")
+        if nombre in aqui and nombre not in pisar:
+            continue
+        texto = "\n".join(
+            l for l in texto.splitlines() if not l.startswith(f"{nombre}=")
+        )
+        texto = texto.rstrip("\n") + f"\n{nombre}={valor}\n"
+        anadidas.append(nombre)
+
+    if not anadidas:
+        log("No vino ninguna variable utilizable.")
+        return
+    env_file.write_text(texto, encoding="utf-8")
+    log(f"Traidas de '{droplet['name']}' al .env de aqui: {', '.join(anadidas)}")
+    log("  (solo se anaden; para pisar una que ya estaba: --pisar NOMBRE)")
+
+
+def _llavero_olvidar(args: argparse.Namespace) -> None:
+    """Quita variables del llavero de una maquina. Comando APARTE a proposito.
+
+    Borrar nunca puede ser efecto secundario de sincronizar: si `traer` o
+    `enviar` pudieran quitar cosas, un dia una maquina a medias vaciaria a la
+    otra y el sintoma llegaria dias despues.
+    """
+    nombres = push_env_names(args.pisar or []) or push_env_names(args.vars or [])
+    if not nombres:
+        die("Dime que variables olvidar: llavero olvidar <maquina> VAR[,VAR2]")
+    droplet, ip, port = resolve_target(args.maquina or "", args.port or 0)
+    log(f"Quitando de '{droplet['name']}': {', '.join(nombres)}")
+    if not args.yes and not confirmar("Escribe 'si' para confirmar: "):
+        log("No se toca nada.")
+        return
+    dev_user = cfg("DO_DEV_USER")
+    lineas = [
+        "set -eu",
+        "umask 077",
+        f"DEV_USER={shq(dev_user)}",
+        'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+        'F="$H/.config/dev-secrets.env"',
+        '[ -f "$F" ] || exit 0',
+    ]
+    for nombre in nombres:
+        lineas += [
+            f'grep -v "^export {nombre}=" "$F" > "$F.tmp" || true',
+            'mv "$F.tmp" "$F"',
+        ]
+    lineas += [
+        'chmod 600 "$F"',
+        'chown "$DEV_USER:$DEV_USER" "$F"',
+        'echo "  quedan $(grep -c ^export "$F") variables"',
+    ]
+    if run_remote_script(ip, port, "\n".join(lineas)) != 0:
+        die("Fallo al quitarlas.")
+    log("Listo.")
+
+
+# Raiz del repo del lanzador DENTRO de un droplet. Los comandos "de dentro" se
+# ejecutan desde ahi, porque el coordinador tambien lo hace asi y porque los
+# ficheros de datos (types/, services/, llavero.json) se leen relativos a ROOT.
+REPO_DENTRO = "~/src/digital-ocean-dropplet-auto-launching"
+
+
+def cmd_remoto(args: argparse.Namespace) -> None:
+    """Pide DESDE FUERA un comando de los que actuan DENTRO de una maquina.
+
+    `update`, `install-service`, `install-executors` y `entornos aplicar` actuan
+    sobre la maquina donde corren, y `dentro_del_droplet()` se niega a
+    ejecutarlos en la laptop -con razon-. Hasta ahora la unica forma de
+    pedirselos a OTRA maquina era teclear a mano la version larga:
+
+        ssh mini --cmd 'cd ~/src/digital-ocean... && python3 scripts/do_droplet.py update'
+
+    que es exactamente la clase de linea que desde el movil se teclea mal.
+
+    Corre como DO_DEV_USER y con `bash -lc`, y el shell de LOGIN no es adorno:
+    sin el no se carga `dev-secrets.env` y el comando de dentro falla con un
+    "falta el token" en una maquina donde el token si esta. Es el mismo mecanismo
+    que `ejecutar_post()` y por el mismo motivo.
+
+    Devuelve el codigo de salida de dentro para que se pueda encadenar, y para
+    que el bot publique el stderr cuando algo falla: un `remoto` que siempre sale
+    con 0 convierte un fallo remoto en un silencio.
+    """
+    if not args.comando:
+        die(
+            "Dime que comando ejecutar alli. Por ejemplo:\n"
+            "  python scripts/do_droplet.py remoto mini update\n"
+            "  python scripts/do_droplet.py remoto dev entornos aplicar"
+        )
+    droplet, ip, port = resolve_target(args.maquina, args.port or 0)
+    dev_user = cfg("DO_DEV_USER")
+    dentro = " ".join(shq(a) for a in args.comando)
+    orden = f"cd {REPO_DENTRO} && python3 scripts/do_droplet.py {dentro}"
+    log(f"En '{droplet['name']}' ({ip}:{port}), como {dev_user}:\n  $ {orden}\n")
+
+    script = "\n".join(
+        [
+            "set -eu",
+            f"DEV_USER={shq(dev_user)}",
+            f'sudo -u "$DEV_USER" -H bash -lc {shq(orden)}',
+        ]
+    )
+    code = run_remote_script(ip, port, script)
+    if code != 0:
+        die(
+            f"El comando fallo en '{droplet['name']}' (codigo {code}). Su salida "
+            "esta justo arriba."
+        )
+    log(f"\nListo en '{droplet['name']}'.")
+
+
+def _estado_llavero_remoto(ip: str, port: int, dev_user: str) -> set[str]:
+    """Que variables del llavero tiene una maquina. NOMBRES, nunca valores.
+
+    Se pregunta a la maquina en vez de deducirlo de su tipo porque lo que importa
+    es lo que hay, no lo que deberia haber: el mini del 2026-09-10 llevaba 19
+    variables y su tipo declaraba una.
+    """
+    script = "\n".join(
+        [
+            "set -eu",
+            f"DEV_USER={shq(dev_user)}",
+            'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+            'F="$H/.config/dev-secrets.env"',
+            '[ -f "$F" ] || exit 0',
+            # Solo el nombre, y solo si tiene valor: una linea `export X=` vacia
+            # es lo mismo que no tenerla y contarla mentiria.
+            'grep -oE "^export [A-Za-z_][A-Za-z0-9_]*=." "$F" | '
+            "sed \"s/^export //;s/=.$//\" || true",
+        ]
+    )
+    code, salida, _ = run_remote_split(ip, port, script)
+    if code != 0:
+        return set()
+    return {l.strip() for l in salida.splitlines() if l.strip()}
+
+
+def cmd_flota(args: argparse.Namespace) -> None:
+    """Comprueba la PARIDAD de las maquinas de la flota. Solo lectura.
+
+    Contesta de una vez las tres preguntas que hasta ahora habia que ir a mirar
+    a mano a cada maquina, y que son justo las que se descubren tarde:
+
+      1. Que le falta del llavero (por NOMBRE; ningun valor se imprime).
+      2. Si tiene la clave de la flota, o sea si las demas pueden entrar.
+      3. Que servicios corre de verdad, preguntandoselo a systemd.
+
+    Sale != 0 si a alguna le falta algo obligatorio, para poder encadenarlo y
+    para que el bot publique el motivo: con codigo 0 el coordinador no publica
+    stderr y el aviso no llega al chat.
+    """
+    variables = cargar_llavero()
+    obligatorias = {v["nombre"] for v in variables if v["obligatoria"]}
+    todas = {v["nombre"] for v in variables}
+    dev_user = cfg("DO_DEV_USER")
+    destino = FICHERO_CLAVE_FLOTA.replace("~/", "")
+
+    droplets = find_droplets(tag=args.tag) if args.tag else find_droplets()
+    if args.maquina:
+        droplets = [d for d in droplets if d["name"] == args.maquina]
+    if not droplets:
+        log("No hay droplets vivos que mirar.")
+        return
+
+    problemas = 0
+    for droplet in droplets:
+        nombre = droplet["name"]
+        ip = public_ip(droplet)
+        log(f"\n=== {nombre}  ({ip})")
+        if not ip:
+            log("  sin IP publica, no se puede preguntar nada")
+            problemas += 1
+            continue
+        port = wait_for_ssh(ip, timeout=25) or 0
+        if not port:
+            log(f"  no contesta por SSH en {cfg('DO_SSH_PORTS')}: no se puede comprobar")
+            problemas += 1
+            continue
+
+        tiene = _estado_llavero_remoto(ip, port, dev_user)
+        faltan_obl = sorted(obligatorias - tiene)
+        faltan_opt = sorted(todas - obligatorias - tiene)
+        log(f"  llavero      {len(tiene & todas)}/{len(todas)}")
+        if faltan_obl:
+            log(f"    FALTAN obligatorias: {', '.join(faltan_obl)}")
+            problemas += 1
+        if faltan_opt:
+            log(f"    faltan opcionales:   {', '.join(faltan_opt)}")
+
+        script = "\n".join(
+            [
+                "set -eu",
+                f"DEV_USER={shq(dev_user)}",
+                'H=$(getent passwd "$DEV_USER" | cut -d: -f6)',
+                f'[ -f "$H/{destino}" ] && echo CLAVE_SI || echo CLAVE_NO',
+                # systemd contesta a cualquier usuario, y los ficheros de unidad
+                # quedan en modo 600 de root: leerlos daria lista vacia.
+                "systemctl list-units --type=service --no-legend --plain "
+                "--state=running | awk '{print $1}' | sed 's/.service$//' || true",
+            ]
+        )
+        code, salida, _ = run_remote_split(ip, port, script)
+        lineas = [l.strip() for l in salida.splitlines() if l.strip()]
+        clave = "si" if "CLAVE_SI" in lineas else "NO"
+        if clave == "NO":
+            problemas += 1
+        servicios = [
+            l for l in lineas
+            if l not in ("CLAVE_SI", "CLAVE_NO") and ("telegram" in l or "web" in l)
+        ]
+        log(f"  clave flota  {clave}")
+        log(f"  servicios    {', '.join(servicios) or 'ninguno de la flota'}")
+
+    if problemas:
+        die(
+            f"\n{problemas} problema(s) de paridad. Lo que suele arreglarlos:\n"
+            "  python scripts/do_droplet.py push-secret --llavero --name <maquina>\n"
+            "  python scripts/do_droplet.py autorizar-flota <maquina>"
+        )
+    log(f"\nParidad correcta en {len(droplets)} maquina(s).")
+
+
 def cmd_update(args: argparse.Namespace) -> None:
     """Trae el código nuevo de GitHub a esta máquina y reinicia lo que lo usa.
 
@@ -3203,7 +4169,16 @@ def main() -> None:
     p.add_argument("--comment", default="do-droplet")
     p.set_defaults(func=cmd_keygen)
 
-    p = sub.add_parser("keys", help="lista las claves SSH de la cuenta")
+    p = sub.add_parser("keys", help="claves SSH registradas en tu cuenta")
+    p.add_argument(
+        "--prune",
+        metavar="PATRON",
+        default="",
+        help="borra de la cuenta las claves cuyo NOMBRE encaje (p. ej. "
+        "'lanzador-*'). Nunca toca la de la flota ni la de esta maquina. "
+        "Borrarlas no echa a nadie de una maquina que ya existe",
+    )
+    p.add_argument("--yes", action="store_true", help="no preguntar antes de borrar")
     p.set_defaults(func=cmd_keys)
 
     p = sub.add_parser("register-key", help="sube una clave pública a la cuenta")
@@ -3345,6 +4320,19 @@ def main() -> None:
         "emergencia cuando el token está caducado y aun así hace falta la "
         "máquina: nacerá sin los repos privados",
     )
+    p.add_argument(
+        "--llavero",
+        action="store_true",
+        help="manda el llavero entero (llavero.json) a la maquina. Los tipos de "
+        "la flota lo piden solos con \"llavero\": true; esto es para una maquina "
+        "que no tiene tipo",
+    )
+    p.add_argument(
+        "--sin-llavero",
+        action="store_true",
+        help="no morir si faltan secretos obligatorios del llavero. Salida de "
+        "emergencia, como --sin-github: la maquina nacera coja y se dira",
+    )
     p.set_defaults(func=cmd_launch)
 
     p = sub.add_parser(
@@ -3394,6 +4382,19 @@ def main() -> None:
         help="no enviar ningún token de GitHub, y no comprobarlo. La salida de "
         "emergencia cuando el token está caducado y aun así hace falta la "
         "máquina: nacerá sin los repos privados",
+    )
+    p.add_argument(
+        "--llavero",
+        action="store_true",
+        help="manda el llavero entero (llavero.json) a la maquina. Los tipos de "
+        "la flota lo piden solos con \"llavero\": true; esto es para una maquina "
+        "que no tiene tipo",
+    )
+    p.add_argument(
+        "--sin-llavero",
+        action="store_true",
+        help="no morir si faltan secretos obligatorios del llavero. Salida de "
+        "emergencia, como --sin-github: la maquina nacera coja y se dira",
     )
     p.set_defaults(func=cmd_provision)
 
@@ -3464,7 +4465,24 @@ def main() -> None:
         "sin borrar las demás. A diferencia del .env de un servicio, esto lo "
         "ven también las sesiones SSH, no sólo el bot",
     )
-    p.add_argument("vars", nargs="+", help="nombres de variables, separadas por coma")
+    p.add_argument(
+        "vars",
+        nargs="*",
+        default=[],
+        help="nombres de variables, separadas por coma. Vacío si usas --llavero",
+    )
+    p.add_argument(
+        "--llavero",
+        action="store_true",
+        help="manda el LLAVERO ENTERO (llavero.json) en vez de unas pocas. Es el "
+        "camino de reparación de una máquina viva: mezcla, no reescribe, así que "
+        "no borra del destino lo que esta máquina no tenga a mano",
+    )
+    p.add_argument(
+        "--sin-llavero",
+        action="store_true",
+        help="con --llavero, no morir si faltan obligatorias aquí",
+    )
     p.add_argument(
         "--prefix",
         default="TGL_",
@@ -3553,6 +4571,100 @@ def main() -> None:
         help="reinicia los servicios aunque su repo no haya cambiado",
     )
     p.set_defaults(func=cmd_update)
+
+    p = sub.add_parser(
+        "clave-flota",
+        help="crea y registra LA clave compartida de la flota. Una sola, "
+        "registrada una vez: cualquier droplet creado despues la acepta, y con "
+        "eso el acceso entre maquinas deja de depender de cual nacio primero",
+    )
+    p.set_defaults(func=cmd_clave_flota)
+
+    p = sub.add_parser(
+        "autorizar-flota",
+        help="autoriza la clave de la flota DENTRO de una maquina que ya existia "
+        "(para root y para el usuario de desarrollo). Es la reparacion de las "
+        "maquinas nacidas antes que la clave",
+    )
+    p.add_argument("name", nargs="?")
+    p.add_argument("--port", type=int)
+    p.add_argument(
+        "--usuario",
+        action="append",
+        default=[],
+        help="usuario del destino (repetible). Por defecto root y DO_DEV_USER, "
+        "y las dos hacen falta: el aprovisionamiento entra siempre como root",
+    )
+    p.set_defaults(func=cmd_autorizar_flota)
+
+    p = sub.add_parser(
+        "remoto",
+        help="pide DESDE FUERA un comando de los que actuan DENTRO de una "
+        "maquina (update, install-service, entornos aplicar...)",
+    )
+    p.add_argument("maquina", help="nombre del droplet")
+    p.add_argument(
+        "comando",
+        nargs=argparse.REMAINDER,
+        help="el comando de do_droplet.py y sus argumentos, tal cual",
+    )
+    p.add_argument("--port", type=int)
+    p.set_defaults(func=cmd_remoto)
+
+    p = sub.add_parser(
+        "flota",
+        help="comprueba la PARIDAD de las maquinas vivas: que les falta del "
+        "llavero, si tienen la clave de la flota y que servicios corren. Solo "
+        "lectura, y no imprime ningun valor",
+    )
+    p.add_argument("maquina", nargs="?", help="solo esta; por defecto, todas")
+    p.add_argument("--tag", default="", help="solo las de este tag")
+    p.set_defaults(func=cmd_flota)
+
+    p = sub.add_parser(
+        "entornos",
+        help="el .env de cada proyecto, declarado en entornos/ y GENERADO del "
+        "llavero en vez de copiado entre maquinas",
+    )
+    p.add_argument(
+        "accion",
+        choices=["list", "aplicar", "comprobar"],
+        help="list: que hay declarado (vale desde la laptop). aplicar y "
+        "comprobar corren DENTRO de una maquina",
+    )
+    p.add_argument(
+        "--entorno",
+        action="append",
+        default=[],
+        help="solo estos entornos (repetible). Por defecto, todos",
+    )
+    p.set_defaults(func=cmd_entornos)
+
+    p = sub.add_parser(
+        "llavero",
+        help="mueve el llavero entre maquinas en los dos sentidos. traer solo "
+        "ANADE y enviar solo MEZCLA: ningun camino borra nada",
+    )
+    p.add_argument("accion", choices=["comparar", "enviar", "traer", "olvidar"])
+    p.add_argument("maquina", nargs="?", help="droplet, si no es el de .env")
+    p.add_argument(
+        "vars",
+        nargs="*",
+        default=[],
+        help="con 'olvidar', que variables quitar",
+    )
+    p.add_argument(
+        "--pisar",
+        action="append",
+        default=[],
+        metavar="VARS",
+        help="con 'traer', variables cuyo valor local SI se sobrescribe",
+    )
+    p.add_argument("--sin-llavero", action="store_true")
+    p.add_argument("--prefix", default="TGL_")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--port", type=int)
+    p.set_defaults(func=cmd_llavero)
 
     p = sub.add_parser("service", help="estado, logs y reinicio de un servicio")
     p.add_argument(

@@ -1,0 +1,38 @@
+{
+  "descripcion": "La web de lectura en el movil. Su .env sale del llavero, no se copia entre maquinas.",
+  "dir": "claude-code-webapp-mobile",
+  "fichero": ".env",
+  "notas": "El nombre de destino NO lo elige quien transporta: lo declara quien consume. Aqui la variable se llama TS_AUTHKEY porque asi la lee scripts/tailscale-unir.mjs, y en el llavero se llama CWEB_TS_AUTHKEY porque services/claude-web.json declara env_prefix CWEB_. El 2026-09-10 se puso como TAILSCALE_AUTHKEY y no llegaba a ninguna parte: el secreto se quedaba en el llavero sin bajar al servicio, y la app arrancaba sin unirse al tailnet y sin un solo error.",
+  "variables": [
+    {
+      "nombre": "TS_AUTHKEY",
+      "desde": "CWEB_TS_AUTHKEY",
+      "obligatoria": false,
+      "porque": "une el nodo al tailnet. Opcional porque el install del servicio avisa y NO aborta si falta: sin ella hay que hacer el login por enlace a mano, pero la maquina sirve."
+    },
+    {
+      "nombre": "CWEB_PORT",
+      "desde": "CWEB_PORT",
+      "obligatoria": false,
+      "porque": "puerto del servidor de lectura. Escucha SOLO en loopback a proposito."
+    },
+    {
+      "nombre": "CWEB_PUERTO_TS",
+      "desde": "CWEB_PUERTO_TS",
+      "obligatoria": false,
+      "porque": "puerto que publica `tailscale serve`. No puede ser el 443: ahi escucha sshd en 0.0.0.0, o sea tambien en la interfaz del tailnet."
+    },
+    {
+      "nombre": "CWEB_HOSTNAME",
+      "desde": "CWEB_HOSTNAME",
+      "obligatoria": false,
+      "porque": "nombre del nodo en el tailnet. Es lo que hace que la PWA ya instalada en el movil siga resolviendo tras rehacer la maquina."
+    },
+    {
+      "nombre": "CWEB_DATA_DIR",
+      "desde": "CWEB_DATA_DIR",
+      "obligatoria": false,
+      "porque": "donde estan las conversaciones que esta web LEE. Sin valor cae al data/ del coordinador y lo anuncia al arrancar."
+    }
+  ]
+}

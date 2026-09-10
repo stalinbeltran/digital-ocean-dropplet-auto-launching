@@ -1,0 +1,16 @@
+{
+  "descripcion": "El bot Coordinador (en el dev). Mismo programa que el Lanzador, con otro bot.",
+  "dir": "telegram-coordinator",
+  "fichero": ".env",
+  "notas": "Tienen que ser DOS bots distintos y no es comodidad: Telegram solo admite un proceso haciendo long polling por token, y el segundo recibe un 409. Por eso el prefijo de origen es TG_ aqui y TGL_ en el mini, apuntando a tokens distintos.",
+  "variables": [
+    {"nombre": "BOT_TOKEN", "desde": "TG_BOT_TOKEN", "obligatoria": true,
+     "porque": "sin el, el bot no arranca."},
+    {"nombre": "ALLOWED_USER_IDS", "desde": "TG_ALLOWED_USER_IDS", "obligatoria": true,
+     "porque": "la UNICA proteccion de un bot que ejecuta comandos en la maquina. Sin el no atiende a nadie; con el id equivocado atiende a otro."},
+    {"nombre": "CLAUDE_PERMISSION_MODE", "desde": "TG_CLAUDE_PERMISSION_MODE", "obligatoria": false,
+     "porque": "permisos de Claude Code dentro del bot."},
+    {"nombre": "COMMAND_TIMEOUT_MS", "desde": "TG_COMMAND_TIMEOUT_MS", "obligatoria": false,
+     "porque": "tope de un comando; un npm ci o un venv de torch son minutos."}
+  ]
+}

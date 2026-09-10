@@ -1,0 +1,10 @@
+{
+  "name": "llavero",
+  "descripcion": "Mueve los secretos entre maquinas, en los dos sentidos. `comparar` primero, siempre: la direccion la eliges tu, no la adivina la herramienta. `traer` solo ANADE y `enviar` solo MEZCLA; para quitar algo hay un comando aparte (olvidar), para que borrar nunca sea efecto secundario de sincronizar.",
+  "ejemplos": [
+    "comparar mini",
+    "enviar mini",
+    "traer mini"
+  ],
+  "command": "python3 scripts/do_droplet.py llavero {{input}} 2>&1; true"
+}

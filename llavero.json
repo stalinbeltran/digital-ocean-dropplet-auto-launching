@@ -1,0 +1,86 @@
+{
+  "descripcion": "Lo que lleva CUALQUIER maquina de la flota, sea mini o dev. Dato, no codigo: anadir un secreto es anadir una linea aqui, nunca tocar do_droplet.py.",
+  "notas": "La regla que justifica este fichero: si una variable hace falta para CREAR una maquina de la flota, va en el llavero. Sale de que hasta el 2026-09-10 lo que una maquina llevaba era la union de tres cosas que no se miraban juntas en ningun sitio -- lo que build_provision_script escribe a pelo, el push_env del tipo, y el barrido por prefijo de env_prefix -- y la tercera no declara nombres: barre el entorno, y si no hay nada suelta un AVISO entre cien lineas y sigue. Resultado medido ese dia en el mini: llevaba TG_* y no TGL_*, o sea que sabia parir un dev y no sabia parir un mini, y de sus 19 variables types/mini.json declaraba UNA. Un tipo pide este llavero con \"llavero\": true; lo hacen mini y dev y NADIE mas, porque un secreto no viaja a donde no hace falta (objetivo 5) y una maquina de medir no crea nada.",
+  "variables": [
+    {
+      "nombre": "DO_TOKEN",
+      "obligatoria": true,
+      "porque": "crear y destruir droplets. Sin el, la maquina no es de la flota: no puede ni encender ni apagar."
+    },
+    {
+      "nombre": "GITHUB_TOKEN",
+      "obligatoria": true,
+      "porque": "clonar los repos privados y EMPUJAR, que es lo unico que salva el trabajo cuando la maquina se destruye. Va a TRES destinos (dev-secrets.env, .git-credentials y gh), no a uno."
+    },
+    {
+      "nombre": "VAST_AI_API_TOKEN",
+      "obligatoria": true,
+      "porque": "alquilar y sobre todo APAGAR en Vast. Va en las DOS maquinas aunque solo una alquile: si dev muere dejando instancias encendidas, el mini es lo unico que queda capaz de barrerlas."
+    },
+    {
+      "nombre": "CLAUDE_CODE_OAUTH_TOKEN",
+      "obligatoria": true,
+      "porque": "el mini no lleva Claude Code, pero tiene que poder darselo al dev que cree. Un mini sin este token pare devs sin Claude autenticado."
+    },
+    {
+      "nombre": "TG_BOT_TOKEN",
+      "obligatoria": true,
+      "porque": "sin el, esta maquina no puede parir un dev con su bot Coordinador puesto."
+    },
+    {
+      "nombre": "TG_ALLOWED_USER_IDS",
+      "obligatoria": true,
+      "porque": "la UNICA proteccion de un bot que ejecuta comandos en la maquina. Sin el no atiende a nadie; con el id equivocado atiende a otro."
+    },
+    {
+      "nombre": "TG_CLAUDE_PERMISSION_MODE",
+      "obligatoria": false,
+      "porque": "ajuste del dev; sin el, el coordinador usa su propio defecto."
+    },
+    {
+      "nombre": "TGL_BOT_TOKEN",
+      "obligatoria": true,
+      "porque": "sin el, esta maquina no puede parir un mini con su bot Lanzador puesto. Es la variable que faltaba el 2026-09-10 y la que hacia que nadie supiera rehacer el mini."
+    },
+    {
+      "nombre": "TGL_ALLOWED_USER_IDS",
+      "obligatoria": true,
+      "porque": "igual que TG_ALLOWED_USER_IDS, para el bot Lanzador."
+    },
+    {
+      "nombre": "TGL_CLAUDE_PERMISSION_MODE",
+      "obligatoria": false,
+      "porque": "ajuste del mini."
+    },
+    {
+      "nombre": "GIT_USER_NAME",
+      "obligatoria": true,
+      "porque": "autoria de los commits que la maquina haga. Sin esto git se niega en el primer commit, ya dentro."
+    },
+    {
+      "nombre": "GIT_USER_EMAIL",
+      "obligatoria": true,
+      "porque": "idem."
+    },
+    {
+      "nombre": "CWEB_TS_AUTHKEY",
+      "obligatoria": false,
+      "porque": "auth key de Tailscale de la web de lectura en el movil. El prefijo CWEB_ ES el mecanismo: services/claude-web.json declara env_prefix CWEB_, asi que aqui va con prefijo y llega como TS_AUTHKEY. Opcional porque el install del servicio avisa y no aborta si falta. CADUCA a los 90 dias como maximo."
+    },
+    {
+      "nombre": "FVW_WEB_TOKEN",
+      "obligatoria": false,
+      "porque": "token de la web app de foveal-vision. Si no viaja desde aqui, se regenera en cada dev y la direccion vieja deja de valer."
+    },
+    {
+      "nombre": "TGL2_BOT_TOKEN",
+      "obligatoria": false,
+      "porque": "bot de staging. Es lo que permite levantar un mini nuevo estando el viejo vivo: Telegram solo admite un proceso haciendo long polling por token y el segundo recibe un 409."
+    },
+    {
+      "nombre": "TGL2_ALLOWED_USER_IDS",
+      "obligatoria": false,
+      "porque": "idem, para el bot de staging."
+    }
+  ]
+}

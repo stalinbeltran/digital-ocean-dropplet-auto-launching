@@ -1,0 +1,11 @@
+{
+  "name": "remoto",
+  "descripcion": "Ejecuta en OTRA maquina un comando de los que solo funcionan DENTRO de ella (update, install-service, entornos aplicar). Es lo que permite que el dev toque al mini y el mini al dev, sin volver a la laptop.",
+  "ejemplos": [
+    "mini update",
+    "dev update",
+    "mini entornos aplicar --entorno telegram-launcher",
+    "dev install-service --service claude-web"
+  ],
+  "command": "python3 scripts/do_droplet.py remoto {{input}}"
+}

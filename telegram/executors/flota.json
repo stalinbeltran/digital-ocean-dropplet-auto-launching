@@ -1,0 +1,10 @@
+{
+  "name": "flota",
+  "descripcion": "Que le falta a cada maquina viva: variables del llavero, la clave de la flota y que servicios corre. Solo lectura y NUNCA imprime un valor, solo nombres. Sale != 0 si algo obligatorio falta, que es lo que hace que el aviso llegue al chat.",
+  "ejemplos": [
+    "",
+    "mini",
+    "--tag control"
+  ],
+  "command": "python3 scripts/do_droplet.py flota {{input}} 2>&1; true"
+}

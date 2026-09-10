@@ -1,0 +1,18 @@
+{
+  "descripcion": "El bot Lanzador (en el mini). El mismo programa, con OTRO bot.",
+  "dir": "telegram-coordinator",
+  "fichero": ".env",
+  "notas": "Mismo directorio que telegram-coordinator porque es el mismo repo: por eso los dos servicios NO pueden convivir en una maquina (selected_services lo rechaza) y por eso este entorno solo se aplica donde corre el Lanzador. Se elige con --entorno.",
+  "variables": [
+    {"nombre": "BOT_TOKEN", "desde": "TGL_BOT_TOKEN", "obligatoria": true,
+     "porque": "sin el, el mini nace mudo y hay que volver a la laptop para todo."},
+    {"nombre": "ALLOWED_USER_IDS", "desde": "TGL_ALLOWED_USER_IDS", "obligatoria": true,
+     "porque": "este bot puede crear y destruir maquinas: la allowlist es la unica barrera entre un desconocido y tu factura."},
+    {"nombre": "CLAUDE_PERMISSION_MODE", "desde": "TGL_CLAUDE_PERMISSION_MODE", "obligatoria": false,
+     "porque": "el mini no lleva Claude Code, pero el campo existe igual."},
+    {"nombre": "DO_TOKEN", "desde": "DO_TOKEN", "obligatoria": true,
+     "porque": "crear y destruir droplets desde el chat."},
+    {"nombre": "VAST_AI_API_TOKEN", "desde": "VAST_AI_API_TOKEN", "obligatoria": true,
+     "porque": "APAGAR lo de Vast. Va aqui aunque desde el mini no se alquile: si el dev muere dejando instancias, esto es lo unico que queda para barrerlas."}
+  ]
+}
