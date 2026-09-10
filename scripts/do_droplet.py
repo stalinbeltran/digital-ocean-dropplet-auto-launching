@@ -995,9 +995,24 @@ def lista_unida(de_args: list[str], del_tipo) -> list[str]:
     quiere decir "y además éste", no "olvida los del tipo". Pisarlos haría que
     añadir un repo a mano te dejara la máquina sin los que el tipo daba por
     hechos, y eso no se ve hasta que entras y falta medio trabajo.
+
+    ⚠ Pero sumar siempre dejaba SIN FORMA de decir "ninguno", y eso mordió el
+    2026-09-10: `launch mini2 --type mini --service ""` se lanzó justamente para
+    NO levantar un segundo bot, y levantó uno igual, porque la cadena vacía se
+    descartaba y quedaba la lista del tipo. Resultado: dos Lanzadores con el
+    mismo token peleándose por el `getUpdates`, y el mini de verdad reiniciándose
+    en bucle hasta que se destruyó el segundo.
+
+    De ahí la cadena vacía EXPLÍCITA como "ninguno". Sólo cuenta si viene de la
+    línea de comandos: un tipo con `"services": [""]` sería un descriptor mal
+    escrito, no una intención.
     """
     if isinstance(del_tipo, str):
         del_tipo = [del_tipo]
+    # `--service ""` (o `--repo ""`) es la forma de decir "ninguno, ni los del
+    # tipo". Se mira antes de unir nada, porque después ya no se distingue.
+    if any(str(v).strip() == "" for v in (de_args or [])):
+        return []
     salida: list[str] = []
     for valor in list(de_args or []) + list(del_tipo or []):
         for parte in str(valor).split(","):

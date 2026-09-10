@@ -331,6 +331,44 @@ def test_push_service_env_intacto(mod):
             else ["cmd_push_service_env tiene codigo del llavero que no le toca"])
 
 
+def test_lista_unida_vacio(mod):
+    """`--service ""` tiene que querer decir NINGUNO, ni los del tipo.
+
+    Este test existe porque el fallo paso y costo caro el 2026-09-10:
+    `launch mini2 --type mini --service ""` se lanzo justamente para NO levantar
+    un segundo bot, y levanto uno igual -- la cadena vacia se descartaba al unir
+    y quedaba la lista del tipo. El resultado fueron dos Lanzadores con el mismo
+    token peleandose por el getUpdates, con el mini de VERDAD reiniciandose en
+    bucle hasta que se destruyo el segundo.
+
+    Lo que lo hace dificil de ver: sumar es lo correcto para `--repo`, y el
+    mismo helper sirve a los dos. La suma no estaba mal; faltaba la forma de
+    decir "ninguno".
+    """
+    fallos = []
+    # Lo normal: se suman, sin repetir y sin perder.
+    if mod.lista_unida(["a"], ["b", "c"]) != ["a", "b", "c"]:
+        fallos.append("dejo de sumar args + tipo")
+    if mod.lista_unida(["a,b"], ["b"]) != ["a", "b"]:
+        fallos.append("dejo de aceptar comas o de deduplicar")
+    if mod.lista_unida([], ["b"]) != ["b"]:
+        fallos.append("sin args deberia quedar lo del tipo")
+
+    # Lo que fallaba: la cadena vacia significa NINGUNO.
+    if mod.lista_unida([""], ["telegram-launcher"]) != []:
+        fallos.append('--service "" no vacia la lista del tipo: dos bots, 409')
+    if mod.lista_unida(["", "otro"], ["x"]) != []:
+        fallos.append('una cadena vacia entre varios args deberia mandar')
+
+    # Y un tipo mal escrito NO puede vaciar nada: eso seria un descriptor roto
+    # decidiendo por el usuario.
+    if mod.lista_unida([], [""]) != []:
+        fallos.append("un tipo con ['']  deberia dar lista vacia sin mas")
+    if mod.lista_unida(["a"], [""]) != ["a"]:
+        fallos.append("un '' en el TIPO no puede borrar lo que pidio el usuario")
+    return fallos
+
+
 def main():
     pruebas = [
         ("prune nunca borra la clave de la flota", test_prune_protege),
@@ -345,6 +383,7 @@ def main():
         ("los comandos nuevos estan registrados", test_comandos_registrados),
         ("push-secret --llavero usa el llavero", test_push_secret_llavero),
         ("push-service-env quedo intacto", test_push_service_env_intacto),
+        ("--service '' quiere decir NINGUNO", test_lista_unida_vacio),
     ]
     total = 0
     for nombre, prueba in pruebas:
