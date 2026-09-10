@@ -1,101 +1,115 @@
-# ⏳ PENDIENTE: `launch` no comprueba el llavero, y por eso una máquina puede nacer coja
+# El preflight del llavero — qué comprueba de verdad, y el falso pendiente del 2026-09-10
 
-**Encontrado el 2026-09-10**, al ir a rehacer el mini desde un dev. No se llegó a
-destruir nada: el fallo se vio **antes** porque se miró a mano. Esa comprobación a
-mano es justamente lo que falta en el código.
+**Estado: IMPLEMENTADO.** Este fichero nació el 2026-09-10 (`89cf343`) diciendo lo
+contrario —«`launch` no comprueba el llavero»— y estaba equivocado. Se reescribe en vez
+de borrarse porque el error de lectura que lo produjo es reproducible, y la mitad útil de
+lo que decía sigue abierta.
 
-## El fallo, medido
+## Lo que ya hace, y dónde
 
-`llavero.json` declara las 17 variables que hacen falta para que una máquina
-**nazca entera**. Un tipo con `"llavero": true` (hoy `mini` y `dev`) las recibe de
-la máquina que lanza. Pero **nadie comprueba que la máquina que lanza las tenga**.
+`comprobar_llavero()` ([`do_droplet.py:2298`](../scripts/do_droplet.py#L2298)), llamado
+desde `cmd_launch` en la [línea 1060](../scripts/do_droplet.py#L1060) — **antes** de
+`comprobar_size`, del volumen y del `POST /v2/droplets`. También lo llaman `provision`
+([2696](../scripts/do_droplet.py#L2696)) y `push-secret --llavero`
+([3469](../scripts/do_droplet.py#L3469)).
 
-Comparando `llavero.json` con el entorno real del dev `dev-1` ese día:
+Punto por punto, contra lo que el documento original pedía como P1:
 
-| variable | ¿estaba? |
+| lo que se pedía | estado |
 |---|---|
-| `DO_TOKEN`, `GITHUB_TOKEN`, `VAST_AI_API_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN` | ✅ |
-| `TG_BOT_TOKEN`, `TG_ALLOWED_USER_IDS`, `TG_CLAUDE_PERMISSION_MODE` | ✅ |
-| `TGL_BOT_TOKEN`, `TGL_ALLOWED_USER_IDS` | ✅ |
-| `GIT_USER_NAME`, `GIT_USER_EMAIL`, `CWEB_TS_AUTHKEY` | ✅ |
-| **`DO_SSH_USER`** | ❌ |
-| **`TGL_CLAUDE_PERMISSION_MODE`** | ❌ |
-| **`FVW_WEB_TOKEN`** | ❌ |
-| **`TGL2_BOT_TOKEN`**, **`TGL2_ALLOWED_USER_IDS`** | ❌ |
+| corre **antes** de crear la máquina | sí — no se ha creado ni tocado nada cuando muere |
+| **se niega**, no avisa | sí — `die()`, y el docstring explica por qué muere en vez de avisar |
+| **las nombra** | sí — nombre y el `porque` de cada una |
+| apunta al remedio **fuera** de la máquina | sí — `secretos-desde-cero.md` y `llavero traer <maquina>` |
+| distingue «falta» de «vacía» | sí — `os.environ.get(n, "").strip()`: la cadena vacía cuenta como ausente |
 
-## Por qué `DO_SSH_USER` es la cara y no una más
+Y P2 —separar obligatorias de opcionales— también está hecho: cada entrada de
+[`llavero.json`](../llavero.json) lleva `obligatoria` y `porque`, y `cargar_llavero()`
+la pone a `False` por defecto ([2284](../scripts/do_droplet.py#L2284)).
 
-**Este repo ya se quemó con ella**, y está escrito en
-[`reparto-mini-dev.md`](reparto-mini-dev.md) § «Rehacer el mini»:
+La salida de emergencia es `--sin-llavero`, que degrada la muerte a aviso nombrando lo
+que falta.
 
-> `DO_SSH_USER` no viajaba y no la aportaba el tipo, así que el mini renacido caía
-> al default `root`. El síntoma habría sido el de siempre — `ssh` entrando como
-> root, sin `dev-secrets.env` en su home, y un «falta el token» en una máquina
-> donde el token sí está.
+## Lo que sigue abierto (el P3 original, y es real)
 
-Se metió en el llavero por eso. **Y el llavero no se comprueba**, así que la
-protección quedó en el sitio equivocado: la lección se aprendió, se anotó, y el
-mecanismo sigue permitiendo repetirla. `do_droplet.py:53` cae a `"root"` en
-silencio.
+**`DO_SSH_USER` está en el llavero como opcional, y su defecto lo hereda de `cfg()`:
+`"root"` ([`do_droplet.py:53`](../scripts/do_droplet.py#L53)).** Su propio `porque` en
+`llavero.json` empieza diciendo «NO es un secreto», y va ahí porque fue lo único del mini
+viejo que se perdió al rehacerlo con efecto real.
 
-⚠ **Y el fallo se agrava con quién puede arreglarlo.** La nota de
-`types/mini.json` dice que **un dev nunca puede entrar por SSH al mini** —«su
-clave se registra durante SU provisión, siempre después de que esta máquina
-exista»—. O sea que un mini que nazca coja **no se puede reparar desde el dev que
-lo parió**: hay que rehacerlo otra vez, o entrar desde la consola de DO.
+Hay que decidir **una** de estas dos, y anotarlo aquí:
 
-⚠ Y `TGL2_BOT_TOKEN` faltando tiene un efecto de segundo orden: es el bot de
-staging, o sea **la primera de las tres salidas** que `reparto-mini-dev.md`
-recomienda para reemplazar el mini sin quedarse sin mando. Sin él, sólo quedan la
-segunda y la tercera, y la tercera está calificada ahí como «No».
+1. **Lo aporta el tipo**, como los otros ocho campos que `types/*.json` ya aporta
+   (`size`, `image`, `region`, `tag`, `repos`, `services`, …). Es lo coherente: no es un
+   secreto, así que no tiene por qué viajar por el canal de los secretos.
+2. **El preflight lo exige** subiéndolo a `obligatoria: true`.
 
-## Qué falta, concretamente
+**Alcance real del fallo, para no sobredimensionarlo.** Sin `DO_SSH_USER`, lo único que
+cambia es el atajo `do_droplet.py ssh <maquina>`, que entra como `root`. Todo lo que
+aprovisiona va por `DO_DEV_USER` (defecto `deploy`,
+[línea 60](../scripts/do_droplet.py#L60)) — `remoto`, `llavero`, `flota`,
+`_mandar_clave_flota` — y **`provision` entra siempre como root pase lo que pase con
+`DO_SSH_USER`** ([1654](../scripts/do_droplet.py#L1654)). Una máquina que nace sin ella
+no nace coja: nace con un atajo incómodo.
 
-**P1 — Un preflight del llavero, que corra ANTES de crear la máquina.** Compara
-`llavero.json` con lo que la máquina lanzadora tiene de verdad, y para un tipo con
-`"llavero": true`:
+## Lo que el preflight NO cubre, a propósito
 
-- **si falta alguna, se NIEGA** y las nombra. No es un aviso: una máquina que nace
-  sin su llavero es trabajo perdido y, en el caso del mini, mando perdido.
-- imprime el remedio apuntando **fuera** de la máquina (dónde se pone cada una),
-  que es donde está.
-- ⚠ **Distingue «falta» de «vacía»**: una variable puesta a cadena vacía es peor
-  que ausente, porque parece configurada.
+**`--dry-run` se lo salta**, junto con el de GitHub ([1054](../scripts/do_droplet.py#L1054)):
+no crea nada, así que no hay nada que proteger. Consecuencia práctica: **`--dry-run` no
+sirve para probar el preflight**. El documento original proponía comprobarlo con
+`launch prueba --type mini --seco`, que además falla por otra razón — esa opción no
+existe, se llama `--dry-run`.
 
-Es la **regla 5 de escritura** del coordinador —*«un preflight comprueba estado
-utilizable, no presencia, y crece con cada fallo»*— aplicada aquí: esta comprobación
-se añade en el mismo commit que este documento… y **no se ha añadido**, que es por
-lo que esto es un pendiente y no una nota histórica.
-
-**P2 — Decidir cuáles son OBLIGATORIAS y cuáles opcionales.** Hoy `llavero.json` es
-una lista plana. `TGL2_*` es legítimamente opcional (bot de staging); `DO_SSH_USER`
-no lo es. Sin esa distinción, un preflight que exija las 17 sería un 🔴 permanente
-—el aviso que sale siempre y se deja de leer— y acabaría desactivado.
-
-**P3 — `DO_SSH_USER` debería tener defecto declarado, no heredado.** Que
-`cfg()` caiga a `"root"` es razonable para un droplet pelado y equivocado para uno
-con usuario de desarrollo. O lo aporta el **tipo** (como los otros 8 que sí aporta),
-o el preflight lo exige. Elegir una de las dos es parte de esto.
-
-## Cómo se comprueba que quedó bien
+Para verlo actuar hay que llamar a la función directamente:
 
 ```bash
-# el preflight caza el hueco real (con la variable quitada del entorno)
 cd ~/src/digital-ocean-dropplet-auto-launching
-env -u DO_SSH_USER python3 scripts/do_droplet.py launch prueba --type mini --seco
-#   -> tiene que NEGARSE nombrando DO_SSH_USER, sin llamar a la API
+python3 - <<'PY'
+import os, sys
+sys.path.insert(0, "scripts")
+os.environ.pop("TGL_BOT_TOKEN", None)          # una OBLIGATORIA
+import do_droplet
+do_droplet.comprobar_llavero()                 # -> muere nombrandola
+PY
 ```
 
-Y los tests que pide (R17), ninguno de los cuales necesita tocar la API:
+## El falso pendiente: qué se leyó mal
 
-1. con el llavero completo, no estorba (no puede ser un 🔴 permanente);
-2. con una obligatoria ausente, **se niega** y la nombra;
-3. con una obligatoria **vacía**, se niega igual;
-4. con una opcional ausente (`TGL2_*`), **deja pasar**;
-5. un tipo sin `"llavero": true` no se ve afectado.
+El 2026-09-10, al pedirle a un dev que rehiciera el mini, se paró y dio dos motivos.
+**Los dos eran falsos**, y los dos por leer mal algo que el repo sí dice bien:
+
+1. **«El preflight falló.»** Las cinco variables que listó —`DO_SSH_USER`,
+   `TGL_CLAUDE_PERMISSION_MODE`, `FVW_WEB_TOKEN`, `TGL2_BOT_TOKEN`,
+   `TGL2_ALLOWED_USER_IDS`— son **todas `obligatoria: false`**. El preflight no habría
+   dicho nada. `flota` imprime las dos listas por separado y con distinta grafía
+   (`FALTAN obligatorias:` frente a `faltan opcionales:`,
+   [4099-4103](../scripts/do_droplet.py#L4099-L4103)) precisamente para que no se
+   confundan; se aplanaron las dos en un ❌ y una línea informativa se leyó como un
+   bloqueo.
+
+2. **«No podría entrar a arreglarlo.»** Citó una frase de `types/mini.json` que está en
+   **pasado**, dentro de un párrafo que empieza «Hasta entonces esto era…». Desde el
+   2026-09-10 las dos máquinas llevan la **clave de flota** y un dev sí entra en el mini
+   — es literalmente lo que ese cambio arregló. O sea que **se alegó como motivo para no
+   actuar justo la avería que el cambio elimina**.
+
+Las dos correcciones que salen de aquí:
+
+- **Un preflight que no distingue obligatorio de opcional en su SALIDA no sirve**, aunque
+  lo distinga por dentro. Quien lee un ❌ no va a `llavero.json` a mirar el campo.
+- **Una nota que mezcla presente e historia se cita en el tiempo verbal equivocado.**
+  `types/mini.json` y `types/dev.json` se reescribieron para poner el estado de hoy
+  primero y la historia al final, marcada («hasta el 2026-09-10 y NO DESPUÉS») y con el
+  aviso de comprobar antes de citarla.
 
 ## Lo que NO hay que hacer
 
-⚠ **No rellenar el llavero de este dev a mano y dar el problema por resuelto.** Eso
-arregla esta máquina, y estas máquinas se destruyen. El agujero es que **nadie
-comprueba**, y sobrevive a cualquier relleno manual.
+⚠ **No implementar `comprobar_llavero()` otra vez.** Es el riesgo concreto que este
+documento creaba mientras decía «no existe»: un segundo escritor de la misma
+comprobación diverge del primero, y el que se depura después es siempre el que no
+escribiste tú. Es la misma razón por la que `install-service` reusa
+`build_service_section` en vez de generar la unidad por su cuenta.
+
+⚠ **No rellenar el llavero de un dev a mano y dar el problema por resuelto.** Eso arregla
+esa máquina, y estas máquinas se destruyen. Lo que hay que arreglar está en
+`llavero.json` y en los tipos, que es lo que viaja.
