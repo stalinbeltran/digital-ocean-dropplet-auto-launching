@@ -677,45 +677,188 @@ haz `git push` desde el droplet antes de destruirlo. Ten en cuenta también que 
 droplet con un servicio dentro es un droplet de larga vida: no lo barras con
 `destroy --tag ephemeral` sin mirar, y recuerda que factura mientras exista.
 
-## Dos máquinas: la que sobrevive y la que se tira
+## Dos máquinas gemelas: mini y dev
 
-El reparto que hace que esto funcione desde el móvil, con el detalle entero en
-[docs/reparto-mini-dev.md](docs/reparto-mini-dev.md):
+Desde el 2026-09-10 **mini y dev son la misma máquina en dos tallas**, no dos clases con
+privilegios distintos. Cualquiera de las dos crea, repara, actualiza y destruye a la otra.
+El diseño entero está en [docs/flota-simetrica.md](docs/flota-simetrica.md).
 
 | | **mini** | **dev** |
 |---|---|---|
-| para qué | lanzar la de trabajo, ver qué hay vivo, apagarlo | todo el trabajo: Claude Code y las peticiones complejas |
+| talla | 512 MB (`s-1vcpu-512mb-10gb`), 4 $/mes | 2 vCPU / 4 GB, 24 $/mes |
 | vida | siempre encendida, tag `control` | desechable, tag `ephemeral` |
-| Claude Code | no (no cabe en 512 MB) | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
-| alquila en Vast | no | sí |
-| **apaga** en Vast | **sí** | sí |
+| Claude Code | **no** — en 512 MB lo mata el kernel | sí |
+| llavero, repos, clave de flota, crear/destruir | **iguales** | **iguales** |
 
-Esa última fila es la regla que no es obvia:
+Sólo hay **tres** diferencias, y ninguna es de permisos:
 
-> **El token de cualquier cosa que dev pueda ENCENDER tiene que estar también en
-> el mini. No para encender: para apagar.**
+1. **La talla**, y de ahí que el mini no lleve Claude Code: es Node, en marcha ocupa
+   cientos de MB y los droplets vienen sin swap.
+2. **El tag**, que decide qué se lleva `apagar-do`. Es disponibilidad, no privilegio.
+3. **El bot**, y esto **no** es opcional: Telegram sólo admite un proceso haciendo long
+   polling por token, y el segundo recibe un **409**. Con un solo bot, una de las dos se
+   queda muda.
 
-dev alquila máquinas que facturan por segundo y dev es desechable. Cuando muera,
-el mini es lo único capaz de enumerar y matar lo que quedó vivo — y un
-`apagar-vast` sin token es un botón que no hace nada.
+### Lo que esto arregla, que estaba roto y medido
 
-El día a día son tres mensajes:
+Hasta esa fecha el mini mandaba y el dev obedecía, con tres consecuencias:
+
+- **el dev nunca pudo entrar en el mini** — y no por un olvido, sino por el orden de
+  nacimiento: un droplet acepta las claves registradas *cuando se crea*, y la del dev se
+  registra durante su propio `provision`, siempre después;
+- **nadie sabía parir un mini**, porque las `TGL_*` no estaban en el llavero de ninguna
+  máquina: un mini nuevo nacía mudo;
+- de las 19 variables que el mini llevaba, `types/mini.json` declaraba **una**. Las demás
+  se habían empujado a mano, así que el mini **no se reconstruía desde el repo**.
+
+### El llavero: qué lleva una máquina de la flota
+
+[`llavero.json`](llavero.json) declara los secretos que lleva **cualquier** máquina de la
+flota. Es dato, no código: añadir un secreto es añadir una línea.
+
+```powershell
+# Falta una obligatoria -> launch y provision MUEREN antes de crear ni tocar nada.
+python scripts/do_droplet.py launch dev --type dev
+#   Llavero: 12/16 variables listas para viajar.
+
+# La salida de emergencia, si necesitas la máquina y falta algo:
+python scripts/do_droplet.py launch dev --type dev --sin-llavero
+```
+
+> **La regla:** si una variable hace falta para **crear** una máquina de la flota, va en
+> el llavero. La vieja —«el token de lo que dev pueda encender va también en el mini, para
+> poder apagarlo»— es un caso particular de ésta, y se quedaba corta.
+
+### La clave de flota: una sola, registrada una vez
+
+```powershell
+python scripts/do_droplet.py clave-flota            # crearla y registrarla (idempotente)
+python scripts/do_droplet.py autorizar-flota mini   # reparar una máquina anterior a ella
+```
+
+Cualquier droplet creado **después** la acepta solo, porque `DO_SSH_KEYS=` vacío significa
+«todas las claves de la cuenta». `autorizar-flota` es para las que ya existían: pone la
+pública en `authorized_keys` **de root y del usuario de desarrollo** —las dos hacen falta,
+porque el aprovisionamiento entra siempre como root— y además manda la **privada**, para
+que esa máquina pueda *salir*. Un par que sólo deja entrar no es un par.
+
+⚠ La decisión, dicha entera: una clave compartida significa que quien entre en una máquina
+de la flota entra en las demás. Se acepta porque **ya era así** — esa máquina lleva
+`DO_TOKEN`, y con él se puede destruir el mini o crear una máquina nueva con la clave que
+uno quiera. No sube el techo del daño; lo hace utilizable para lo que queremos.
+
+De paso, se acabó el goteo de claves muertas: `hacer_lanzador` reusa la de la flota en vez
+de registrar una nueva por máquina. Había **26 `lanzador-dev`** de 31 el 2026-09-10.
+
+```powershell
+python scripts/do_droplet.py keys --prune "lanzador-*"   # pide confirmación
+```
+Nunca toca la de la flota ni la de esta máquina, encaje lo que encaje el patrón.
+
+### `remoto`: pedir desde fuera lo que sólo funciona dentro
+
+```powershell
+python scripts/do_droplet.py remoto mini update
+python scripts/do_droplet.py remoto dev install-service --service claude-web
+python scripts/do_droplet.py remoto mini entornos aplicar --entorno telegram-launcher
+```
+
+Corre como el usuario de desarrollo y con `bash -lc`, y el shell de **login** no es
+adorno: sin él no se carga `dev-secrets.env` y el comando de allí falla con un «falta el
+token» en una máquina donde el token sí está.
+
+### `flota`: comprobar la paridad en vez de suponerla
+
+```powershell
+python scripts/do_droplet.py flota
+```
+```
+=== mini  (67.205.158.85)
+  llavero      12/16
+    faltan opcionales:   FVW_WEB_TOKEN, TGL2_ALLOWED_USER_IDS, TGL2_BOT_TOKEN, TGL_CLAUDE_PERMISSION_MODE
+  clave flota  si
+  servicios    telegram-launcher
+
+Paridad correcta en 1 maquina(s).
+```
+
+Sólo lectura, sólo **nombres** —ningún valor se imprime— y sale `!= 0` si falta algo
+obligatorio, que es lo único que hace que el aviso llegue al chat de Telegram.
+
+### El día a día
 
 ```
 lanzar   launch dev          (al Lanzador)   ~5 min, y dev arranca con su bot
 …trabajas hablándole al Coordinador…
 estado                       (al Lanzador)   qué hay vivo en las dos nubes
+flota                        (a cualquiera)  qué le falta a cada máquina
 lanzar   destroy dev --yes   (al Lanzador)
 ```
 
-[types/dev.json](types/dev.json) trae dentro los repos, el servicio, el
-`make_launcher` y el `register-key` de Vast, así que **el lanzamiento cabe en un
-mensaje**. Y [types/mini.json](types/mini.json) declara el token de Vast aunque
-desde el mini no se alquile nada, justo por la regla de arriba.
+⚠️ `apagar-do` **también destruye dev**, que lleva tag `ephemeral` a propósito. Para matar
+sólo una de varias, por nombre: `lanzar destroy dev-02 --yes`.
 
-> ⚠️ `apagar-do` **también destruye dev**, que lleva tag `ephemeral` a propósito.
-> Para matar sólo una de varias, por nombre: `lanzar destroy dev-02 --yes`.
+⚠️ **Y el mini sigue sin destruirse en ninguna limpieza**, pero por otro motivo: ya no es
+que sea la única con privilegios, es que es **la única siempre encendida**.
+
+## Los `.env` de varios proyectos: `entornos/`
+
+Un `.env` de proyecto **no se copia entre máquinas: se genera** del llavero.
+
+```powershell
+python scripts/do_droplet.py entornos list                   # qué hay declarado
+python scripts/do_droplet.py remoto dev entornos aplicar     # regenerarlos allí
+python scripts/do_droplet.py remoto dev entornos comprobar   # auditarlos contra git
+```
+
+Copiarlos exigiría saber cuál de las dos copias es la buena, y no hay forma: **las fechas
+mienten** —el `.env` de un dev recién nacido es el más nuevo y el más vacío—. Es además la
+forma exacta del fallo que este repo ya pagó: `provision` reescribe `dev-secrets.env` con
+`cat >`, así que emitir desde una máquina a la que le falta un token **lo borra en el
+destino**.
+
+Cada [`entornos/*.json`](entornos/) declara qué variable del llavero se convierte en cuál
+dentro del proyecto. **El nombre de destino lo declara quien lo consume**, no quien lo
+transporta: `CWEB_TS_AUTHKEY` aquí es `TS_AUTHKEY` allí porque así lo lee
+`tailscale-unir.mjs`.
+
+> **Y la red contra git es estructural, no disciplinaria:** antes de escribir un `.env` se
+> le pregunta a git si lo ignora, y **si no lo ignora, no se escribe**. Falla en el
+> momento del error, no en el `git push` de tres semanas después. `entornos comprobar`
+> mira además la **historia**: commiteado una vez = filtrado, y entonces toca rotar.
+
+### Mover secretos entre máquinas
+
+```powershell
+python scripts/do_droplet.py llavero comparar mini    # NOMBRES, nunca valores
+python scripts/do_droplet.py llavero enviar mini      # de aquí a allí
+python scripts/do_droplet.py llavero traer mini       # de allí a aquí
+python scripts/do_droplet.py push-secret --llavero --name mini   # el llavero entero
+```
+
+Dos reglas hacen seguro el «en los dos sentidos»: **`traer` sólo añade** (nunca pisa un
+valor local, salvo `--pisar NOMBRE`) y **la dirección la eliges tú**. Ninguno borra jamás:
+para eso está `llavero olvidar`, un comando aparte, para que borrar no pueda ser efecto
+secundario de sincronizar.
+
+## Recuperar los tokens desde cero
+
+Si se pierden **todos**, el manual paso a paso está en el repo central:
+[`estudios-redes-neuronales/docs/secretos-desde-cero.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/docs/secretos-desde-cero.md).
+Y el inventario de qué pide cada proyecto, en
+[`docs/secretos-inventario.md`](https://github.com/stalinbeltran/estudios-redes-neuronales/blob/main/docs/secretos-inventario.md).
+
+## Tests
+
+Sin framework y sin dependencias: el python3 pelado del sistema.
+
+```powershell
+python tests/test_llavero.py
+python tests/test_flota.py
+python tests/test_url_servicio.py
+python tests/test_provision_incompleto.py
+```
 
 ## La máquina de control: lanzar droplets desde el móvil
 
