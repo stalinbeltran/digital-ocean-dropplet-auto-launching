@@ -784,3 +784,19 @@ aprendió se anota donde corresponda.
   ha usado en meses y uno que es el freno de una emergencia se parecen mucho (`apagar-do`
   y `apagar-vast` son exactamente eso). Si te lo pide, lo que sí puedes aportar es el
   dato: cuáles existen, qué repo declara cada uno y cuáles aparecen en el log de mensajes.
+- **⏳ DEL USUARIO: la `CWEB_TS_AUTHKEY` no es Ephemeral, y por eso se acumulan nodos
+  muertos.** Medido el 2026-09-10 en un dev recién nacido: el `url` de `claude-web` falló
+  con `no es EPHEMERAL (ver .env.example)`, y `tailscale status` enseñaba `dev` (offline
+  17 h), `dev-1` (offline 34 min) y el nuevo entrando como **`dev-2`**.
+  `.env.example` ya lo dice (Reusable + Ephemeral + 90 días máximo); lo que falta es que
+  la key **puesta** cumpla las tres. Sin Ephemeral, `pre_destroy` no basta: aunque el
+  `tailscale logout` corra, el nodo sigue registrado y el nombre sigue ocupado.
+  El coste concreto no es cosmético: **la URL de la PWA del móvil apunta a `dev`**, así
+  que cada nombre que se va (`dev-1`, `dev-2`, …) la deja muerta.
+  Lo tiene que hacer el usuario en el panel de Tailscale: generar la key con las tres
+  propiedades, ponerla en `CWEB_TS_AUTHKEY`, mandarla con `push-secret`, y **borrar los
+  nodos muertos** para liberar el nombre `dev`.
+  ⚠ Aparte, y ya arreglado: el dev anterior nació como `dev-1` porque quien lo destruyó
+  fue un mini que estaba en `ab18d1a`, anterior a `8e3efc6` (el commit de `pre_destroy`).
+  **`pre_destroy` corre en la máquina que DESTRUYE**, así que un destructor con el repo
+  viejo no recoge nada y no lo dice.
