@@ -24,6 +24,7 @@ nbjCKGjnuo11CNTRL, 3 nodos antes y 3 despues, nombre `dev-1` reutilizado en
 
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,7 @@ def cargar():
 
 def main() -> int:
     mod = cargar()
+    all_services_real = mod.all_services
     fallos = 0
 
     def caso(nombre: str, ok: bool, detalle: str = "") -> None:
@@ -133,6 +135,34 @@ def main() -> int:
     except BaseException as exc:  # noqa: BLE001
         caso("Ctrl-C SI se propaga", False, f"levanto {type(exc).__name__}")
 
+    # --- ⚠ y con un descriptor roto DE VERDAD en disco ---------------------
+    # El caso de arriba sustituye `all_services` por una funcion que levanta, o
+    # sea que fija el CONTRATO pero no recorre el `load_service` real. Aqui se
+    # escribe un services/*.json genuinamente malformado y se apunta
+    # SERVICES_DIR a el, para ejercitar el camino entero: glob -> load_service
+    # -> json.JSONDecodeError -> die() -> SystemExit. Es la diferencia entre
+    # «el mock dice que levanta» y «un fichero mal editado hace esto».
+    mod.all_services = all_services_real
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = Path(tmp)
+        (carpeta / "roto.json").write_text('{"repo": "x/y", "start": ', encoding="utf-8")
+        mod.SERVICES_DIR = carpeta
+        try:
+            mod.limpiar_antes_de_destruir(con_ip, timeout=1)
+            caso("un services/*.json roto DE VERDAD no aborta el destroy", True)
+        except BaseException as exc:  # noqa: BLE001
+            caso("un services/*.json roto DE VERDAD no aborta el destroy", False,
+                 f"levanto {type(exc).__name__}")
+
+        # Y el simetrico: un descriptor VALIDO sin `pre_destroy` no hace nada.
+        (carpeta / "roto.json").unlink()
+        (carpeta / "sano.json").write_text(
+            '{"repo": "x/y", "start": "node s.js"}', encoding="utf-8")
+        tocado_sano = []
+        mod.wait_for_ssh = lambda ip, timeout=300: tocado_sano.append("ssh") or 22
+        mod.limpiar_antes_de_destruir(con_ip, timeout=1)
+        caso("un descriptor sano sin pre_destroy no abre conexion", not tocado_sano)
+
     # --- y si NADIE declara pre_destroy, ni se conecta ---------------------
     mod.all_services = lambda: []
     tocado = []
@@ -141,7 +171,7 @@ def main() -> int:
     caso("sin ningun pre_destroy no se abre ni la conexion", not tocado,
          "abrir SSH para no hacer nada retrasa cada destroy")
 
-    total = 4 + len(ramas) + 3
+    total = 4 + len(ramas) + 5
     print(f"\n{total - fallos}/{total} pasan")
     return 1 if fallos else 0
 
