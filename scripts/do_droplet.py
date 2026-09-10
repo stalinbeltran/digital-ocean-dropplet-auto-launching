@@ -453,7 +453,20 @@ def cmd_autorizar_flota(args: argparse.Namespace) -> None:
         ]
     if run_remote_script(ip, port, "\n".join(lineas)) != 0:
         die("Fallo al autorizar. La salida de ssh esta justo arriba.")
-    log(f"\nListo: cualquier maquina de la flota entra ya en '{droplet['name']}'.")
+    log(f"  ahora cualquier maquina de la flota entra en '{droplet['name']}'")
+
+    # Y la otra mitad, que por defecto tambien se hace: la clave PRIVADA, para
+    # que esta maquina pueda SALIR. Un par que solo deja entrar no es un par:
+    # el `mini` reparado el 2026-09-10 aceptaba a la flota y no podia tocar a
+    # nadie, y `flota` lo canto como "clave flota: NO". Las dos direcciones o
+    # ninguna, porque la que falte se descubre el dia que hace falta.
+    if args.solo_publica:
+        log("\n  --solo-publica: no se manda la privada. Esta maquina deja ENTRAR")
+        log("  a la flota pero no puede SALIR hacia las demas.")
+        return
+    _mandar_clave_flota(droplet["name"], ip, port, cfg("DO_DEV_USER"), ruta_clave_flota())
+    log(f"\nListo: '{droplet['name']}' entra y deja entrar. Compruebalo con:")
+    log("  python scripts/do_droplet.py flota")
 
 
 def cmd_register_key(args: argparse.Namespace) -> None:
@@ -3234,22 +3247,9 @@ def cmd_push_service_env(args: argparse.Namespace) -> None:
     if not prefijo:
         die(f"El servicio '{svc['name']}' no declara env_prefix: no hay puente de nombres.")
 
-    # El llavero entero de una vez: es el camino de REPARACION de una maquina
-    # viva. `provision` tambien lo escribe, pero reescribe dev-secrets.env con
-    # `cat >`, asi que usarlo para anadir borra del destino lo que el emisor no
-    # tenga a mano. Esto solo toca las lineas que nombra.
-    if getattr(args, "llavero", False):
-        pares = comprobar_llavero(getattr(args, "sin_llavero", False))
-        if not pares:
-            die("El llavero de esta maquina esta vacio: no hay nada que enviar.")
-        return _escribir_secretos(args, pares)
-
     nombres = push_env_names(args.vars)
     if not nombres:
-        die(
-            "Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN\n"
-            "  O manda el llavero entero:  push-secret --llavero --name <maquina>"
-        )
+        die("Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN")
 
     pares = []
     for nombre in nombres:
@@ -3364,9 +3364,22 @@ def cmd_push_secret(args: argparse.Namespace) -> None:
 
     Repetir el comando ROTA el valor: quita la línea anterior y pone la nueva.
     """
+    # El llavero entero de una vez: es el camino de REPARACIÓN de una máquina
+    # viva. `provision` también lo escribe, pero reescribe dev-secrets.env con
+    # `cat >`, así que usarlo sólo para añadir borra del destino lo que el emisor
+    # no tenga a mano. Esto toca únicamente las líneas que nombra.
+    if getattr(args, "llavero", False):
+        pares = comprobar_llavero(getattr(args, "sin_llavero", False))
+        if not pares:
+            die("El llavero de esta máquina está vacío: no hay nada que enviar.")
+        return _escribir_secretos(args, pares)
+
     nombres = push_env_names(args.vars)
     if not nombres:
-        die("Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN")
+        die(
+            "Dime qué variables enviar, p. ej.: VAST_AI_API_TOKEN\n"
+            "  O manda el llavero entero:  push-secret --llavero --name <maquina>"
+        )
 
     pares = []
     for nombre in nombres:
@@ -4594,6 +4607,12 @@ def main() -> None:
         default=[],
         help="usuario del destino (repetible). Por defecto root y DO_DEV_USER, "
         "y las dos hacen falta: el aprovisionamiento entra siempre como root",
+    )
+    p.add_argument(
+        "--solo-publica",
+        action="store_true",
+        help="no mandar la clave PRIVADA. La maquina dejara ENTRAR a la flota "
+        "pero no podra SALIR hacia las demas, que es media paridad",
     )
     p.set_defaults(func=cmd_autorizar_flota)
 

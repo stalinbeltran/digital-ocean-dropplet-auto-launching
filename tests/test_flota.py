@@ -270,6 +270,67 @@ def test_comandos_registrados(mod):
     return fallos
 
 
+def test_push_secret_llavero(mod):
+    """`push-secret --llavero` tiene que entrar por el camino del llavero.
+
+    Este test existe porque el fallo PASO: el bloque del llavero se inserto en
+    `cmd_push_service_env` en vez de en `cmd_push_secret`, porque las dos
+    funciones tenian la linea `nombres = push_env_names(args.vars)` identica y el
+    parche cogio la primera. El sintoma era perfecto para no encontrarlo:
+    `push-secret --llavero` contestaba "dime que variables enviar", como si la
+    opcion no existiera, y todos los tests de `comprobar_llavero` seguian en
+    verde porque esa funcion estaba bien.
+
+    La leccion, y por eso se comprueba asi: que una funcion sea correcta no
+    quiere decir que alguien la llame.
+    """
+    import argparse
+
+    def _die(msg):
+        raise Muerte(msg)
+    mod.die = _die
+
+    llamadas = []
+    mod.comprobar_llavero = lambda sin=False: [("DO_TOKEN", "x")]
+    mod._escribir_secretos = lambda args, pares: llamadas.append(pares)
+
+    args = argparse.Namespace(llavero=True, sin_llavero=False, vars=[],
+                              prefix="TGL_", name="mini", port=0)
+    try:
+        mod.cmd_push_secret(args)
+    except Muerte as exc:
+        return [f"push-secret --llavero murio: {exc}"]
+    if not llamadas:
+        return ["push-secret --llavero NO uso el camino del llavero"]
+
+    # Y sin --llavero tiene que seguir pidiendo nombres, no mandar el llavero.
+    llamadas.clear()
+    args2 = argparse.Namespace(llavero=False, sin_llavero=False, vars=[],
+                               prefix="TGL_", name="mini", port=0)
+    try:
+        mod.cmd_push_secret(args2)
+        return ["sin variables y sin --llavero deberia morir, y no murio"]
+    except Muerte as exc:
+        if "--llavero" not in str(exc):
+            return ["el error no menciona --llavero, que es la alternativa"]
+    return [] if not llamadas else ["mando el llavero sin que se lo pidieran"]
+
+
+def test_push_service_env_intacto(mod):
+    """El vecino de al lado no puede haberse llevado el bloque del llavero.
+
+    Hermano del test de arriba: cuando un parche cae en la funcion equivocada,
+    hay DOS sintomas -el que falta donde debia y el que sobra donde no debia-, y
+    el segundo es el que rompe algo que ya funcionaba.
+    """
+    fuente = (ROOT / "scripts" / "do_droplet.py").read_text(encoding="utf-8")
+    inicio = fuente.index("def cmd_push_service_env(")
+    fin = fuente.index("def ", inicio + 10)
+    cuerpo = fuente[inicio:fin]
+    return ([] if "comprobar_llavero" not in cuerpo
+            else ["cmd_push_service_env tiene codigo del llavero que no le toca"])
+
+
 def main():
     pruebas = [
         ("prune nunca borra la clave de la flota", test_prune_protege),
@@ -282,6 +343,8 @@ def main():
         ("los scripts remotos no llevan \\n de Python", test_escapes_de_scripts_remotos),
         ("los ejecutores del bot estan y son validos", test_ejecutores),
         ("los comandos nuevos estan registrados", test_comandos_registrados),
+        ("push-secret --llavero usa el llavero", test_push_secret_llavero),
+        ("push-service-env quedo intacto", test_push_service_env_intacto),
     ]
     total = 0
     for nombre, prueba in pruebas:
