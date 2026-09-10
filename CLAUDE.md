@@ -228,6 +228,15 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
 > **El reparto mini/dev, con el detalle entero, está en
 > [`docs/reparto-mini-dev.md`](docs/reparto-mini-dev.md).** Léelo antes de tocar
 > `types/mini.json` o `types/dev.json`.
+>
+> ⚠ **Y ese reparto está en revisión.** El diseño para que mini y dev sean **la misma
+> máquina con dos tallas** —mismo llavero, acceso SSH en los dos sentidos, cualquiera
+> capaz de rehacer a la otra, con Claude Code como única diferencia— está en
+> [`docs/flota-simetrica.md`](docs/flota-simetrica.md) (2026-09-10, **diseñado y sin
+> implementar**). Lo que allí se mide y que aquí conviene saber ya: el dev **nunca** ha
+> podido entrar en el mini (su clave se registra después de que el mini exista), y
+> **ninguna de las dos máquinas puede parir un mini**, porque las `TGL_*` no están en
+> el llavero de nadie.
 
 - **El superviviente tiene que poder apagar todo lo que el desechable encienda.** El
   token de cualquier cosa que **dev** pueda ENCENDER tiene que estar también en el
