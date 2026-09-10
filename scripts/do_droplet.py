@@ -1392,26 +1392,33 @@ def limpiar_antes_de_destruir(droplet: dict, timeout: int = 30) -> None:
     o nadie declara nada-, porque un silencio aquí es indistinguible de que
     funcionara.
     """
-    script = pre_destroy_script()
-    if script.strip() == "set -u":
-        return  # ningún servicio declara `pre_destroy`: no hay nada que hacer
-
+    # ⚠⚠ EL `try` EMPIEZA EN LA PRIMERA LÍNEA, y no es estilo: `pre_destroy_script()`
+    # llama a `all_services()` -> `load_service()`, que hace `die()` -o sea
+    # `SystemExit`- si CUALQUIER descriptor de services/ está roto. Con la
+    # construcción fuera del try, un JSON malo de un servicio que ni siquiera
+    # está en este droplet abortaba `cmd_destroy` entera ANTES de borrar nada:
+    # un fichero mal editado dejaba droplets vivos que nadie apaga. Es justo la
+    # molestia-convertida-en-factura que esta función existe para no causar.
+    # (Encontrado al revisar este mismo commit, 2026-09-10. Tiene test.)
+    #
+    # `KeyboardInterrupt` NO se traga: si tú cortas, quieres cortarlo todo.
     nombre = droplet.get("name", "?")
-    ip = public_ip(droplet)
-    if not ip:
-        log(f"  {nombre}: sin IP, no puedo recoger nada. Se destruye igual.")
-        return
     try:
+        script = pre_destroy_script()
+        if script.strip() == "set -u":
+            return  # ningún servicio declara `pre_destroy`: no hay nada que hacer
+
+        ip = public_ip(droplet)
+        if not ip:
+            log(f"  {nombre}: sin IP, no puedo recoger nada. Se destruye igual.")
+            return
         port = wait_for_ssh(ip, timeout=timeout)
-    except (SystemExit, Exception):  # noqa: BLE001 - aquí nada puede escapar
-        port = None
-    if not port:
-        log(f"  {nombre}: no contesta por SSH en {timeout}s. Se destruye igual.")
-        return
-    try:
+        if not port:
+            log(f"  {nombre}: no contesta por SSH en {timeout}s. Se destruye igual.")
+            return
         run_remote_script(ip, port, script, timeout=timeout * 2)
-    except Exception as exc:  # noqa: BLE001 - ver el docstring
-        log(f"  {nombre}: la recogida falló ({type(exc).__name__}). Se destruye igual.")
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - ver arriba
+        log(f"  {nombre}: no pude recoger ({type(exc).__name__}: {exc}). Se destruye igual.")
 
 
 def cmd_destroy(args: argparse.Namespace) -> None:

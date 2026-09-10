@@ -103,6 +103,36 @@ def main() -> int:
         except BaseException as exc:  # noqa: BLE001 - eso es justo lo que no puede pasar
             caso(f"vuelve con {nombre}", False, f"levanto {type(exc).__name__}: {exc}")
 
+    # --- ⚠⚠ un descriptor ROTO no puede abortar el destroy -----------------
+    # `load_service()` hace `die()` -> SystemExit si un services/*.json esta
+    # roto, y `pre_destroy_script()` los recorre TODOS. Con la construccion del
+    # guion fuera del try, un fichero mal editado -de un servicio que ni siquiera
+    # esta en este droplet- abortaba cmd_destroy ANTES de borrar nada, y dejaba
+    # droplets vivos que nadie apaga. Este caso FALLA con esa version.
+    def descriptor_roto():
+        raise SystemExit("services/loquesea.json no es JSON válido")
+
+    mod.all_services = descriptor_roto
+    try:
+        mod.limpiar_antes_de_destruir(con_ip, timeout=1)
+        caso("un descriptor roto NO aborta el destroy", True)
+    except BaseException as exc:  # noqa: BLE001
+        caso("un descriptor roto NO aborta el destroy", False,
+             f"levanto {type(exc).__name__}: un JSON mal editado dejaria droplets vivos")
+
+    # Y lo simetrico: si TU cortas, se corta. KeyboardInterrupt no se traga.
+    def cortado():
+        raise KeyboardInterrupt()
+
+    mod.all_services = cortado
+    try:
+        mod.limpiar_antes_de_destruir(con_ip, timeout=1)
+        caso("Ctrl-C SI se propaga", False, "tragarselo ignoraria que quieres parar")
+    except KeyboardInterrupt:
+        caso("Ctrl-C SI se propaga", True)
+    except BaseException as exc:  # noqa: BLE001
+        caso("Ctrl-C SI se propaga", False, f"levanto {type(exc).__name__}")
+
     # --- y si NADIE declara pre_destroy, ni se conecta ---------------------
     mod.all_services = lambda: []
     tocado = []
@@ -111,7 +141,7 @@ def main() -> int:
     caso("sin ningun pre_destroy no se abre ni la conexion", not tocado,
          "abrir SSH para no hacer nada retrasa cada destroy")
 
-    total = 4 + len(ramas) + 1
+    total = 4 + len(ramas) + 3
     print(f"\n{total - fallos}/{total} pasan")
     return 1 if fallos else 0
 
