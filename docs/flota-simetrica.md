@@ -101,10 +101,11 @@ declarado: un **llavero** que se escribe una vez y se comprueba en cada lanzamie
 | 5 | **Rehacer cualquiera de las dos** deja de necesitar la laptop | irremplazabilidad | `TGL2_`, procedimiento |
 | 6 | **La paridad se comprueba con un comando**, no con fe | regresiones | comando `flota` |
 | 7 | **La documentación dice la regla nueva** | que no se deshaga | `CLAUDE.md`, `docs/`, `README.md` |
+| 8 | **Los `.env` de proyecto se derivan del llavero**, no se copian entre máquinas | que los secretos viajen en los dos sentidos sin llegar nunca a git | `entornos/`, comandos `llavero` y `entornos` |
 
 El orden importa: **2 antes que 3** (sin acceso no hay comando remoto), **1 antes que 4**
-(sin llavero declarado, igualar los tipos no iguala nada), y **6 antes de dar nada por
-bueno**.
+(sin llavero declarado, igualar los tipos no iguala nada), **1 antes que 8** (el llavero
+es el original del que se derivan los `.env`), y **6 antes de dar nada por bueno**.
 
 ---
 
@@ -391,6 +392,153 @@ depende de la laptop.
 
 ---
 
+### Paso 8 — Los `.env` de proyecto se derivan del llavero, no se copian
+
+**Lo que se pide.** «Si el mini existe, le pasa los `.env` al dev. Si el dev existe, se
+los pasa al mini. Varios proyectos, cada uno con su `.env`. Y que nunca lleguen a git.»
+
+#### 8.1 Por qué el espejo bidireccional es la solución equivocada
+
+Copiar el mismo fichero en los dos sentidos exige saber **cuál de las dos copias es la
+buena**, y no hay forma de saberlo:
+
+- **Las fechas mienten.** El `.env` de un dev recién nacido es el más NUEVO y el más
+  VACÍO. Un espejo por fecha borra el bueno con el vacío.
+- **Ya nos mordió esta forma exacta.** `provision` reescribe `dev-secrets.env` con
+  `cat >`, así que aprovisionar desde una máquina a la que le falta un token **borra ese
+  token en el destino**, y el síntoma llega días después como «algo dejó de autenticar
+  sin motivo». Ésa es la razón de existir de `push-secret`. Un espejo de `.env` repite
+  ese fallo una vez por proyecto.
+- **Un dev recién nacido es el peor emisor posible**, y es justo cuando más ganas hay de
+  sincronizar. «Si dev existe, pasa sus `.env` al mini» ejecutado a los cinco minutos de
+  crear el dev deja al mini sin nada.
+
+#### 8.2 La forma que sí funciona: un original y copias derivadas
+
+> **El llavero (`~/.config/dev-secrets.env`) es el original. El `.env` de cada proyecto
+> es una copia GENERADA de él, que se puede borrar y rehacer.**
+
+No es un invento: es lo que el repo ya hace con los servicios. `TG_BOT_TOKEN` en el
+entorno se convierte en `BOT_TOKEN=` dentro de `telegram-coordinator/.env`, y lo escribe
+`service_env_lines()`. El paso 8 es **generalizar eso de «servicios» a «cualquier
+proyecto»**. Con ello:
+
+- Lo que viaja entre máquinas es **un solo fichero**, no N. Los dos sentidos son la misma
+  operación sobre el mismo fichero, con la semántica de mezcla que `push-secret` ya tiene
+  probada (reescribe esa línea, conserva las demás).
+- Un `.env` de proyecto **no se sincroniza nunca**: se regenera. Perderlo no cuesta nada.
+- Y como no cuesta nada, **nadie tiene la tentación de commitearlo «por si acaso»**, que
+  es de donde salen la mitad de los secretos filtrados.
+
+#### 8.3 `entornos/<proyecto>.json` — el `.env` de un proyecto es dato
+
+Un JSON por proyecto, mismo trato que `types/` y `services/`: dato, no código.
+
+```jsonc
+{
+  "descripcion": "Variables del .env de foveal-vision.",
+  "dir": "foveal-vision",
+  "fichero": ".env",
+  "variables": [
+    {"nombre": "TAILSCALE_AUTHKEY", "desde": "TAILSCALE_AUTHKEY", "obligatoria": true,
+     "porque": "la app movil entra por el tailnet"},
+    {"nombre": "WEB_TOKEN", "desde": "FVW_WEB_TOKEN", "obligatoria": false,
+     "porque": "el API borra datos sin preguntar y se niega a arrancar expuesto sin token"}
+  ]
+}
+```
+
+`desde` es el nombre en el llavero; `nombre`, el nombre dentro del `.env` del proyecto.
+
+⚠ **Lista explícita, y NO un barrido por prefijo**, aunque `env_prefix` de `services/`
+funcione así. El barrido es el que falla en silencio: si no hay ninguna variable con el
+prefijo, `service_env_lines()` no escribe nada y suelta un `AVISO: arrancará sin
+configuración` en mitad de cien líneas. Con la lista explícita, `flota` puede decir
+**qué variable falta y para qué era**. `env_prefix` queda como caso particular y puede
+migrar después; no hace falta tocarlo para esto.
+
+#### 8.4 La red contra git es estructural, no disciplinaria
+
+La pregunta era «cómo hacemos que nunca lleguen a git». La respuesta no es acordarse:
+
+> **Antes de escribir un `.env`, se le pregunta a git si lo ignora. Si no lo ignora, no
+> se escribe.**
+
+```sh
+git -C "$DIR" check-ignore -q .env  ||  { negarse y decir que arregles el .gitignore }
+```
+
+Falla **en el momento en que se comete el error**, no en el `git push` de dentro de tres
+semanas. Y no depende de que nadie recuerde nada.
+
+Segunda red, para lo que ya pasó antes de existir la primera: `entornos comprobar`, que
+para cada `.env` declarado mira dos cosas distintas —
+
+1. `git check-ignore` — ¿está ignorado **ahora**?
+2. `git log --all --oneline -- <fichero>` — ¿estuvo commiteado **alguna vez**?
+
+La segunda importa porque un secreto commiteado una vez y borrado después **sigue en la
+historia y sigue filtrado**. Borrar el fichero no lo arregla: hay que rotar el secreto.
+
+#### 8.5 Los comandos, y por qué ninguno borra nada
+
+| comando | qué hace | qué NO hace |
+|---|---|---|
+| `llavero comparar <maquina>` | diff de **nombres**, en los dos sentidos. Sólo lectura | no imprime ni un valor |
+| `llavero enviar <maquina>` | manda las variables de aquí a allí. Mezcla, como `push-secret` | no borra en el destino lo que aquí no esté |
+| `llavero traer <maquina>` | trae las que allí están y aquí no | **no pisa un valor que aquí ya exista** salvo `--pisar NOMBRE` |
+| `llavero olvidar <VAR>` | quita una variable del llavero | es un comando aparte **a propósito**: borrar nunca puede ser efecto secundario de sincronizar |
+| `entornos aplicar` | DENTRO de una máquina: regenera los `.env` de todos los proyectos desde el llavero | no escribe en un repo que no ignore el fichero (8.4) |
+| `entornos comprobar` | audita los `.env` declarados contra git | sólo lectura |
+
+Las dos reglas que hacen seguro el «en los dos sentidos»:
+
+1. **`traer` sólo AÑADE.** La unión crece, nada desaparece. Por eso un dev recién nacido
+   y vacío no puede hacer daño: no tiene nada que imponer.
+2. **La dirección la eliges tú, no la adivina la herramienta.** `comparar` primero,
+   siempre. Un `sync` que decide solo es un `sync` que un día decide mal, y con secretos
+   eso no se nota hasta que algo deja de autenticar.
+
+El ciclo completo, desde cualquiera de las dos máquinas:
+
+```
+llavero comparar mini      # que tiene una y no la otra (nombres, nunca valores)
+llavero enviar mini        # o `traer`, segun de que lado este lo que falta
+remoto mini entornos aplicar   # y alli se regeneran los .env de cada proyecto
+```
+
+#### 8.6 Dónde entra la key de Tailscale
+
+`TAILSCALE_AUTHKEY` es credencial **de máquina** (une la máquina al tailnet), no de
+proyecto: va al llavero, como `DO_TOKEN`. Si además el proyecto de la app móvil la
+necesita dentro de su propio `.env`, eso es una línea en su `entornos/*.json` — la key no
+se copia dos veces, se **deriva** en los dos sitios desde el mismo original.
+
+⚠ Tres ajustes de la key que hay que mirar en el panel antes de fiarse, porque los tres
+fallan tarde y en silencio:
+
+- **Reusable.** Sin esto vale para UN nodo. La flota son mini + dev + los que se rehagan.
+- **Ephemeral.** Sin esto, cada dev destruido deja un nodo muerto en el tailnet, y dev es
+  desechable por diseño.
+- **Caducidad**, 90 días como máximo y no es opcional. El síntoma al caducar es una
+  máquina que arranca perfectamente y no aparece en el tailnet.
+
+#### 8.7 El respaldo: la pregunta que este diseño deja abierta
+
+Con todo esto el llavero vive en tres sitios —el `.env` de la laptop, el mini y el dev— y
+los tres se pueden perder. Hay dos salidas y **es una decisión del usuario, no del
+diseño**:
+
+- **(a) La laptop es el original**, y se respalda con lo que respalde la laptop. Es el
+  status quo, y no añade nada nuevo que pueda filtrarse.
+- **(b) `llavero exportar`** a un fichero cifrado (age o gpg) que **sí** puede vivir en
+  git, porque es texto cifrado y la frase de paso está en tu cabeza o en tu gestor. Es la
+  única versión que sobrevive a perderlo todo a la vez. Contradice «que nunca lleguen a
+  git» en su lectura literal, y la respeta en la de verdad: lo que no puede llegar a git
+  es un secreto **en claro**.
+
+---
+
 ## 5. Lo que NO cambia, y por qué
 
 - **Claude Code sigue sin instalarse en el mini.** Es Node, en marcha ocupa cientos de MB
@@ -424,6 +572,9 @@ depende de la laptop.
 | Dos bots iguales por error → `409` | copiar un tipo sin cambiar el prefijo | `selected_services()` ya rechaza dos servicios del mismo directorio; el paso 6 lo enseña en `flota` |
 | El dev, al ser desechable, lleva ahora **más** secretos | es la paridad que se pide | la exposición real ya existía (`DO_TOKEN`, `GITHUB_TOKEN`). Lo que sí conviene es que destruir un dev sea barato y frecuente, no raro |
 | Alguien destruye el mini creyendo que ya da igual | «si son iguales, ¿qué más da?» | da igual en privilegios y **no** da igual en disponibilidad: el mini es el que está siempre encendido. Va en `CLAUDE.md` con el motivo nuevo |
+| Un `.env` acaba **commiteado** en el repo de un proyecto | el `.gitignore` de ese proyecto no cubre `.env`, o lo cubre desde después | `entornos aplicar` se niega a escribir donde `git check-ignore` diga que no (8.4), y `entornos comprobar` mira también la **historia**: commiteado una vez = filtrado, y se rota |
+| Un dev recién nacido y vacío **borra el llavero** del mini | «si dev existe, pasa sus `.env` al mini», ejecutado literalmente | `traer` sólo añade y `enviar` sólo mezcla; borrar es un comando aparte (`llavero olvidar`). Ningún camino de sincronización borra nada (8.5) |
+| La key de Tailscale se gasta o caduca sin avisar | de un solo uso, o no efímera, o los 90 días | los tres se miran en el panel al crearla (8.6), y `flota` puede comprobar presencia pero **no** validez: eso hay que mirarlo en Tailscale |
 
 ---
 
@@ -439,9 +590,12 @@ Cada punto es un commit, en el momento, como manda el repo:
 5. `remoto` + `telegram/executors/remoto.json` (paso 3) — **el ejecutor en el mismo commit**
 6. `types/mini.json` y `types/dev.json` igualados, tras medir el disco (paso 4)
 7. `flota` + su ejecutor (paso 6)
-8. Reparación del mini vivo: `clave-flota`, `authorize-key`, `push-secret --llavero`
-9. La prueba de aceptación de cuatro pasos (paso 6)
-10. Documentación (paso 7)
+8. `entornos/` + `entornos aplicar` con la negativa de `git check-ignore` + `entornos
+   comprobar` (paso 8.3-8.4)
+9. `llavero comparar` / `enviar` / `traer` / `olvidar`, y sus ejecutores (paso 8.5)
+10. Reparación del mini vivo: `clave-flota`, `authorize-key`, `push-secret --llavero`
+11. La prueba de aceptación de cuatro pasos (paso 6)
+12. Documentación (paso 7)
 
 Los pasos 1-7 se pueden hacer y probar desde la laptop sin tocar el mini vivo. El 8 es el
 único que toca producción, y es reparación, no reconstrucción: **el mini no se rehace en
