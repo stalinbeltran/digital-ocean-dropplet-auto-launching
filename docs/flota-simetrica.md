@@ -1,6 +1,7 @@
 # Flota simétrica: que mini y dev sean la misma máquina con dos tallas
 
-**Fecha:** 2026-09-10. **Estado:** diseño, sin implementar.
+**Fecha:** 2026-09-10. **Estado:** IMPLEMENTADO y probado end-to-end el 2026-09-10.
+Ver la prueba de aceptación en el § 8 del final.
 **Sustituye a** la parte de «privilegios» de [`reparto-mini-dev.md`](reparto-mini-dev.md),
 que queda como descripción del reparto de *roles*.
 
@@ -600,3 +601,41 @@ Cada punto es un commit, en el momento, como manda el repo:
 Los pasos 1-7 se pueden hacer y probar desde la laptop sin tocar el mini vivo. El 8 es el
 único que toca producción, y es reparación, no reconstrucción: **el mini no se rehace en
 ningún momento de este plan**.
+
+
+---
+
+## 8. La prueba de aceptación, corrida de verdad (2026-09-10)
+
+Se lanzó un `dev` real, se comprobó el ciclo entero y se destruyó. Coste: unos 15 minutos
+de `s-2vcpu-4gb`, menos de un céntimo.
+
+| # | Qué | Resultado |
+|---|---|---|
+| 1 | `launch dev --type dev` | llavero comprobado antes de crear nada; 3 servicios arriba; el `post` escribió los 2 `.env` desde el llavero |
+| 2 | `flota` desde la laptop | **paridad correcta en 2 máquinas**, mismo 12/16 en las dos, clave de flota en ambas |
+| 3 | `remoto dev remoto mini update` | **el dev entró en el mini y lo actualizó** (1 commit). Es lo que nunca había funcionado |
+| 4 | `remoto dev flota` | el dev auditando la flota entera con su propio token |
+| 5 | `remoto dev llavero comparar mini` | «iguales, no hay nada que mover» |
+| 6 | `destroy dev --yes` | destruido; queda sólo el mini a 4 $/mes |
+
+El paso 3 es el que cierra el encargo original: *«si el mini necesita un secret o un
+cambio en su código, el dev no puede conectarse a él»*. Ya puede.
+
+### ⚠ Lo que la prueba destapó y NO está resuelto: el nodo de Tailscale
+
+La web de lectura del móvil nació en **`https://dev-1.tail376e31.ts.net:8443/`**, con un
+`-1` pegado al nombre. Es exactamente la pega que el propio repo de la app tenía prevista
+(`claude-code-webapp-mobile/docs/decisiones.md`, P3): el nodo `dev` anterior sigue en el
+tailnet, así que el nuevo entra como `dev-1` — y **la PWA ya instalada en el móvil deja de
+resolver**, porque apunta al nombre viejo.
+
+Las dos causas posibles, y hay que mirar cuál es **en el panel de Tailscale**:
+
+1. la authkey **no es `ephemeral`**, así que los nodos muertos no se limpian solos;
+2. lo es, pero la limpieza tarda 30-60 min y el `dev` nuevo nació antes.
+
+El remedio que la propia app ya identificó es **borrar el nodo explícitamente al destruir
+el droplet**, desde el mini y en el mismo sitio donde se destruye — que es R11: quien
+apaga, limpia. **No está implementado**, y es la primera cosa que hacer si esa URL se
+usa desde el móvil.
