@@ -560,6 +560,43 @@ Lo que hay que respetar:
     `/executors` y `/use` del bot, y `do_droplet.py executors` desde la laptop. Ya no hay
     un bloque `ayuda` aparte que pueda divergir, ni hace falta el ejecutor `ayuda`.
 
+- **Para PROBAR el camino de Telegram no hace falta Telegram: `data/entrada/`.** Es el
+  camino de depuración que faltaba, y resuelve un problema real: un mismo comando por
+  SSH y por el bot **no corre en el mismo entorno**, y esa diferencia ya mordió dos veces
+  (`DO_TOKEN`, y el de Vast el 2026-08-20). Hasta ahora, ejercitar el entorno del bot
+  exigía un humano con el móvil; con esto se hace desde cualquier sitio con SSH.
+  El coordinador vigila `~/src/telegram-coordinator/data/entrada/*.json` (watcher +
+  sondeo de 2 s) y lo mete por **`processIncoming`**, la misma función que atiende un
+  mensaje de Telegram — o sea que hereda el `process.env` del bot, que es justo lo que se
+  quiere probar. El fichero:
+
+  ```json
+  { "sesion": "<chatId>_main", "texto": "list", "cuando": "<ISO-8601 UTC>" }
+  ```
+
+  Escríbelo como `.tmp` y `mv` a `.json`: el watcher dispara con el primer byte y un JSON
+  a medias se aparta como roto. Medido el 2026-09-10 contra el mini: `list` inyectado
+  así salió por el chat con su eco y su respuesta.
+
+  Cuatro cosas que hay que saber antes de usarlo, y ninguna es opcional:
+  - ⚠ **Necesita una sesión ABIERTA, y eso sólo lo hace un humano** con `/use <ejecutor>`
+    desde Telegram. Sin ella `atenderUno` no ejecuta nada y contesta que la abras.
+  - ⚠ **La sesión decide QUÉ corre tu texto.** Con `/use lanzar` va al ejecutor; con
+    `/use c` se lo come `claude` con `bypassPermissions`. No es lo mismo, y el fichero
+    no lo elige: lo eligió quien abrió la sesión.
+  - ⚠ **Se hace ECO en el chat del dueño**, marcado `📱 (desde la app)`. No es silencioso:
+    lo que inyectes lo ve el usuario. Y sale como mensaje del BOT a propósito — la Bot API
+    no deja publicar en nombre de una persona, y fingir que eres él sería mentir sobre
+    quién escribió.
+  - **Caduca a los 15 min** (`COORD_ENTRADA_TTL_MS`). Si el bot estaba parado, lo viejo
+    se aparta y se avisa en vez de ejecutarse: una orden de hace horas con
+    `bypassPermissions` puede alquilar máquinas que ya no quieres.
+
+  El mecanismo es del coordinador y vive allí ([`src/entrada.ts`](https://github.com/stalinbeltran/telegram-coordinator/blob/main/src/entrada.ts),
+  `c824194`); aquí sólo se apunta que existe y cómo usarlo desde este repo.
+  ⚠ **El journal no sirve para leer la respuesta entera**: `[OUT]` se corta a longitud
+  fija. Para ver el resultado completo hay que mirar el chat.
+
 - **Todo lo del mini va en git menos los `.env`.** Es la regla que hace que la máquina se
   pueda tirar y rehacer: el código y los ejecutores se traen solos, y lo único que hay
   que mandar desde la laptop son los secretos, con `push-service-env` (que reescribe una
