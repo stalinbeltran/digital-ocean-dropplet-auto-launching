@@ -1345,6 +1345,75 @@ def cmd_service(args: argparse.Namespace) -> None:
     )
 
 
+def pre_destroy_script() -> str:
+    """El script que se corre DENTRO del droplet antes de destruirlo.
+
+    Es genérico: recorre los descriptores y ejecuta lo que cada servicio declare
+    en `pre_destroy`. Este fichero no sabe qué recoge ninguno de ellos -si lo
+    supiera, el enrutado se habría comido el dominio (R18)-; sabe que hay cosas
+    que sólo la propia máquina puede recoger, y que hay que dejarla intentarlo
+    antes de tirar del cable.
+
+    Ya hay precedente exacto en este mismo fichero: `cmd_volume` entra por SSH a
+    hacer `umount` antes de desconectar el volumen.
+
+    El repo se busca en el disco en vez de suponer el usuario: quién corre el
+    servicio es un hecho de la máquina, y se lee de ahí (R16).
+    """
+    partes = ["set -u"]
+    for svc in all_services():
+        if not svc["pre_destroy"]:
+            continue
+        nombre, carpeta = svc["name"], svc["dir"]
+        partes += [
+            f'D=$(ls -d /home/*/src/{carpeta} /root/src/{carpeta} 2>/dev/null | head -1 || true)',
+            'if [ -n "${D:-}" ] && [ -d "$D" ]; then',
+            f'  echo "  {nombre}: recogiendo antes de destruir…"',
+            '  U=$(stat -c %U "$D")',
+            f'  (cd "$D" && sudo -u "$U" -H bash -lc {shq(svc["pre_destroy"])})'
+            f' || echo "  AVISO: {nombre}: la recogida falló; se destruye igual."',
+            "else",
+            f'  echo "  {nombre}: no está instalado aquí; nada que recoger."',
+            "fi",
+        ]
+    return "\n".join(partes)
+
+
+def limpiar_antes_de_destruir(droplet: dict, timeout: int = 30) -> None:
+    """Deja que la máquina recoja lo suyo antes de destruirla. NUNCA levanta.
+
+    ⚠⚠ ESTO NO PUEDE IMPEDIR QUE SE DESTRUYA EL DROPLET, y por eso se traga todo
+    y lleva un timeout corto. Si la recogida pudiera tumbar el apagado, una
+    molestia -que el nombre del nodo siga ocupado un rato- se convertiría en una
+    factura -un droplet vivo que nadie apaga-. Es la misma lección del
+    2026-09-04: si el aviso puede matar el trabajo, ya no es una comodidad.
+
+    Y se DICE qué pasó en las tres ramas -recogido, no se pudo (con el motivo),
+    o nadie declara nada-, porque un silencio aquí es indistinguible de que
+    funcionara.
+    """
+    script = pre_destroy_script()
+    if script.strip() == "set -u":
+        return  # ningún servicio declara `pre_destroy`: no hay nada que hacer
+
+    nombre = droplet.get("name", "?")
+    ip = public_ip(droplet)
+    if not ip:
+        log(f"  {nombre}: sin IP, no puedo recoger nada. Se destruye igual.")
+        return
+    try:
+        port = wait_for_ssh(ip, timeout=timeout)
+    except (SystemExit, Exception):  # noqa: BLE001 - aquí nada puede escapar
+        port = None
+    if not port:
+        log(f"  {nombre}: no contesta por SSH en {timeout}s. Se destruye igual.")
+        return
+    try:
+        run_remote_script(ip, port, script, timeout=timeout * 2)
+    except Exception as exc:  # noqa: BLE001 - ver el docstring
+        log(f"  {nombre}: la recogida falló ({type(exc).__name__}). Se destruye igual.")
+
+
 def cmd_destroy(args: argparse.Namespace) -> None:
     if args.tag:
         droplets = find_droplets(tag=args.tag)
@@ -1362,6 +1431,7 @@ def cmd_destroy(args: argparse.Namespace) -> None:
         return
 
     for d in droplets:
+        limpiar_antes_de_destruir(d)
         api("DELETE", f"/v2/droplets/{d['id']}")
         log(f"Destruido {d['name']}.")
 
@@ -1644,7 +1714,7 @@ def resolve_target(name: str, port_override: int = 0) -> tuple[dict, str, int]:
     return droplets[0], ip, port
 
 
-def run_remote_script(ip: str, port: int, script: str) -> int:
+def run_remote_script(ip: str, port: int, script: str, timeout: float | None = None) -> int:
     """Ejecuta un script en el droplet pasándolo por stdin.
 
     Por stdin y no como argumento a propósito: lo que va en la línea de comandos
@@ -1658,6 +1728,7 @@ def run_remote_script(ip: str, port: int, script: str) -> int:
     proc = subprocess.run(
         ssh_command(ip, port, user="root") + ["bash -s"],
         input=script.encode("utf-8"),
+        timeout=timeout,
     )
     return proc.returncode
 
@@ -1925,6 +1996,10 @@ def load_service(name: str) -> dict:
     # El repo se clona en ~/src/<nombre del repo>, igual que los de DO_REPOS.
     svc.setdefault("dir", svc["repo"].rstrip("/").split("/")[-1].removesuffix(".git"))
     svc.setdefault("install", "")
+    # El SIMÉTRICO de `install`: qué tiene que recoger la máquina antes de que la
+    # destruyan. El lanzador no sabe qué recoge —eso es del servicio—, sólo sabe
+    # correrlo por SSH y seguir pase lo que pase. Ver `limpiar_antes_de_destruir`.
+    svc.setdefault("pre_destroy", "")
     # Cómo se PRESENTA el servicio: un comando que imprime la dirección con la
     # que se abre. Opcional; sin él, `launch` no anuncia ninguna. El detalle de
     # por qué es un comando y no un patrón de URL, en `url_de_servicio`.
