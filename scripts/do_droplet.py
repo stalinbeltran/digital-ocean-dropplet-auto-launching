@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -99,17 +100,65 @@ RECHAZOS_FATALES = 6
 # ---------------------------------------------------------------- configuración
 
 
-def load_env() -> None:
-    """Carga .env sin dependencias. Las variables reales del entorno mandan."""
-    env_file = ROOT / ".env"
-    if not env_file.exists():
-        return
-    for raw in env_file.read_text(encoding="utf-8").splitlines():
+def ruta_secretos_locales() -> Path:
+    """`~/.config/dev-secrets.env`: el llavero de una máquina de la flota, en disco."""
+    return Path.home() / ".config" / "dev-secrets.env"
+
+
+def ruta_env_local() -> Path:
+    """El `.env` del repo: el llavero de una máquina que NO es de la flota (la laptop)."""
+    return ROOT / ".env"
+
+
+def _sin_comillas_sh(valor: str) -> str:
+    """Deshace el `shq()` con el que se escriben los valores de dev-secrets.env."""
+    valor = valor.strip()
+    if len(valor) >= 2 and valor[0] == valor[-1] == "'":
+        return valor[1:-1].replace("'\"'\"'", "'")
+    return valor.strip('"')
+
+
+def leer_secretos_de_disco(path: Path) -> dict[str, str]:
+    """Los pares de un dev-secrets.env (`export NOMBRE='valor'`), o {} si no está."""
+    if not path.exists():
+        return {}
+    pares: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line.startswith("export ") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        nombre, valor = line[len("export "):].split("=", 1)
+        nombre = nombre.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", nombre) and _sin_comillas_sh(valor):
+            pares[nombre] = _sin_comillas_sh(valor)
+    return pares
+
+
+def load_env() -> None:
+    """Carga .env sin dependencias. Las variables reales del entorno mandan.
+
+    Y desde el 2026-09-11 carga también `~/.config/dev-secrets.env`, el llavero de
+    una máquina de la flota, con la misma regla: sólo rellena lo que falte.
+
+    Por qué: el entorno de un proceso es una FOTO de cuando arrancó. Una variable
+    escrita en el llavero DESPUÉS de arrancar el bot era invisible para todo
+    `launch` que saliera del bot hasta reiniciarlo, y por SSH la misma orden sí la
+    veía (el shell de login lee el fichero). Es el hueco de `reiniciar_servicios`
+    por la otra punta, y el primer caso concreto fue el certificado de la web
+    móvil: enviado al mini con `llavero enviar`, el siguiente `launch dev` desde el
+    bot habría nacido sin él y pedido otro a Let's Encrypt sin decir nada. Leerlo
+    del disco hace que este script vea lo mismo desde el bot que desde SSH.
+    """
+    env_file = ruta_env_local()
+    if env_file.exists():
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    for nombre, valor in leer_secretos_de_disco(ruta_secretos_locales()).items():
+        os.environ.setdefault(nombre, valor)
 
 
 def cfg(key: str) -> str:
@@ -4080,6 +4129,12 @@ def load_entorno(name: str) -> dict:
     ent["name"] = name
     ent.setdefault("fichero", ".env")
     ent.setdefault("variables", [])
+    # `recoger`: el camino de VUELTA, un comando que imprime NOMBRE=valor en los
+    # nombres del proyecto. Opcional: casi ningún proyecto produce nada que tenga
+    # que sobrevivir a la máquina. Ver `_entornos_recoger()`.
+    ent.setdefault("recoger", "")
+    if not isinstance(ent["recoger"], str):
+        die(f"{path}: 'recoger' tiene que ser una cadena (el comando que imprime NOMBRE=valor).")
     for var in ent["variables"]:
         if not var.get("nombre"):
             die(f"{path}: cada variable necesita 'nombre'.")
@@ -4127,7 +4182,133 @@ def cmd_entornos(args: argparse.Namespace) -> None:
     base = dentro_del_droplet("entornos " + args.accion)
     if args.accion == "aplicar":
         return _entornos_aplicar(base, args)
+    if args.accion == "recoger":
+        return _entornos_recoger(base, args)
     return _entornos_comprobar(base, args)
+
+
+def escribir_llavero_local(pares: list[tuple[str, str]]) -> Path:
+    """Escribe pares en el llavero de ESTA máquina, pisando los que ya estén.
+
+    Dónde está el llavero depende de qué máquina es: en una de la flota es
+    `~/.config/dev-secrets.env` (lo que `llavero comparar`/`traer` leen de ella
+    desde fuera, y lo que carga cada shell); en la laptop, el `.env` del repo. Se
+    escribe en el primero si existe, y si no en el segundo: escribir en el `.env`
+    de una máquina de la flota dejaría el valor invisible para las demás.
+
+    PISA a propósito, al revés que `traer`: aquí el valor viene del proyecto que lo
+    PRODUCE (`entornos recoger`), que es la fuente. `traer` no pisa porque entre dos
+    copias del mismo secreto no hay forma de saber cuál es la buena; aquí sí se sabe.
+    """
+    secretos = ruta_secretos_locales()
+    if secretos.exists():
+        lineas = [
+            l for l in secretos.read_text(encoding="utf-8").splitlines()
+            if not any(l.startswith(f"export {n}=") for n, _ in pares)
+        ]
+        lineas += [f"export {n}={shq(v)}" for n, v in pares]
+        tmp = secretos.with_name(secretos.name + ".nuevo")
+        tmp.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(secretos)
+        destino = secretos
+    else:
+        env_file = ruta_env_local()
+        texto = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+        lineas = [
+            l for l in texto.splitlines()
+            if not any(l.startswith(f"{n}=") for n, _ in pares)
+        ]
+        lineas += [f"{n}={v}" for n, v in pares]
+        env_file.write_text("\n".join(lineas) + "\n", encoding="utf-8")
+        destino = env_file
+    for n, v in pares:
+        os.environ[n] = v
+    return destino
+
+
+def _entornos_recoger(base: Path, args: argparse.Namespace) -> None:
+    """Lleva AL llavero lo que un proyecto produjo: el simétrico de `aplicar`.
+
+    `aplicar` va del llavero al `.env` del proyecto. Esto va al revés: el entorno
+    declara `recoger`, un comando que se corre en el directorio del proyecto y que
+    imprime `NOMBRE=valor` con los nombres DEL PROYECTO; aquí se traducen con el
+    mismo mapa (`nombre` -> `desde`) y se escriben en el llavero de esta máquina.
+    Sólo viaja lo declarado: lo que el comando imprima de más se ignora y se dice.
+
+    Existe por el certificado de la web móvil (2026-09-11): lo emite Let's Encrypt
+    en el dev, vive en `/var/lib/tailscale/certs/` del droplet que se destruye, y
+    Let's Encrypt sólo da 5 por semana y por nombre. Pedirlo una vez y hacerlo
+    viajar es la única forma de que rehacer el dev no lo gaste. Pero el mecanismo
+    no sabe nada de certificados: un proyecto que produzca cualquier otra cosa que
+    tenga que sobrevivir a su máquina lo declara igual.
+
+    Termina diciendo cómo llevarlo a la OTRA máquina (`llavero enviar`): aquí sólo
+    llega al llavero de ésta, y un secreto que está en una sola máquina de la flota
+    muere con ella, que es justo lo que esto evita.
+    """
+    entornos = [e for e in all_entornos() if e["recoger"]]
+    if args.entorno:
+        entornos = [e for e in entornos if e["name"] in args.entorno]
+    if not entornos:
+        log("Ningún entorno declara 'recoger': no hay nada que llevar al llavero.")
+        return
+
+    recogidas: list[str] = []
+    fallos = 0
+    for ent in entornos:
+        repo = base / ent["dir"]
+        if not repo.is_dir():
+            log(f"  {ent['name']}: no existe {repo}, me lo salto")
+            continue
+        try:
+            proc = subprocess.run(
+                ["bash", "-lc", ent["recoger"]], cwd=str(repo),
+                capture_output=True, text=True, timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log(f"  {ent['name']}: no pude correr `{ent['recoger']}`: {exc}")
+            fallos += 1
+            continue
+        if proc.returncode != 0:
+            cola = (proc.stderr or proc.stdout).strip().splitlines()[-3:]
+            log(f"  {ent['name']}: `{ent['recoger']}` salió con {proc.returncode}: "
+                + " / ".join(cola))
+            fallos += 1
+            continue
+
+        al_llavero = {v["nombre"]: v["desde"] for v in ent["variables"]}
+        pares: list[tuple[str, str]] = []
+        de_mas: list[str] = []
+        for raw in proc.stdout.splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            nombre, valor = line.split("=", 1)
+            nombre, valor = nombre.strip(), valor.strip()
+            if not valor:
+                continue
+            if nombre in al_llavero:
+                pares.append((al_llavero[nombre], valor))
+            else:
+                de_mas.append(nombre)
+        if de_mas:
+            log(f"  {ent['name']}: ignoro {', '.join(de_mas)}: no están declaradas en "
+                f"entornos/{ent['name']}.json, y sólo viaja lo declarado")
+        if not pares:
+            log(f"  {ent['name']}: no devolvió ninguna variable declarada; nada que recoger")
+            continue
+        destino = escribir_llavero_local(pares)
+        nombres = [n for n, _ in pares]
+        recogidas += nombres
+        log(f"  {ent['name']}: recogidas {', '.join(nombres)} -> {destino}")
+
+    if recogidas:
+        log(f"\n{len(recogidas)} variable(s) en el llavero de ESTA máquina. Para que la "
+            "otra también las tenga:\n"
+            "    python3 scripts/do_droplet.py llavero enviar <maquina>")
+    if fallos:
+        raise SystemExit(1)
 
 
 def _entornos_list() -> None:
@@ -5115,9 +5296,11 @@ def main() -> None:
     )
     p.add_argument(
         "accion",
-        choices=["list", "aplicar", "comprobar"],
-        help="list: que hay declarado (vale desde la laptop). aplicar y "
-        "comprobar corren DENTRO de una maquina",
+        choices=["list", "aplicar", "comprobar", "recoger"],
+        help="list: que hay declarado (vale desde la laptop). aplicar, "
+        "comprobar y recoger corren DENTRO de una maquina. recoger es el "
+        "simetrico de aplicar: lleva AL llavero lo que un proyecto produjo "
+        "(hoy, el certificado de la web movil)",
     )
     p.add_argument(
         "--entorno",

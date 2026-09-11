@@ -1,5 +1,5 @@
 {
-  "descripcion": "La maquina de control de 512 MB, siempre encendida. Mismos privilegios que dev: mismo llavero, misma clave de flota y misma capacidad de crear, reparar y destruir a la otra. NO los mismos repos: desde el 2026-09-11 aqui solo se clona foveal-vision-data, porque la simetria es de CAPACIDADES y no de carga. Lo unico que NO lleva es Claude Code, que en 512 MB lo mata el kernel.",
+  "descripcion": "La maquina de control de 512 MB. Siempre hay UNA encendida, pero no siempre la misma: se rehace desde el dev cuando hay que cambiarle el codigo, asi que lo que solo este aqui y no en el llavero o en git se pierde. Mismos privilegios que dev: mismo llavero, misma clave de flota y misma capacidad de crear, reparar y destruir a la otra. NO los mismos repos: desde el 2026-09-11 aqui solo se clona foveal-vision-data, porque la simetria es de CAPACIDADES y no de carga. Lo unico que NO lleva es Claude Code, que en 512 MB lo mata el kernel.",
   "size": "s-1vcpu-512mb-10gb",
   "image": "ubuntu-24-04-x64",
   "cloud_init": "cloud-init.mini.yaml",

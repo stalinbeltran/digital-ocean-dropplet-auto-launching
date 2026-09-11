@@ -307,6 +307,41 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
   ⚠ Y antes de escribir un `.env` se le pregunta a **git** si lo ignora; si no lo ignora,
   **no se escribe**. Es estructural y no disciplinaria: falla en el momento del error y
   no en el `git push` de tres semanas después.
+- **Y lo que un proyecto PRODUCE y tiene que sobrevivir a su máquina vuelve al llavero
+  con `entornos recoger`**, el simétrico de `aplicar` (desde el 2026-09-11). El entorno
+  declara `recoger`: un comando, corrido en el directorio del proyecto, que imprime
+  `NOMBRE=valor` en los nombres del proyecto; el lanzador lo traduce con el mismo mapa
+  `nombre`→`desde` y lo escribe en el llavero de esta máquina, **pisando** (el productor
+  es la fuente; `traer` no pisa porque entre dos copias no se sabe cuál es la buena).
+  Sólo viaja lo declarado. Después, `llavero enviar <otra>`: un secreto que está en una
+  sola máquina de la flota muere con ella.
+  Hoy lo usa uno: el **certificado TLS de la web móvil** (`CWEB_TS_CERT_B64` y
+  `CWEB_TS_KEY_B64`, entorno `claude-code-webapp-mobile`, comando `cweb cert exportar`).
+  Por qué, medido el 2026-09-11: **Let's Encrypt da 5 certificados por semana y por
+  nombre exacto**, y cada dev rehecho pedía uno nuevo porque vivía en
+  `/var/lib/tailscale/certs/` del droplet destruido. El sexto dev de la semana nacía con
+  nodo, serve y unidad en verde, y el móvil colgado en el handshake TLS contra un
+  `429 rateLimited`. Se leyó como «una falla de Tailscale»; no lo era. tailscaled
+  **reutiliza** el par que encuentre en ese directorio si la cadena valida contra las
+  raíces de Let's Encrypt y no ha caducado (leído en su `feature/acme/certstore.go`),
+  y sólo renueva, en segundo plano, a los 2/3 de la vida. O sea que se pide **una** vez
+  y viaja; rehacer el dev pasa a costar 0 emisiones.
+  ⚠ Sólo se pide si alguien escribe `CWEB_TS_ESQUEMA=https`: sin certificado en el
+  llavero la app publica por `http`, que se ve pero **no se instala** en el móvil
+  (Android exige contexto seguro para «Añadir a pantalla de inicio»). El esquema por
+  defecto lo decide el dato, no una constante.
+  ⚠ **No visto en vivo con un certificado real**: Let's Encrypt no reabre hasta el
+  2026-09-12 a las 20:03 UTC. Los pasos y lo que se espera en cada uno están en
+  `claude-code-webapp-mobile/docs/pendiente-verificar.md`. Lo probado: 22 tests allí y
+  `tests/test_entornos_recoger.py` aquí.
+- **`do_droplet.py` lee el llavero del DISCO, no sólo de la foto del entorno.** Desde el
+  2026-09-11 `load_env()` carga también `~/.config/dev-secrets.env` (rellena lo que
+  falte; el entorno real manda). Antes, una variable escrita en el llavero **después**
+  de arrancar el bot era invisible para todo `launch` que saliera del bot hasta
+  reiniciarlo, y por SSH la misma orden sí la veía: el hueco de `reiniciar_servicios`
+  por la otra punta. El primer caso concreto era el certificado: enviado al mini con
+  `llavero enviar`, el siguiente `launch dev` desde el bot habría nacido sin él y
+  pedido otro a Let's Encrypt sin decir nada.
 - **Mover secretos entre máquinas: `llavero comparar|enviar|traer|olvidar`.** `traer`
   sólo **añade** (nunca pisa un valor local salvo `--pisar`), `enviar` sólo **mezcla**, y
   borrar es un comando **aparte** — para que borrar no pueda ser efecto secundario de
@@ -812,6 +847,14 @@ Lo que hay que respetar:
   la laptop —un dev la rehace en 5 minutos, probado—. Es que es **la única siempre
   encendida**, y que rehacerla **le cambia la IP**: lo que apuntara a la vieja deja de
   resolver, y si el usuario está fuera de casa se queda sin mando mientras tanto.
+  ⚠ **«Siempre encendida» no quiere decir «nunca se rehace».** Dicho por el dueño el
+  2026-09-11: **el mini SÍ se rehace, desde el dev, cada vez que hay que cambiarle el
+  código**, igual que el dev se rehace desde el mini. Los dos son efímeros en ese
+  sentido —cada uno crea y destruye al otro, y eso es lo que permite actualizar el
+  código del otro—; lo que no cambia es que siempre hay **una** encendida. Consecuencia
+  para cualquier cosa nueva: **nada que esté sólo en el mini sobrevive**. Lo que tenga
+  que sobrevivir va en el llavero o en git, y si lo produce una máquina (el certificado
+  de la web móvil), vuelve al llavero con `entornos recoger` **antes** de rehacerla.
   "Borra todos los droplets", "limpia lo que quede" o cualquier barrido significan **las
   máquinas de trabajo**, nunca la de control. El mini sólo se destruye si el usuario lo
   pide **por su nombre y a propósito**. Si te lo encuentras en una lista que ibas a
@@ -968,6 +1011,17 @@ aprendió se anota donde corresponda.
   `post`, o si hay **dos** reinicios. Mover no es gratis: `hacer_lanzador` escribe la
   clave antes, así que un único reinicio al final tiene que seguir cubriendo ese caso.
   Va con su prueba, y la prueba tiene que fallar con el orden de hoy (R17).
+
+- **⏳ DEL USUARIO: pedir el PRIMER certificado de la web móvil y guardarlo, a partir del
+  2026-09-12 a las 20:03 UTC.** Anotado el **2026-09-11**. Hasta esa hora Let's Encrypt
+  contesta `429 rateLimited` para `dev.tail376e31.ts.net` (5 emisiones en 168 h), y no
+  hay forma de probar en vivo lo construido ese día (el certificado que viaja con la
+  flota; ver «Lo mínimo»). Los cuatro pasos, con lo que se espera ver en cada uno, están
+  en `claude-code-webapp-mobile/docs/pendiente-verificar.md`: pedirlo
+  (`CWEB_TS_ESQUEMA=https` + `tailscale` desde `/use cweb` + abrir la web), recogerlo
+  (`entornos recoger` en el dev, `llavero enviar mini`), rehacer el dev y comprobar en el
+  journal de tailscaled que **no** pide ninguno, y a los ~60 días volver a recoger el
+  renovado. Cuando se vea funcionar, se anota aquí y se borra este pendiente.
 
 - **⏳ DEL USUARIO: sacar los DATOS de un repo de git a un volumen (o a Spaces) de
   DigitalOcean.** Anotado el **2026-09-11**, pedido por el dueño con estas palabras: *«un

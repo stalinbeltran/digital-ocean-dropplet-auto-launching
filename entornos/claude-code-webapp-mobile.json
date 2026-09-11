@@ -2,13 +2,26 @@
   "descripcion": "La web de lectura en el movil. Su .env sale del llavero, no se copia entre maquinas.",
   "dir": "claude-code-webapp-mobile",
   "fichero": ".env",
-  "notas": "El nombre de destino NO lo elige quien transporta: lo declara quien consume. Aqui la variable se llama TS_AUTHKEY porque asi la lee scripts/tailscale-unir.mjs, y en el llavero se llama CWEB_TS_AUTHKEY porque services/claude-web.json declara env_prefix CWEB_. El 2026-09-10 se puso como TAILSCALE_AUTHKEY y no llegaba a ninguna parte: el secreto se quedaba en el llavero sin bajar al servicio, y la app arrancaba sin unirse al tailnet y sin un solo error.",
+  "notas": "El nombre de destino NO lo elige quien transporta: lo declara quien consume. Aqui la variable se llama TS_AUTHKEY porque asi la lee scripts/tailscale-unir.mjs, y en el llavero se llama CWEB_TS_AUTHKEY porque services/claude-web.json declara env_prefix CWEB_. El 2026-09-10 se puso como TAILSCALE_AUTHKEY y no llegaba a ninguna parte: el secreto se quedaba en el llavero sin bajar al servicio, y la app arrancaba sin unirse al tailnet y sin un solo error. `recoger` es el camino de VUELTA (desde el 2026-09-11): un comando, corrido en el dir del proyecto como el usuario de desarrollo, que imprime NOMBRE=valor en los nombres del PROYECTO; `entornos recoger` los traduce con este mismo mapa (nombre -> desde) y los escribe en el llavero de esta maquina. Solo viaja lo declarado aqui; lo que imprima de mas se ignora y se dice. Hoy recoge el certificado TLS de la web movil, que tailscaled emite en el dev y tiene que sobrevivirlo.",
+  "recoger": "node scripts/cweb.mjs cert exportar",
   "variables": [
     {
       "nombre": "TS_AUTHKEY",
       "desde": "CWEB_TS_AUTHKEY",
       "obligatoria": false,
       "porque": "une el nodo al tailnet. Opcional porque el install del servicio avisa y NO aborta si falta: sin ella hay que hacer el login por enlace a mano, pero la maquina sirve."
+    },
+    {
+      "nombre": "TS_CERT_B64",
+      "desde": "CWEB_TS_CERT_B64",
+      "obligatoria": false,
+      "porque": "el certificado con el que se publica por https, para no pedir uno por cada dev (5 por semana y por nombre en Let's Encrypt). Lo coloca el install antes del serve si vale para el nombre del nodo. Sin el, la app publica por http."
+    },
+    {
+      "nombre": "TS_KEY_B64",
+      "desde": "CWEB_TS_KEY_B64",
+      "obligatoria": false,
+      "porque": "la clave privada del certificado de arriba. Los dos o ninguno: tailscaled exige el par."
     },
     {
       "nombre": "CWEB_PORT",

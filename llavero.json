@@ -68,6 +68,16 @@
       "porque": "auth key de Tailscale de la web de lectura en el movil. El prefijo CWEB_ ES el mecanismo: services/claude-web.json declara env_prefix CWEB_, asi que aqui va con prefijo y llega como TS_AUTHKEY. Opcional porque el install del servicio avisa y no aborta si falta. CADUCA a los 90 dias como maximo."
     },
     {
+      "nombre": "CWEB_TS_CERT_B64",
+      "obligatoria": false,
+      "porque": "el certificado TLS (cadena PEM en base64, una linea) con el que tailscaled publica la web movil por https. VIAJA en vez de pedirse en cada dev porque Let's Encrypt da 5 por semana y por nombre exacto, y cada dev rehecho pedia uno nuevo (medido el 2026-09-11: el sexto dev de la semana nacia con todo verde y el movil colgado en el handshake TLS). tailscaled reutiliza el par que encuentre en /var/lib/tailscale/certs/. Lo produce el dev (`cweb cert exportar`) y lo recoge `entornos recoger`; lo coloca el install de claude-web antes del serve. Opcional: sin el, la app publica por http, que se ve pero no se instala en el movil."
+    },
+    {
+      "nombre": "CWEB_TS_KEY_B64",
+      "obligatoria": false,
+      "porque": "la clave privada del certificado de arriba, base64 en una linea. Sin ella el certificado no sirve (tailscaled exige los DOS ficheros). Viaja como ya viajan la clave SSH de la flota y la authkey: solo sirve para suplantar a dev.<tailnet>.ts.net, que solo existe dentro de la tailnet."
+    },
+    {
       "nombre": "FVW_WEB_TOKEN",
       "obligatoria": false,
       "porque": "token de la web app de foveal-vision. Si no viaja desde aqui, se regenera en cada dev y la direccion vieja deja de valer."

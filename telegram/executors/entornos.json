@@ -1,0 +1,10 @@
+{
+  "name": "entornos",
+  "descripcion": "Los .env de los proyectos de ESTA maquina, declarados en entornos/. `aplicar` los genera del llavero; `recoger` es el camino de vuelta: lleva AL llavero lo que un proyecto produjo y tiene que sobrevivir a la maquina (hoy, el certificado de la web movil, que Let's Encrypt solo da 5 veces por semana). Despues de `recoger`, `llavero enviar <otra>` para que la otra maquina tambien lo tenga. Solo imprime NOMBRES, nunca valores.",
+  "ejemplos": [
+    "list",
+    "recoger",
+    "aplicar --entorno claude-code-webapp-mobile"
+  ],
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/do_droplet.py entornos {{input}} 2>&1; true"
+}

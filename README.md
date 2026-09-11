@@ -686,7 +686,7 @@ El diseño entero está en [docs/flota-simetrica.md](docs/flota-simetrica.md).
 | | **mini** | **dev** |
 |---|---|---|
 | talla | 512 MB (`s-1vcpu-512mb-10gb`), 4 $/mes | 2 vCPU / 4 GB, 24 $/mes |
-| vida | siempre encendida, tag `control` | desechable, tag `ephemeral` |
+| vida | siempre hay una encendida, tag `control`; se rehace **desde el dev** cuando hay que cambiarla | desechable, tag `ephemeral`; se rehace desde el mini |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
 | Claude Code | **no** — en 512 MB lo mata el kernel | sí |
 | llavero, repos, clave de flota, crear/destruir | **iguales** | **iguales** |
@@ -815,7 +815,10 @@ lanzar   destroy dev --yes   (al Lanzador)
 sólo una de varias, por nombre: `lanzar destroy dev-02 --yes`.
 
 ⚠️ **Y el mini sigue sin destruirse en ninguna limpieza**, pero por otro motivo: ya no es
-que sea la única con privilegios, es que es **la única siempre encendida**.
+que sea la única con privilegios, es que es **la única siempre encendida**. Lo que no
+quiere decir que nunca se rehaga: se rehace **desde el dev** cuando hay que cambiarle el
+código, y por eso nada que esté sólo en el mini sobrevive. Lo que tenga que sobrevivir va
+en el llavero o en git.
 
 ## Los `.env` de varios proyectos: `entornos/`
 
@@ -856,6 +859,35 @@ Dos reglas hacen seguro el «en los dos sentidos»: **`traer` sólo añade** (nu
 valor local, salvo `--pisar NOMBRE`) y **la dirección la eliges tú**. Ninguno borra jamás:
 para eso está `llavero olvidar`, un comando aparte, para que borrar no pueda ser efecto
 secundario de sincronizar.
+
+
+### El camino de vuelta: `entornos recoger`
+
+`aplicar` va del llavero al `.env` del proyecto. **`recoger` va al revés**: lo que un
+proyecto *produce* en una máquina y tiene que sobrevivirla vuelve al llavero. El entorno
+declara `recoger`, un comando que se corre en el directorio del proyecto e imprime
+`NOMBRE=valor` con los nombres del proyecto; el lanzador lo traduce con el mismo mapa
+`nombre` → `desde` y lo escribe en el llavero de esta máquina, **pisando** (el productor es
+la fuente). Sólo viaja lo declarado; lo que el comando imprima de más se ignora y se dice.
+
+```bash
+# dentro de la máquina que lo produjo
+python3 scripts/do_droplet.py entornos recoger
+python3 scripts/do_droplet.py llavero enviar mini      # y a la otra, o muere con ésta
+```
+
+Hoy lo usa un solo entorno, y es el motivo de que exista: el **certificado TLS de la
+web móvil** (`claude-code-webapp-mobile`, variables `CWEB_TS_CERT_B64` y
+`CWEB_TS_KEY_B64`). Medido el 2026-09-11: Let's Encrypt da **5 certificados por semana y
+por nombre exacto**, y cada dev rehecho pedía uno nuevo porque vivía en el droplet
+destruido; el sexto dev de la semana nacía con todo en verde y el móvil colgado en el
+handshake TLS. tailscaled reutiliza el par que encuentre en `/var/lib/tailscale/certs/`,
+así que se pide una vez, se recoge, y cada dev nuevo lo coloca antes de publicar. El
+detalle está en el README de esa app, § «Y cómo se recupera».
+
+⚠ Sin certificado en el llavero la app publica por `http`, que se ve pero no se instala
+en el móvil. Para pedir el primero: `CWEB_TS_ESQUEMA=https` en el `.env`, una vez.
+Desde Telegram: ejecutor `entornos` (`recoger`, `aplicar …`, `list`).
 
 ## Recuperar los tokens desde cero
 
