@@ -504,7 +504,17 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   ⚠ Al migrar, en una máquina de la flota `~/.ssh/do_droplet` es **sólo** la clave de Vast (la
   de DigitalOcean es `do_flota`), así que ahí se **renombra** y la clave sigue registrada en
   Vast sin tocar nada. **En la laptop no**: ahí `do_droplet` es la clave de DigitalOcean de
-  verdad, y moverla deja la máquina sin acceso.
+  verdad, y moverla deja la máquina sin acceso. Hecho el 2026-09-11 en `mini` y `dev`, con la
+  clave verificada todavía marcada en `vast_instance.py keys`.
+  ⚠⚠ **Y separar las rutas destapó un hueco que la coincidencia tapaba: `launch` de Vast no
+  comprobaba la clave.** Alquilaba y luego te decía «entra con `-i ~/.ssh/vast`», un fichero
+  que en una máquina ya existente no está. No se notaba porque el `post` del tipo dejaba la
+  clave hecha **y registrada** en cada máquina de la flota; al mover la ruta, ese apoyo
+  desaparece y el primer `launch` habría alquilado una instancia inaccesible. Desde entonces
+  `asegurar_clave_registrada()` corre **dentro de `alquilar()`** —y no en `cmd_launch`— porque
+  hay **dos** sitios que gastan (`launch` y el barrido) y un guard que hay que recordar en cada
+  sitio nuevo es una nota, no un arreglo. Vast fija la lista de claves **al crear** la
+  instancia, así que registrarla después no sirve de nada.
   Que la de flota valga no es adivinar: está registrada por definición y `DO_SSH_KEYS` vacío
   mete todas las de la cuenta en cada droplet nuevo, así que es la clave que el droplet de
   enfrente acepta seguro.

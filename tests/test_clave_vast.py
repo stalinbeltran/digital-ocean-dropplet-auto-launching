@@ -79,12 +79,42 @@ def test_el_env_example_no_las_vuelve_a_igualar():
     return fallos
 
 
+def test_no_se_alquila_sin_clave_registrada():
+    """`alquilar()` comprueba la clave ANTES del PUT que cuesta dinero.
+
+    Va sobre el codigo fuente por lo mismo que su hermano en
+    `test_clave_de_entrada.py`: ejercitarlo de verdad exigiria alquilar una
+    maquina. Y va dentro de `alquilar()` y no de `cmd_launch()` a proposito,
+    porque hay DOS sitios que gastan -`launch` y el barrido- y un guard que hay
+    que recordar en cada sitio nuevo es una nota, no un arreglo.
+
+    `launch` no lo hacia, y no se notaba porque el `post` de los tipos dejaba la
+    clave hecha y registrada en cada maquina de la flota. Al separar la ruta de
+    Vast de la de DigitalOcean ese apoyo desaparece.
+    """
+    fuente = (ROOT / "scripts" / "vast_instance.py").read_text(encoding="utf-8")
+    corte = fuente.index("def alquilar(")
+    # Hasta la siguiente definicion de nivel superior: si se leyera el fichero
+    # entero, una llamada en cualquier otra funcion daria el test por bueno.
+    fin = fuente.index("\ndef ", corte + 1)
+    cuerpo = fuente[corte:fin]
+    try:
+        freno = cuerpo.index("asegurar_clave_registrada(")
+    except ValueError:
+        return ["alquilar() ya no comprueba la clave antes de gastar"]
+    gasto = cuerpo.index('api("PUT", f"/api/v0/asks/')
+    if freno > gasto:
+        return ["la comprobacion de la clave corre DESPUES del PUT que alquila"]
+    return []
+
+
 def main():
     pruebas = [
         ("las dos rutas por defecto son distintas", test_las_dos_rutas_son_distintas),
         ("la de Vast no se llama como una de DO", test_vast_no_apunta_a_la_ruta_de_do),
         ("el .env.example no las vuelve a igualar",
          test_el_env_example_no_las_vuelve_a_igualar),
+        ("no se alquila sin clave registrada", test_no_se_alquila_sin_clave_registrada),
     ]
     total = 0
     for nombre, prueba in pruebas:

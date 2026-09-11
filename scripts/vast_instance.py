@@ -867,6 +867,34 @@ def cmd_keys(args: argparse.Namespace) -> None:
         log(f"{str(k.get('id')):>10}  {pub[:52]}...{marca}")
 
 
+def asegurar_clave_registrada(comentario: str = "") -> None:
+    """Que la clave de esta maquina exista y este en la cuenta, antes de alquilar.
+
+    Hermano de `comprobar_clave_de_entrada()` en `do_droplet.py`, y por el mismo
+    motivo: una maquina en la que no se puede entrar existe, factura y no sirve,
+    y eso hay que saberlo ANTES de gastar y no despues.
+
+    `launch` no lo hacia, y no se notaba porque el `post` de los tipos corre
+    `register-key` al crear cada maquina de la flota, asi que la clave ya estaba
+    hecha y registrada. Al separar la ruta de Vast de la de DigitalOcean
+    (2026-09-11) ese apoyo desaparece: en una maquina que ya existia,
+    `~/.ssh/vast` no esta, y sin esto el primer `launch` alquilaria una instancia
+    y luego el `ssh -i ~/.ssh/vast` fallaria por un fichero que no existe -- con
+    la maquina ya facturando.
+
+    Es idempotente y cuesta una lectura: si la clave esta y esta registrada, no
+    hace nada ni dice nada.
+    """
+    pub = asegurar_clave_local(comentario=comentario or socket.gethostname())
+    mio = material(pub)
+    for k in claves_cuenta():
+        existente = k.get("public_key") or k.get("ssh_key") or ""
+        if material(existente) == mio:
+            return
+    api("POST", "/api/v0/ssh/", {"ssh_key": pub})
+    log(f"Clave de esta maquina registrada en Vast.ai ({clave_publica()}).")
+
+
 def cmd_register_key(args: argparse.Namespace) -> None:
     """Sube la pública de esta máquina a la cuenta de Vast.ai.
 
@@ -1017,7 +1045,13 @@ def alquilar(oferta: dict, label: str, image: str, disk_gb: float) -> int:
     Todo lo demás de este fichero es de lectura. Aquí empieza la facturación por
     segundo, y por eso quien llama tiene que tener ya escrito su camino de
     destrucción antes de llamar.
+
+    Y por eso la última comprobación gratis va AQUÍ y no en `cmd_launch`: éste es
+    el embudo por el que pasa todo el gasto —lo llaman `launch` y el barrido—, y
+    un guard que hay que acordarse de poner en cada sitio nuevo es una nota, no
+    un arreglo.
     """
+    asegurar_clave_registrada(comentario=label)
     cuerpo = {
         "image": image,
         "disk": disk_gb,
