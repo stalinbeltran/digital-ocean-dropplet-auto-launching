@@ -476,11 +476,23 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
     pero la de la flota **sí está registrada**, se cambia a ella en vez de morir: no se muere
     teniendo delante una clave que sí entra.
   ⚠ **Y la segunda capa es la que resolvió el caso, no la primera**, que es justo lo que uno no
-  adivina: en el dev, `~/.ssh/do_droplet` **existía** —creado a las 18:22 con `keygen`,
-  comentario `dev`, y **nunca registrado en la cuenta**—. O sea que «si no existe, cae a la
-  flota» no le servía de nada: el fichero estaba, y era el equivocado. **Un fichero que existe
-  y no autentica es tan inservible como uno que falta**, y mirando el disco no se distinguen;
-  se distinguen preguntándole a la cuenta.
+  adivina: en el dev, `~/.ssh/do_droplet` **existía** y **nunca estuvo registrado en la
+  cuenta**. O sea que «si no existe, cae a la flota» no le servía de nada: el fichero estaba, y
+  era el equivocado. **Un fichero que existe y no autentica es tan inservible como uno que
+  falta**, y mirando el disco no se distinguen; se distinguen preguntándole a la cuenta.
+  ⚠⚠ **Y de dónde sale ese fichero, que es lo peor de todo: lo crea el `post` del tipo.**
+  `VAST_SSH_KEY_FILE` ([scripts/vast_instance.py](scripts/vast_instance.py)) tiene por defecto
+  **la misma ruta** que `DO_SSH_KEY_FILE`: `~/.ssh/do_droplet`. Los `post` de `types/dev.json`
+  y `types/mini.json` corren `vast_instance.py register-key`, que genera ese par y lo registra
+  **en Vast.ai y no en DigitalOcean**. Visto en vivo al recrear el mini el 2026-09-11: «No hay
+  clave en /home/deploy/.ssh/do_droplet; generando un par ed25519 … Clave registrada en
+  Vast.ai», comentario `mini`. O sea que **toda máquina de la flota tiene ahí un fichero que
+  existe y no sirve para entrar en un droplet**, y por eso el caso no era una casualidad de un
+  dev: era el estado normal. Dos proveedores compartiendo una ruta por defecto es un accidente,
+  no un diseño —los dos scripts no comparten código a propósito, pero sí heredaron el mismo
+  literal—. Cambiar el defecto de Vast a algo como `~/.ssh/vast` es **pendiente del usuario**:
+  se autoarregla solo (`asegurar_clave_local` registra la nueva), pero las instancias de Vast
+  alquiladas **antes** no aceptarán la nueva, porque su lista se fija al crearlas.
   Que la de flota valga no es adivinar: está registrada por definición y `DO_SSH_KEYS` vacío
   mete todas las de la cuenta en cada droplet nuevo, así que es la clave que el droplet de
   enfrente acepta seguro.

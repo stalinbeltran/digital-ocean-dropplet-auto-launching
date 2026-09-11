@@ -1126,12 +1126,17 @@ def comprobar_clave_de_entrada(keys: list[dict]) -> None:
 
     Y si la clave elegida no entra pero la de la flota **sí está registrada**,
     se cambia a ella en vez de morir. Esto no es un lujo: es el caso real del
-    2026-09-11. En el dev, `~/.ssh/do_droplet` **existía** —creado a las 18:22
-    con `keygen`, comentario `dev`, y nunca registrado en la cuenta—, así que
-    "si no existe, cae a la flota" no le servía de nada: el fichero estaba, y
-    era el fichero equivocado. Un fichero que existe y no autentica es tan
-    inservible como uno que falta, y aquí sí se puede distinguir, porque
-    tenemos delante la lista de claves que el droplet va a llevar.
+    2026-09-11. En el dev, `~/.ssh/do_droplet` **existía** y nunca estuvo
+    registrado en la cuenta, así que "si no existe, cae a la flota" no le
+    servía de nada: el fichero estaba, y era el fichero equivocado. Un fichero
+    que existe y no autentica es tan inservible como uno que falta, y aquí sí
+    se puede distinguir, porque tenemos delante la lista de claves que el
+    droplet va a llevar.
+
+    ⚠ Y lo crea el `post` del propio tipo, o sea que no es la casualidad de una
+    máquina sino el estado normal de todas: `VAST_SSH_KEY_FILE` de
+    `vast_instance.py` tiene por defecto LA MISMA RUTA que `DO_SSH_KEY_FILE`, y
+    su `register-key` genera ese par y lo registra en Vast.ai, no aquí.
 
     Lo que NO hace es bloquear cuando no puede saber. Sin la `.pub` al lado no
     se puede comparar el material, y negarse ahí dejaría sin lanzar a quien
