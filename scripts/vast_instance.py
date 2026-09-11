@@ -96,7 +96,21 @@ DEFAULTS = {
     # factura por segundo y estas máquinas viven minutos: un mensual no dice
     # nada. 0,50 $/h deja pasar toda la gama de medir y para una H200 a 2,07.
     "VAST_MAX_PRICE_HOURLY": "0.50",
-    "VAST_SSH_KEY_FILE": str(Path.home() / ".ssh" / "do_droplet"),
+    # Clave propia, y la ruta importa. Hasta el 2026-09-11 esto valia
+    # `~/.ssh/do_droplet`, la MISMA que el defecto de `DO_SSH_KEY_FILE`, y estaba
+    # escrito como decision ("por defecto la misma que la de DigitalOcean"). Era
+    # razonable cuando los droplets se entraban con esa clave; dejo de serlo al
+    # llegar la CLAVE DE FLOTA, que movio a DigitalOcean a `~/.ssh/do_flota` y
+    # dejo `do_droplet` como un fichero que EXISTE y no autentica contra DO.
+    # Lo que costo: el `post` de los tipos corre `register-key`, que generaba ese
+    # par y lo registraba en Vast, asi que toda maquina de la flota nacia con una
+    # trampa en la ruta por defecto de DigitalOcean. El 2026-09-11 un `launch
+    # mini` desde el bot de un dev murio ahi -su entorno no traia
+    # `DO_SSH_KEY_FILE`, cayo al defecto, el fichero estaba y la cuenta de DO no
+    # lo conocia-, y por eso "si no existe, usa la de la flota" no arreglaba nada.
+    # Una ruta por proveedor: los dos scripts no comparten codigo a proposito, y
+    # tampoco deben compartir ficheros.
+    "VAST_SSH_KEY_FILE": str(Path.home() / ".ssh" / "vast"),
     "VAST_SSH_USER": "root",
     # Cuánto se espera a que la instancia arranque. Vast tiene que descargar la
     # imagen Docker en la máquina del host, y eso depende de la red del host, no
