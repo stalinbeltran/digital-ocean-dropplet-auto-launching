@@ -27,6 +27,13 @@ Se enlaza, no se copia.
 aquí — sea cual sea el repo desde el que se lanzó. Un reporte guardado en el repo que lo dispara
 es invisible para quien clona otro.
 
+⚠ **Y lo que se pide y lo que se va descubriendo, según pasa, va a la
+[bitácora](https://github.com/stalinbeltran/estudios-redes-neuronales/tree/main/bitacora)** de ese
+mismo repo, aunque el trabajo sea de aquí y aunque no acabe en ningún estudio. **Sólo se añaden
+filas; una escrita no se toca nunca más**, ni para corregirla: si resultó falsa, se añade otra que
+lo diga. Existe por lo del 2026-09-11, que está en su primera entrada: reconstruir qué se había
+pedido la tarde anterior costó una mañana, porque los commits cuentan el resultado y no el camino.
+
 ## Objetivos del proyecto
 
 Por qué existe esto y contra qué se juzga cualquier cambio. **Esta lista se amplía**: cuando
@@ -857,19 +864,20 @@ aprendió se anota donde corresponda.
   ha usado en meses y uno que es el freno de una emergencia se parecen mucho (`apagar-do`
   y `apagar-vast` son exactamente eso). Si te lo pide, lo que sí puedes aportar es el
   dato: cuáles existen, qué repo declara cada uno y cuáles aparecen en el log de mensajes.
-- **⏳ DEL USUARIO: la `CWEB_TS_AUTHKEY` no es Ephemeral, y por eso se acumulan nodos
-  muertos.** Medido el 2026-09-10 en un dev recién nacido: el `url` de `claude-web` falló
-  con `no es EPHEMERAL (ver .env.example)`, y `tailscale status` enseñaba `dev` (offline
-  17 h), `dev-1` (offline 34 min) y el nuevo entrando como **`dev-2`**.
-  `.env.example` ya lo dice (Reusable + Ephemeral + 90 días máximo); lo que falta es que
-  la key **puesta** cumpla las tres. Sin Ephemeral, `pre_destroy` no basta: aunque el
-  `tailscale logout` corra, el nodo sigue registrado y el nombre sigue ocupado.
-  El coste concreto no es cosmético: **la URL de la PWA del móvil apunta a `dev`**, así
-  que cada nombre que se va (`dev-1`, `dev-2`, …) la deja muerta.
-  Lo tiene que hacer el usuario en el panel de Tailscale: generar la key con las tres
-  propiedades, ponerla en `CWEB_TS_AUTHKEY`, mandarla con `push-secret`, y **borrar los
-  nodos muertos** para liberar el nombre `dev`.
-  ⚠ Aparte, y ya arreglado: el dev anterior nació como `dev-1` porque quien lo destruyó
-  fue un mini que estaba en `ab18d1a`, anterior a `8e3efc6` (el commit de `pre_destroy`).
-  **`pre_destroy` corre en la máquina que DESTRUYE**, así que un destructor con el repo
-  viejo no recoge nada y no lo dice.
+- **✅ CERRADO el 2026-09-11: la `CWEB_TS_AUTHKEY` SÍ es Ephemeral.** Se deja escrito porque
+  el pendiente que había aquí **afirmaba lo contrario**, y al vivir en este fichero se
+  recargaba en cada sesión y se le repetía al usuario como un hecho.
+  **`nodo.mjs` nunca afirmó eso.** Lo que emite es un aviso de **deriva de nombre** («este
+  nodo no se llama `dev`, se llama `dev-1`») y, al final, una nota **condicional** que dice
+  literalmente *no toques la authkey* salvo que un nodo **recién caído** siga registrado al
+  día siguiente. Ese condicional se resumió aquí como afirmación plana.
+  La causa real de los `dev-1`/`dev-2` ya estaba identificada en el propio pendiente: quien
+  destruyó corría `ab18d1a`, anterior a `8e3efc6`, así que **el `tailscale logout` nunca
+  llegó a ejecutarse**. Comprobado el 2026-09-11 con `pre_destroy` ya en las dos máquinas:
+  tras destruir y rehacer el dev, la tailnet tenía sólo `dev` (online) y el móvil, sin un
+  solo nodo muerto, y el nuevo cogió el nombre `dev`.
+  Lo que se queda como regla, porque vale para cualquier repo: **un aviso condicional no se
+  resume como afirmación.** «Sólo si X, entonces Y» escrito como «Y» es un hecho falso que
+  además se reinyecta en cada sesión. Se copia con su condición o no se copia.
+  Y lo que sigue siendo verdad y no hay que perder: **`pre_destroy` corre en la máquina que
+  DESTRUYE**, así que un destructor con el repo viejo no recoge nada y no lo dice.
