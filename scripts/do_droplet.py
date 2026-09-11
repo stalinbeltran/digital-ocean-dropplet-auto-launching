@@ -2820,7 +2820,7 @@ def build_provision_script(
     return "\n".join(parts) + "\n"
 
 
-def reiniciar_servicios(ip: str, port: int, services: list[str]) -> None:
+def reiniciar_servicios(ip: str, port: int, services: list[dict]) -> None:
     """Reinicia los servicios instalados para que vean el entorno FINAL.
 
     ⚠⚠ ESTO NO ES HIGIENE, es la diferencia entre una máquina que funciona y una
@@ -2841,6 +2841,25 @@ def reiniciar_servicios(ip: str, port: int, services: list[str]) -> None:
 
     Un fallo aquí no aborta nada: para cuando esto corre, la máquina ya está
     hecha, y tumbar el lanzamiento por un `systemctl` sale peor que avisar.
+
+    ⚠⚠ ...Y ESO ERA FALSO HASTA EL 2026-09-11 POR LA TARDE, en la misma función
+    que lo afirma. `services` son los **dicts** de `selected_services()`, no
+    nombres, y esto hacía `shq(s)` sobre el dict: `AttributeError`. La lista por
+    comprensión está **fuera** del `try`, así que no avisaba: abortaba el
+    `launch` con traceback, justo entre `hacer_lanzador()` y `ejecutar_post()`.
+
+    Medido ese día en el dev nacido a las 15:20 UTC -aprovisionado por un mini
+    que YA tenía este arreglo-: la clave de flota se escribió (15:26:06), ningún
+    servicio se reinició, y **los dos `post` del tipo no corrieron**. Eso último
+    es lo que lo prueba y lo que más costó: el `.env` no tiene la cabecera de
+    `entornos aplicar`, y la clave del dev **no quedó registrada en Vast**, o sea
+    la máquina podía alquilar instancias en las que no podía entrar.
+
+    La lección, que es la del proyecto sobre el código de salida aplicada a un
+    arreglo: se comprueba el **artefacto** (¿se reinició el unit? ¿corrieron los
+    `post`?), no que la función exista. Y la anotación decía `list[str]` desde el
+    primer día: la pista estaba escrita y no la leyó nadie, porque nada la
+    ejecutaba. Por eso ahora hay test.
     """
     if not services:
         return
@@ -2849,11 +2868,16 @@ def reiniciar_servicios(ip: str, port: int, services: list[str]) -> None:
         [
             "set -u",
             *[
-                f'systemctl restart {shq(s)} 2>/dev/null'
-                f' && echo "  {s}: reiniciado"'
-                f' || echo "  AVISO: {s}: no se pudo reiniciar; puede que le falten'
+                f'systemctl restart {shq(u)} 2>/dev/null'
+                f' && echo "  {u}: reiniciado"'
+                f' || echo "  AVISO: {u}: no se pudo reiniciar; puede que le falten'
                 f' variables escritas despues de arrancar."'
-                for s in services
+                # `services` son los DICTS de selected_services(), no nombres: el
+                # unit es svc["name"] (el mismo que usa instalar_servicio). Pasar
+                # el dict a shq() reventaba con AttributeError -y FUERA del try-,
+                # abortando el launch justo despues de escribir la clave. Ver el
+                # aviso del final de este docstring.
+                for u in (svc["name"] for svc in services)
             ],
         ]
     )

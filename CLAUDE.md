@@ -871,6 +871,24 @@ Lo que está decidido que hay que hacer y todavía no se ha hecho. **No lo hagas
 cuenta**: cada uno dice de quién es. Cuando se cierre, se borra de aquí y lo que se
 aprendió se anota donde corresponda.
 
+- **⏳ DECIDIR: `ejecutar_post` corre DESPUÉS de `reiniciar_servicios`, y el último
+  fichero que se escribe queda sin releer.** Anotado el **2026-09-11**, al arreglar el
+  `AttributeError` de `reiniciar_servicios` (ver su docstring). El orden es
+  `hacer_lanzador` → `reiniciar_servicios` (`do_droplet.py:2949`) → vuelve →
+  `ejecutar_post` (`:1211`). Y uno de los `post` de `types/dev.json` **y** de
+  `types/mini.json` es `entornos aplicar`, que **reescribe el `.env` del bot** y
+  **no reinicia nada** (`_entornos_aplicar` no tiene ningún `systemctl`). El bot lee
+  su `.env` al arrancar.
+  ⚠ **Sospecha, NO comprobada:** hoy puede que no dé síntoma, porque los valores que
+  escribe `entornos aplicar` salen de las mismas `TG_*`/`TGL_*` que ya tenía. Pero es
+  **la misma clase de fallo** que el docstring de `reiniciar_servicios` dice cerrar —
+  «el entorno de un proceso es una foto de cuando arrancó»— y aquí es el `.env`, no el
+  entorno. Lo que hace falta es **medirlo**, no razonarlo.
+  **Qué hay que decidir** (y no improvisar): si el reinicio se mueve a después de los
+  `post`, o si hay **dos** reinicios. Mover no es gratis: `hacer_lanzador` escribe la
+  clave antes, así que un único reinicio al final tiene que seguir cubriendo ese caso.
+  Va con su prueba, y la prueba tiene que fallar con el orden de hoy (R17).
+
 - **⏳ DEL USUARIO: sacar los DATOS de un repo de git a un volumen (o a Spaces) de
   DigitalOcean.** Anotado el **2026-09-11**, pedido por el dueño con estas palabras: *«un
   repo no es buen lugar»*. Es la condición para poder quitar `foveal-vision-data` del mini,

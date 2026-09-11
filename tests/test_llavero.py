@@ -198,12 +198,24 @@ def test_tipos_piden_llavero(mod):
 
 
 def test_paridad_de_tipos(mod):
-    """mini y dev solo pueden diferir en lo que esta permitido diferir."""
+    """mini y dev solo pueden diferir en lo que esta permitido diferir.
+
+    ⚠ `repos` dejo de ser un campo de paridad el 2026-09-11, a peticion del
+    dueno: **la simetria es de CAPACIDADES, no de carga**. Levantar, destruir y
+    hablar con la otra maquina lo dan el llavero, la clave de flota y el repo del
+    lanzador -que llega por `make_launcher`, comprobado abajo-; nunca un repo de
+    trabajo, porque `provision` clona desde GitHub EN la maquina destino y la
+    lista sale de `types/dev.json`. Quitar un repo del mini no le quita nada al
+    dev que pare.
+
+    Pero aflojar de mas es el fallo caro, asi que en vez de dejar de mirar se
+    fija la regla NUEVA, que tiene dos mitades y las dos importan.
+    """
     mini, dev = mod.load_type("mini"), mod.load_type("dev")
     # Talla, plantilla de arranque, tag y bot. Todo lo demas tiene que ser igual:
     # esa es la propiedad entera de la flota simetrica.
     permitidas = {"size", "cloud_init", "tag", "services", "descripcion", "notas",
-                  "name", "post", "image"}
+                  "name", "post", "image", "repos"}
     fallos = []
     for campo in set(mini) | set(dev):
         if campo in permitidas:
@@ -211,8 +223,25 @@ def test_paridad_de_tipos(mod):
         if mini.get(campo) != dev.get(campo):
             fallos.append(
                 f"'{campo}' difiere: mini={mini.get(campo)!r} dev={dev.get(campo)!r}")
-    if sorted(mini.get("repos", [])) != sorted(dev.get("repos", [])):
-        fallos.append("los repos ya no son los mismos en mini y dev")
+
+    # Mitad 1: lo que el mini NO puede perder.
+    if "stalinbeltran/foveal-vision-data" not in mini.get("repos", []):
+        fallos.append(
+            "el mini perdio foveal-vision-data: scripts/errores.mjs del coordinador "
+            "escribe ahi el log de errores del bot y devuelve null EN SILENCIO si el "
+            "repo no esta, y el mini es la unica maquina siempre encendida")
+    # Mitad 2: lo que el mini NO puede recuperar. En el mini no se desarrolla
+    # nunca, no hay venv, y esos repos solo aportaban ejecutores que fallan.
+    TRABAJO = {"stalinbeltran/foveal-vision",
+               "stalinbeltran/image-text-sample-generator",
+               "stalinbeltran/estudios-redes-neuronales"}
+    colados = TRABAJO & set(mini.get("repos", []))
+    if colados:
+        fallos.append(f"el mini volvio a clonar repos de trabajo: {sorted(colados)}")
+    if not TRABAJO <= set(dev.get("repos", [])):
+        fallos.append(
+            f"al dev le faltan repos de trabajo: {sorted(TRABAJO - set(dev.get('repos', [])))}"
+            " -- ahi SI se desarrolla")
     if not mini.get("make_launcher") or not dev.get("make_launcher"):
         fallos.append("alguna de las dos dejo de ser lanzadora")
     # Y la diferencia que TIENE que seguir existiendo: dos bots distintos, o una
