@@ -1095,6 +1095,21 @@ def lista_unida(de_args: list[str], del_tipo) -> list[str]:
     return salida
 
 
+def material_de_la_flota_registrado(keys: list[dict]) -> bool:
+    """La clave de la flota está aquí Y está entre las que el droplet llevará.
+
+    Las dos mitades hacen falta: tener el fichero no sirve si nadie registró la
+    pública, y estar registrada no sirve si aquí no está la privada.
+    """
+    pub = ruta_publica(ruta_clave_flota())
+    if not ruta_clave_flota().exists() or not pub.exists():
+        return False
+    trozos = pub.read_text(encoding="utf-8").strip().split()
+    if len(trozos) < 2:
+        return False
+    return any(k["public_key"].split()[1] == trozos[1] for k in keys)
+
+
 def comprobar_clave_de_entrada(keys: list[dict]) -> None:
     """Que la clave con la que se ENTRARÁ esté entre las que el droplet llevará.
 
@@ -1108,6 +1123,15 @@ def comprobar_clave_de_entrada(keys: list[dict]) -> None:
     Comparamos contra `selected_keys()`, que es exactamente la lista que se
     embebe en el droplet, no contra "las de la cuenta" en general: si alguien
     pone `DO_SSH_KEYS` a mano, la pregunta sigue siendo la correcta.
+
+    Y si la clave elegida no entra pero la de la flota **sí está registrada**,
+    se cambia a ella en vez de morir. Esto no es un lujo: es el caso real del
+    2026-09-11. En el dev, `~/.ssh/do_droplet` **existía** —creado a las 18:22
+    con `keygen`, comentario `dev`, y nunca registrado en la cuenta—, así que
+    "si no existe, cae a la flota" no le servía de nada: el fichero estaba, y
+    era el fichero equivocado. Un fichero que existe y no autentica es tan
+    inservible como uno que falta, y aquí sí se puede distinguir, porque
+    tenemos delante la lista de claves que el droplet va a llevar.
 
     Lo que NO hace es bloquear cuando no puede saber. Sin la `.pub` al lado no
     se puede comparar el material, y negarse ahí dejaría sin lanzar a quien
@@ -1131,6 +1155,20 @@ def comprobar_clave_de_entrada(keys: list[dict]) -> None:
         log(f"  AVISO: no entiendo {pub}, no puedo comprobar si esa clave entrará.")
         return
     if any(k["public_key"].split()[1] == trozos[1] for k in keys):
+        return
+    if material_de_la_flota_registrado(keys) and ruta_clave_flota() != privada:
+        # No se muere teniendo delante una clave que SÍ entra. Se cambia por el
+        # resto del proceso -`cfg()` lee el entorno, así que `ssh_command()` la
+        # usa sin que nadie más se entere- y se dice en voz alta: la variable de
+        # esa máquina sigue apuntando mal y eso hay que arreglarlo aparte.
+        os.environ["DO_SSH_KEY_FILE"] = str(ruta_clave_flota())
+        log(
+            f"  AVISO: {privada} no está registrada en la cuenta; se usa la\n"
+            f"         clave de la flota ({ruta_clave_flota()}), que sí lo está.\n"
+            "         Si esto sale de un servicio, su entorno arrancó sin"
+            " DO_SSH_KEY_FILE:\n"
+            "         'remoto <maquina> update' lo reinicia y deja de hacer falta."
+        )
         return
     die(
         f"La clave con la que se entraría NO está registrada en la cuenta:\n"

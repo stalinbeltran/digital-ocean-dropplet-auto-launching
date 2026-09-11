@@ -467,18 +467,26 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   **perfecto** —comprobado entrando en él con `~/.ssh/do_flota` desde la laptop: cloud-init
   `done`, `DEV_READY` puesto—, sólo que a medio hacer, porque `launch` muere antes de
   `provision`. **Lo que no valía era la clave elegida en el lado que lanza.**
-  Por eso la elección ya no depende del entorno: `fichero_clave_ssh()` usa la de
-  `DO_SSH_KEY_FILE` **si existe** y, si no existe, **cae a la clave de la flota**. No es
-  adivinar: la de flota está registrada en la cuenta por definición y `DO_SSH_KEYS` vacío mete
-  todas las de la cuenta en cada droplet nuevo, así que es la clave que el droplet de enfrente
-  acepta seguro; la otra era un fichero inexistente, que no autentica nada. Avisa una vez —no
-  en cada sonda— de que cayó.
-  Y `launch` comprueba **antes de crear** que esa clave esté entre las que el droplet llevará
-  (`comprobar_clave_de_entrada()`, local e instantánea, antes incluso de preguntarle a
-  GitHub). El fallo tenía que salir gratis: antes salía con la máquina creada, facturando y
-  sin nadie capaz de entrar a rematarla. **Cuando no puede saberlo —falta la `.pub`— avisa y
-  sigue**, por lo de siempre: no saber no es saber que va mal.
-  11 tests en `tests/test_clave_de_entrada.py`, uno de ellos sobre el **orden** dentro de
+  Por eso la elección ya no depende del entorno, y va en **dos** capas porque una no llegaba:
+  - `fichero_clave_ssh()` usa la de `DO_SSH_KEY_FILE` **si existe** y, si no existe, **cae a
+    la clave de la flota**. Es local e instantánea, que es lo que tiene que ser: por ahí pasa
+    todo el `ssh` del lanzador.
+  - `launch` comprueba **antes de crear** que esa clave esté entre las que el droplet llevará
+    (`comprobar_clave_de_entrada()`, antes incluso de preguntarle a GitHub). Y si no lo está
+    pero la de la flota **sí está registrada**, se cambia a ella en vez de morir: no se muere
+    teniendo delante una clave que sí entra.
+  ⚠ **Y la segunda capa es la que resolvió el caso, no la primera**, que es justo lo que uno no
+  adivina: en el dev, `~/.ssh/do_droplet` **existía** —creado a las 18:22 con `keygen`,
+  comentario `dev`, y **nunca registrado en la cuenta**—. O sea que «si no existe, cae a la
+  flota» no le servía de nada: el fichero estaba, y era el equivocado. **Un fichero que existe
+  y no autentica es tan inservible como uno que falta**, y mirando el disco no se distinguen;
+  se distinguen preguntándole a la cuenta.
+  Que la de flota valga no es adivinar: está registrada por definición y `DO_SSH_KEYS` vacío
+  mete todas las de la cuenta en cada droplet nuevo, así que es la clave que el droplet de
+  enfrente acepta seguro.
+  Lo demás, por lo de siempre: el aviso sale **una vez** y no en cada sonda; **cuando no se
+  puede saber —falta la `.pub`— avisa y sigue**, porque no saber no es saber que va mal.
+  13 tests en `tests/test_clave_de_entrada.py`, uno de ellos sobre el **orden** dentro de
   `cmd_launch`: el freno no puede acabar por debajo del acelerador.
 - **Una clave RECHAZADA no se arregla esperando, y ahora no se espera.** Un droplet sólo acepta
   las claves registradas **cuando se creó**, así que un `Permission denied` es definitivo. Tras

@@ -181,8 +181,58 @@ def test_compara_el_material_no_el_comentario(mod):
     return []
 
 
+def test_una_clave_que_existe_y_no_entra_cambia_a_la_flota(mod):
+    """EL caso real del 2026-09-11, y el que la caida por 'no existe' no cubria.
+
+    En el dev, `~/.ssh/do_droplet` SI existia -creado a las 18:22 con `keygen`,
+    comentario `dev`, jamas registrado en la cuenta-. O sea que el fichero
+    estaba, y era el fichero equivocado: tan inservible como si faltara, pero
+    indistinguible mirando el disco. Aqui si se distingue, porque tenemos la
+    lista de claves que el droplet va a llevar.
+    """
+    import os
+
+    fallos = []
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        conf = par(d, "do_droplet", MAT_OTRA, comentario="dev")
+        flo = par(d, "do_flota", MAT_FLOTA)
+        entorno(mod, conf, flo)
+        try:
+            mod.comprobar_clave_de_entrada(cuenta(MAT_FLOTA))
+        except Muerte as e:
+            fallos.append(f"murio teniendo delante una clave que si entra: {e}")
+            return fallos
+        # Y el cambio tiene que valer para el SSH que venga despues, no solo
+        # para el mensaje: si no, avisa y falla igual.
+        if str(flo) not in mod.ssh_command("10.0.0.1", 22):
+            fallos.append("aviso del cambio pero ssh_command sigue con la otra")
+        if os.environ.get("DO_SSH_KEY_FILE") != str(flo):
+            fallos.append("no dejo DO_SSH_KEY_FILE apuntando a la de la flota")
+        if not any("AVISO" in linea for linea in mod.salida):
+            fallos.append("cambio de clave en silencio")
+    return fallos
+
+
+def test_no_cambia_si_la_flota_tampoco_esta_registrada(mod):
+    """Tener el fichero de la flota no basta: si nadie registro la publica, no entra."""
+    fallos = []
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        conf = par(d, "do_droplet", MAT_OTRA)
+        flo = par(d, "do_flota", MAT_FLOTA)
+        entorno(mod, conf, flo)
+        try:
+            # En la cuenta hay una tercera clave: ni la configurada ni la flota.
+            mod.comprobar_clave_de_entrada(cuenta("AAAAterceraAAAA"))
+            fallos.append("dejo pasar con las DOS claves sin registrar")
+        except Muerte:
+            pass
+    return fallos
+
+
 def test_muere_si_la_clave_no_esta_en_la_cuenta(mod):
-    """El fallo del 2026-09-11, pero GRATIS: sin droplet creado."""
+    """Sin clave de flota que ofrecer, se muere. Pero GRATIS: sin droplet creado."""
     fallos = []
     with tempfile.TemporaryDirectory() as d:
         d = Path(d)
@@ -271,6 +321,10 @@ def main():
         ("ssh_command usa la clave elegida", test_ssh_command_usa_la_elegida),
         ("pasa si la clave esta en la cuenta", test_pasa_si_la_clave_esta_en_la_cuenta),
         ("compara el material, no el comentario", test_compara_el_material_no_el_comentario),
+        ("una clave que existe y no entra cambia a la flota",
+         test_una_clave_que_existe_y_no_entra_cambia_a_la_flota),
+        ("no cambia si la flota tampoco esta registrada",
+         test_no_cambia_si_la_flota_tampoco_esta_registrada),
         ("muere si la clave no esta en la cuenta",
          test_muere_si_la_clave_no_esta_en_la_cuenta),
         ("muere si no existe la privada", test_muere_si_no_existe_la_privada),
