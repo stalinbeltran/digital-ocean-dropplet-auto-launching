@@ -460,6 +460,26 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   Desde entonces `provision` llama a `reiniciar_servicios()` al final, después de
   `hacer_lanzador()`. **No lo quites**: sin eso, cualquier variable nueva que se escriba tarde
   nace invisible.
+  ⚠ **Y ese arreglo NO alcanza a las máquinas que ya estaban vivas, que es donde volvió a
+  morder el 2026-09-11 por la tarde.** Un `launch mini` desde el bot de un **dev** murió con
+  `root@161.35.50.148: Permission denied (publickey)` intentando
+  `/home/deploy/.ssh/do_droplet`: el mismo hueco por la otra punta. El droplet estaba
+  **perfecto** —comprobado entrando en él con `~/.ssh/do_flota` desde la laptop: cloud-init
+  `done`, `DEV_READY` puesto—, sólo que a medio hacer, porque `launch` muere antes de
+  `provision`. **Lo que no valía era la clave elegida en el lado que lanza.**
+  Por eso la elección ya no depende del entorno: `fichero_clave_ssh()` usa la de
+  `DO_SSH_KEY_FILE` **si existe** y, si no existe, **cae a la clave de la flota**. No es
+  adivinar: la de flota está registrada en la cuenta por definición y `DO_SSH_KEYS` vacío mete
+  todas las de la cuenta en cada droplet nuevo, así que es la clave que el droplet de enfrente
+  acepta seguro; la otra era un fichero inexistente, que no autentica nada. Avisa una vez —no
+  en cada sonda— de que cayó.
+  Y `launch` comprueba **antes de crear** que esa clave esté entre las que el droplet llevará
+  (`comprobar_clave_de_entrada()`, local e instantánea, antes incluso de preguntarle a
+  GitHub). El fallo tenía que salir gratis: antes salía con la máquina creada, facturando y
+  sin nadie capaz de entrar a rematarla. **Cuando no puede saberlo —falta la `.pub`— avisa y
+  sigue**, por lo de siempre: no saber no es saber que va mal.
+  11 tests en `tests/test_clave_de_entrada.py`, uno de ellos sobre el **orden** dentro de
+  `cmd_launch`: el freno no puede acabar por debajo del acelerador.
 - **Una clave RECHAZADA no se arregla esperando, y ahora no se espera.** Un droplet sólo acepta
   las claves registradas **cuando se creó**, así que un `Permission denied` es definitivo. Tras
   `RECHAZOS_FATALES` (6 sondas, ~1 min) la espera muere diciendo **con qué clave** se estaba

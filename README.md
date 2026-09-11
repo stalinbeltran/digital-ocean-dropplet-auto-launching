@@ -858,6 +858,9 @@ python tests/test_llavero.py
 python tests/test_flota.py
 python tests/test_url_servicio.py
 python tests/test_provision_incompleto.py
+python tests/test_espera_arranque.py
+python tests/test_pre_destroy.py
+python tests/test_clave_de_entrada.py
 ```
 
 ## La máquina de control: lanzar droplets desde el móvil

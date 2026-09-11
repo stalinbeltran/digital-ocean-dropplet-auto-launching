@@ -317,6 +317,56 @@ def ruta_publica(privada: Path) -> Path:
     return Path(str(privada) + ".pub")
 
 
+# Se avisa UNA vez por proceso de que se cayo a la clave de la flota. Sin el
+# flag, un `launch` suelta la misma linea en cada sonda de la espera.
+_aviso_caida_a_flota = False
+
+
+def fichero_clave_ssh() -> Path:
+    """La clave privada con la que se entra en los droplets.
+
+    Devuelve la de `DO_SSH_KEY_FILE` **si existe**; si no existe y la de la
+    flota si, devuelve esa.
+
+    Por que esa caida no es un apano: `DO_SSH_KEY_FILE` no lo declara NADA del
+    repo -no lo pide ningun tipo, ni el llavero, ni .env.example-, sino que lo
+    escribe `_mandar_clave_flota()` dentro de `dev-secrets.env`. O sea que solo
+    llega por el ENTORNO, y el entorno de un servicio es una FOTO de cuando
+    arranco: el bot de una maquina que nacio antes de esa linea no la ve nunca.
+    Entonces `cfg()` devuelve el defecto `~/.ssh/do_droplet`, **que en esa
+    maquina no existe**, y el `launch` se queda sondeando un droplet vivo y
+    facturando con una clave inexistente hasta que la espera lo declara
+    rechazado. Desde una sesion SSH el mismo comando funciona, porque un shell
+    de login si lee el fichero: la misma trampa del 2026-09-11 en el mini, por
+    la otra punta.
+    Medido el 2026-09-11: `launch mini` desde el bot de un dev murio con
+    `root@161.35.50.148: Permission denied (publickey)` intentando
+    `/home/deploy/.ssh/do_droplet`, con la clave de la flota buena al lado.
+
+    Y la eleccion es segura, no una adivinanza: la de flota esta registrada en
+    la cuenta por definicion -`clave-flota` la registra- y `DO_SSH_KEYS` vacio
+    mete TODAS las de la cuenta en cada droplet nuevo, asi que es una clave que
+    el droplet de enfrente acepta seguro. La alternativa era un fichero que no
+    existe, que no puede autenticar nada.
+    """
+    global _aviso_caida_a_flota
+    configurada = Path(cfg("DO_SSH_KEY_FILE")).expanduser()
+    if configurada.exists():
+        return configurada
+    flota = ruta_clave_flota()
+    if not flota.exists():
+        return configurada
+    if not _aviso_caida_a_flota:
+        _aviso_caida_a_flota = True
+        log(
+            f"  AVISO: no existe {configurada}; se usa la clave de la flota\n"
+            f"         ({flota}). Si esto sale de un servicio, es que arrancó\n"
+            "         antes de que DO_SSH_KEY_FILE existiera; 'remoto <maquina>"
+            " update'\n         lo reinicia y deja de hacer falta la caída."
+        )
+    return flota
+
+
 def cmd_keys(args: argparse.Namespace) -> None:
     claves = account_keys()
     if getattr(args, "prune", ""):
@@ -1045,6 +1095,56 @@ def lista_unida(de_args: list[str], del_tipo) -> list[str]:
     return salida
 
 
+def comprobar_clave_de_entrada(keys: list[dict]) -> None:
+    """Que la clave con la que se ENTRARÁ esté entre las que el droplet llevará.
+
+    Es gratis y se hace antes de crear nada, por lo mismo que el token de
+    GitHub y el volumen: el fallo de acceso se descubría **después**, con la
+    máquina creada, tras ~1 minuto de sondas rechazadas (`RECHAZOS_FATALES`) o
+    —antes de que eso existiera— tras los 1.800 s del plazo entero. Y lo que
+    quedaba no era un error: era un droplet vivo, facturando, a medio hacer y
+    sin nadie que pudiera entrar a rematarlo.
+
+    Comparamos contra `selected_keys()`, que es exactamente la lista que se
+    embebe en el droplet, no contra "las de la cuenta" en general: si alguien
+    pone `DO_SSH_KEYS` a mano, la pregunta sigue siendo la correcta.
+
+    Lo que NO hace es bloquear cuando no puede saber. Sin la `.pub` al lado no
+    se puede comparar el material, y negarse ahí dejaría sin lanzar a quien
+    tenga la privada sola. Se avisa y se sigue: no saber no es saber que va mal,
+    ni al revés.
+    """
+    privada = fichero_clave_ssh()
+    if not privada.exists():
+        die(
+            f"No existe la clave con la que habría que entrar: {privada}\n"
+            "  No se ha creado ningún droplet.\n"
+            f"  Si esta máquina es de la flota:  python scripts/do_droplet.py clave-flota\n"
+            f"  Si no:  python scripts/do_droplet.py keygen && python scripts/do_droplet.py register-key"
+        )
+    pub = ruta_publica(privada)
+    if not pub.exists():
+        log(f"  AVISO: falta {pub}, no puedo comprobar si esa clave entrará.")
+        return
+    trozos = pub.read_text(encoding="utf-8").strip().split()
+    if len(trozos) < 2:
+        log(f"  AVISO: no entiendo {pub}, no puedo comprobar si esa clave entrará.")
+        return
+    if any(k["public_key"].split()[1] == trozos[1] for k in keys):
+        return
+    die(
+        f"La clave con la que se entraría NO está registrada en la cuenta:\n"
+        f"  {privada}\n\n"
+        "El droplet se crearía con las claves de la cuenta y ésa no es una de\n"
+        "ellas, así que nacería inaccesible: existiendo, facturando y sin nadie\n"
+        "dentro. No se ha creado ningún droplet.\n\n"
+        f"  Las de la cuenta:  python scripts/do_droplet.py keys\n"
+        f"  Registrar ésta:    python scripts/do_droplet.py register-key --file {pub}\n"
+        f"  O usar la de la flota, que es la buena entre máquinas de la flota:\n"
+        f"    python scripts/do_droplet.py clave-flota"
+    )
+
+
 def cmd_launch(args: argparse.Namespace) -> None:
     name = args.name or cfg("DO_DROPLET_NAME")
     if find_droplets(name=name):
@@ -1075,6 +1175,9 @@ def cmd_launch(args: argparse.Namespace) -> None:
     # máquina que nace sin sus repos privados factura igual que una buena y no
     # lo dice. Con --dry-run no hace falta, que no crea nada.
     if not args.dry_run and not args.no_provision:
+        # Primero ésta, que es local e instantánea: si no vamos a poder entrar,
+        # no hace falta ni preguntarle a GitHub.
+        comprobar_clave_de_entrada(keys)
         comprobar_github_token(args.sin_github)
         # Y el llavero, aqui y no dentro de provision: si a esta maquina le
         # faltan secretos obligatorios, el droplet no se llega a crear. Fallar
@@ -1210,7 +1313,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
     if tipo.get("post") and port and not args.no_provision:
         ejecutar_post(name, ip, port, tipo["post"])
 
-    key_file = Path(cfg("DO_SSH_KEY_FILE")).expanduser()
+    key_file = fichero_clave_ssh()
     port_flag = f"-p {port} " if port and port != 22 else ""
     log("\n" + "=" * 62)
     log(f"  {name}  ·  {ip}")
@@ -1709,7 +1812,7 @@ def shq(value: str) -> str:
 
 
 def ssh_command(ip: str, port: int, user: str = "") -> list[str]:
-    key_file = str(Path(cfg("DO_SSH_KEY_FILE")).expanduser())
+    key_file = str(fichero_clave_ssh())
     return [
         "ssh",
         "-p", str(port),
@@ -2084,9 +2187,14 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
                     die(
                         f"El droplet RECHAZA la clave. No es que no esté listo:\n"
                         f"  {pega}\n\n"
-                        f"Se está intentando con:  {cfg('DO_SSH_KEY_FILE')}\n"
-                        "(de DO_SSH_KEY_FILE; si esa variable no está en el entorno,\n"
-                        " ése es el valor por defecto, y puede no ser tu clave real)\n\n"
+                        f"Se está intentando con:  {fichero_clave_ssh()}\n"
+                        f"  DO_SSH_KEY_FILE dice:  {cfg('DO_SSH_KEY_FILE')}"
+                        f"{'' if Path(cfg('DO_SSH_KEY_FILE')).expanduser().exists() else '  (NO EXISTE)'}\n"
+                        f"  clave de la flota:     {ruta_clave_flota()}"
+                        f"  ({'existe' if ruta_clave_flota().exists() else 'tampoco existe'})\n"
+                        "Si la de la flota existe y aun así se rechaza, no es cuestión\n"
+                        "de qué clave: esa está registrada en la cuenta y el droplet\n"
+                        "nace con TODAS las de la cuenta dentro.\n\n"
                         "Mira si esa clave está registrada en la cuenta:\n"
                         "  python scripts/do_droplet.py keys\n"
                         "Un droplet sólo acepta las claves registradas CUANDO SE CREÓ.\n\n"
