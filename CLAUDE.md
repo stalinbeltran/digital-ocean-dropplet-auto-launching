@@ -864,6 +864,24 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
   iguales y el barrido medía tres veces lo mismo **sin decirlo**, que es peor que fallar.
   De ahí el rango `[n, 2n)`. La API acepta dos operadores en el mismo filtro
   (`{"gte": n, "lt": 2n}`), comprobado.
+- **El goteo de claves muertas también pasa en Vast, y se poda AL CONTRARIO.** Medido el
+  2026-09-11: **44 claves en la cuenta y 3 de máquinas vivas**, una por cada máquina que
+  existió alguna vez. `keys --prune` existe desde ese día, pero **no se parece** al de
+  DigitalOcean: allí se poda por patrón de NOMBRE (`lanzador-*`) y aquí **las claves no
+  tienen nombre** —la API devuelve id y material, y nada más—, así que no hay forma de saber
+  de quién era una. Por eso borra «todas menos las protegidas»: se conserva lo que se
+  declara. Siempre protege la de esta máquina; las de otras máquinas vivas se dicen con
+  `--keep <id>`, porque desde una máquina no se pueden adivinar las de las demás y borrarlas
+  deja a esa máquina sin poder entrar en lo que alquile.
+  Y aquí barrer es seguro, a diferencia de DigitalOcean: `asegurar_clave_registrada()` hace
+  que cualquier máquina que alquile **registre su clave sola antes de gastar**, así que una
+  borrada de más se repone en el siguiente `launch`. En DigitalOcean no hay red de seguridad
+  equivalente —un droplet fija sus claves al crearse—, y por eso allí `launch` se niega y te
+  manda a registrarla a mano.
+  ⚠ **Y el endpoint no estaba en la spec: se comprobó con UNA clave muerta antes de barrer.**
+  `DELETE /api/v0/ssh/{id}/` devuelve `{"success": true}` y la cuenta baja de 44 a 43. Es la
+  regla de esta API repetida otra vez: **valida contra la respuesta real**, y si la operación
+  es destructiva, con un solo elemento primero.
 - **A una máquina de Vast no se le da ningún secreto.** No es un droplet tuyo: es el
   ordenador de un desconocido alquilado por minutos, con acceso de root del host a todo lo
   que haya dentro del contenedor. Por eso el código y el dataset viajan como un tar por SSH

@@ -756,6 +756,21 @@ python scripts/do_droplet.py keys --prune "lanzador-*"   # pide confirmación
 ```
 Nunca toca la de la flota ni la de esta máquina, encaje lo que encaje el patrón.
 
+**En Vast el mismo goteo existe, y se poda al contrario.** Allí las claves **no tienen
+nombre** —la API devuelve id y material, y nada más—, así que no hay patrón posible: se
+conserva lo que se declara y cae el resto. Siempre se protege la de esta máquina; las de
+otras máquinas vivas se dicen con `--keep`, porque desde aquí no se pueden adivinar.
+
+```powershell
+python scripts/vast_instance.py keys                          # ids, y cuál es la de aquí
+python scripts/vast_instance.py keys --prune --keep 1354686   # pide confirmación
+```
+
+Y ahí se puede barrer sin miedo, a diferencia de DigitalOcean: cualquier máquina que
+alquile **registra su clave sola antes de gastar**, así que una borrada de más se repone en
+el siguiente `launch`. Medido el 2026-09-11: la cuenta tenía **44 claves y 3 de máquinas
+vivas**, una por cada máquina que existió alguna vez.
+
 ### `remoto`: pedir desde fuera lo que sólo funciona dentro
 
 ```powershell

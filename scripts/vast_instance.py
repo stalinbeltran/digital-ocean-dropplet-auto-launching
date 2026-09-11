@@ -852,19 +852,94 @@ def material(clave: str) -> str:
     return partes[1] if len(partes) > 1 else clave
 
 
+def mi_material() -> str:
+    """El material de la clave de esta maquina, o "" si aun no hay clave."""
+    if not clave_publica().exists():
+        return ""
+    return material(clave_publica().read_text(encoding="utf-8"))
+
+
 def cmd_keys(args: argparse.Namespace) -> None:
     claves = claves_cuenta()
     if not claves:
         log("No hay ninguna clave SSH registrada en la cuenta de Vast.ai.")
         log("  Registrala con:  python scripts/vast_instance.py register-key")
         return
-    mia = ""
-    if clave_publica().exists():
-        mia = material(clave_publica().read_text(encoding="utf-8"))
+    if getattr(args, "prune", False):
+        return _podar_claves(claves, getattr(args, "keep", None), getattr(args, "yes", False))
+    mia = mi_material()
     for k in claves:
         pub = k.get("public_key") or k.get("ssh_key") or ""
         marca = "   <- la de esta maquina" if mia and material(pub) == mia else ""
         log(f"{str(k.get('id')):>10}  {pub[:52]}...{marca}")
+
+
+def _podar_claves(claves: list[dict], keep: list | None, yes: bool) -> None:
+    """Borra de la cuenta de Vast las claves que no sean de una maquina viva.
+
+    Hermano de `_podar_claves()` en `do_droplet.py`, con UNA diferencia de fondo
+    que cambia la interfaz entera: **en Vast las claves no tienen nombre**. Alli
+    se poda por patron (`lanzador-*`), y el nombre es lo que dice de quien era
+    cada una. Aqui la API devuelve id y material, y nada mas -- asi que no hay
+    forma de saber de que maquina fue una clave. Por eso esto no borra "las que
+    encajen" sino "todas menos las protegidas", que es lo unico honesto: lo que
+    se conserva se declara, y lo demas cae.
+
+    Se protege siempre la de ESTA maquina, pase lo que pase. Las de otras
+    maquinas vivas se declaran con `--keep <id>`: desde aqui no se pueden
+    adivinar, y borrarlas dejaria a esa maquina sin poder entrar en lo que
+    alquile. `keys` las lista con su id, y en una maquina de la flota la marca
+    `<- la de esta maquina` dice cual es la suya.
+
+    Y por que se puede hacer sin miedo, que es lo que lo diferencia de
+    DigitalOcean: desde `asegurar_clave_registrada()` cualquier maquina que
+    alquile **registra su clave sola antes de gastar**, asi que una clave
+    borrada de mas se repone en el siguiente `launch`. En DigitalOcean no: alli
+    un droplet fija sus claves al crearse y `launch` se niega y te manda a
+    registrarla a mano.
+    """
+    mia = mi_material()
+    protegidos_id = {str(k) for k in (keep or [])}
+    candidatas = [
+        k
+        for k in claves
+        if str(k.get("id")) not in protegidos_id
+        and not (mia and material(k.get("public_key") or k.get("ssh_key") or "") == mia)
+    ]
+    if not mia:
+        log(
+            "  AVISO: esta maquina no tiene clave todavia "
+            f"({clave_publica()} no existe),\n"
+            "         asi que no hay ninguna que proteger por ser la suya."
+        )
+    if not candidatas:
+        log("Nada que podar: todas las claves estan protegidas.")
+        return
+
+    log(f"Se van a BORRAR {len(candidatas)} claves de {len(claves)} de la cuenta de Vast:")
+    for k in candidatas:
+        pub = k.get("public_key") or k.get("ssh_key") or ""
+        log(f"  {str(k.get('id')):>10}  {pub[:52]}...")
+    conservadas = len(claves) - len(candidatas)
+    log(f"\nSe conservan {conservadas}: la de esta maquina y las que diga --keep.")
+    log(
+        "Borrarlas NO echa a nadie de una instancia que ya existe: su lista de\n"
+        "  claves se fijo al crearla. Y cualquier maquina que alquile registra la\n"
+        "  suya sola antes de gastar, asi que una de mas se repone en el proximo\n"
+        "  launch."
+    )
+    if not yes and not confirmar(f"\nBorrar {len(candidatas)} claves. Escribe 'si': "):
+        log("No se borra nada.")
+        return
+    borradas = 0
+    for k in candidatas:
+        try:
+            api("DELETE", f"/api/v0/ssh/{k['id']}/")
+        except ApiError as e:
+            log(f"  AVISO: no pude borrar {k['id']}: {e}")
+            continue
+        borradas += 1
+    log(f"Listo: {borradas} borradas, {len(claves) - borradas} quedan.")
 
 
 def asegurar_clave_registrada(comentario: str = "") -> None:
@@ -1875,6 +1950,21 @@ def main() -> None:
     p.set_defaults(func=cmd_offers)
 
     p = sub.add_parser("keys", help="claves SSH registradas en la cuenta de Vast.ai")
+    p.add_argument(
+        "--prune",
+        action="store_true",
+        help="borra TODAS menos la de esta maquina y las de --keep. En Vast las "
+        "claves no tienen nombre, asi que no hay patron posible: lo que se "
+        "conserva se declara. No echa a nadie de una instancia ya creada",
+    )
+    p.add_argument(
+        "--keep",
+        action="append",
+        metavar="ID",
+        help="id de una clave que NO se borra (repetible). Para las de otras "
+        "maquinas vivas, que desde aqui no se pueden adivinar",
+    )
+    p.add_argument("--yes", action="store_true", help="no preguntar antes de borrar")
     p.set_defaults(func=cmd_keys)
 
     p = sub.add_parser(

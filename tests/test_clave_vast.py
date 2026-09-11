@@ -108,6 +108,62 @@ def test_no_se_alquila_sin_clave_registrada():
     return []
 
 
+def _cuenta_vast(*materiales):
+    return [
+        {"id": 1000 + i, "public_key": f"ssh-ed25519 {m} x"}
+        for i, m in enumerate(materiales)
+    ]
+
+
+def test_prune_nunca_borra_la_de_esta_maquina():
+    """Es el unico comando destructivo del fichero, y ese es el borrado que no se vuelve.
+
+    En Vast las claves no tienen nombre, asi que `--prune` borra "todas menos
+    las protegidas" en vez de "las que encajen". Con esa forma, la proteccion de
+    la clave propia no es una comodidad: es lo unico que impide que un barrido
+    deje a la maquina que lo ejecuta sin poder entrar en lo que alquile.
+    """
+    import tempfile
+
+    vast = cargar("vast_instance")
+    borradas = []
+    vast.api = lambda metodo, ruta, cuerpo=None: borradas.append(ruta)
+    vast.confirmar = lambda _p: True
+    mia = "AAAAmiaAAAA"
+    with tempfile.TemporaryDirectory() as d:
+        pub = Path(d) / "vast.pub"
+        pub.write_text(f"ssh-ed25519 {mia} esta-maquina\n", encoding="utf-8")
+        vast.clave_publica = lambda: pub
+        claves = _cuenta_vast("AAAAmuerta1AAAA", mia, "AAAAmuerta2AAAA", "AAAAotraVivaAAAA")
+        # La cuarta es de otra maquina viva y se declara con --keep.
+        vast._podar_claves(claves, keep=[1003], yes=True)
+
+    fallos = []
+    if "/api/v0/ssh/1001/" in borradas:
+        fallos.append("borro la clave de ESTA maquina")
+    if "/api/v0/ssh/1003/" in borradas:
+        fallos.append("borro una clave protegida con --keep")
+    if sorted(borradas) != ["/api/v0/ssh/1000/", "/api/v0/ssh/1002/"]:
+        fallos.append(f"borro lo que no debia: {borradas}")
+    return fallos
+
+
+def test_prune_pide_confirmacion():
+    """Sin --yes y sin decir 'si', no se borra nada."""
+    import tempfile
+
+    vast = cargar("vast_instance")
+    borradas = []
+    vast.api = lambda metodo, ruta, cuerpo=None: borradas.append(ruta)
+    vast.confirmar = lambda _p: False
+    with tempfile.TemporaryDirectory() as d:
+        pub = Path(d) / "vast.pub"
+        pub.write_text("ssh-ed25519 AAAAmiaAAAA esta-maquina\n", encoding="utf-8")
+        vast.clave_publica = lambda: pub
+        vast._podar_claves(_cuenta_vast("AAAAmuertaAAAA"), keep=None, yes=False)
+    return [] if not borradas else ["borro sin confirmacion"]
+
+
 def main():
     pruebas = [
         ("las dos rutas por defecto son distintas", test_las_dos_rutas_son_distintas),
@@ -115,6 +171,9 @@ def main():
         ("el .env.example no las vuelve a igualar",
          test_el_env_example_no_las_vuelve_a_igualar),
         ("no se alquila sin clave registrada", test_no_se_alquila_sin_clave_registrada),
+        ("prune nunca borra la de esta maquina",
+         test_prune_nunca_borra_la_de_esta_maquina),
+        ("prune pide confirmacion", test_prune_pide_confirmacion),
     ]
     total = 0
     for nombre, prueba in pruebas:
