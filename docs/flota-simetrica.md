@@ -301,7 +301,7 @@ idéntico**, y ésa es la propiedad que se quiere:
 | `tag` | `control` | `ephemeral` |
 | `services` | `telegram-launcher` (`TGL_`) | `telegram-coordinator` (`TG_`), `foveal-vision-web` |
 | `llavero` | `true` | `true` |
-| `repos` | los mismos | los mismos |
+| `repos` | **`foveal-vision-data` y nada mas** (2026-09-11, ver abajo) | los cuatro de trabajo |
 | `make_launcher`, `post` | los mismos | los mismos |
 
 **Los dos bots tienen que seguir siendo dos.** No es preferencia: Telegram sólo admite un
@@ -310,13 +310,49 @@ diferencia de bot es *configuración de rol*, no un privilegio, y `selected_serv
 ([do_droplet.py:1653](../scripts/do_droplet.py#L1653)) ya se niega a instalar juntos dos
 servicios del mismo directorio, que es la red de seguridad.
 
-**Lo que sí hay que medir antes de igualar los repos.** El mini tiene 10 GB de disco.
-Clonar `foveal-vision`, `foveal-vision-data`, `image-text-sample-generator` y
-`estudios-redes-neuronales` no cuesta RAM, pero sí disco, y `foveal-vision-data` crece con
-cada estudio. **Paso previo obligatorio:** medir los cuatro repos (`du -sh ~/src/*` en un
-dev vivo) y comprobar que caben con holgura. Si no caben, la línea que se corta es
-`foveal-vision-data` en el mini —el mini no mide nada— y **se anota aquí como la primera
-excepción real**, no se deja en la conversación.
+⚠⚠ **CORREGIDO el 2026-09-11: los repos NO van iguales, y el motivo no es el que este
+documento previó.** Aquí se escribió que los cuatro repos de trabajo irían al mini y que la
+única razón para cortar alguno sería el **disco**. Las dos mitades resultaron falsas, y la
+segunda es la que importa porque llevaba a cortar el repo equivocado.
+
+**El disco no aprieta.** Medido ese día por SSH en el mini vivo: los seis repos pesan
+**738 MB** con **4,7 GB libres de 8,7**. Por disco no había nada que hacer.
+
+**Lo que sí pasaba** es que `foveal-vision` aportaba **18 ejecutores federados que en el
+mini fallan los 18**, medido corriendo el comando de uno tal cual:
+
+```
+$ cd ~/src/foveal-vision && .venv/bin/python scripts/estudio_progreso.py
+bash: line 1: .venv/bin/python: No such file or directory
+```
+
+`cloud-init.mini.yaml` no instala `python3-venv` —y hace bien: aquí no se desarrolla
+nunca—, así que no hay ni habrá `.venv`. Y **`requiere` no lo tapa**: declaran
+`requiere: ["python3"]`, y `python3` **sí** está en el PATH del mini; la dependencia real
+es una **ruta relativa**, que una comprobación del PATH no puede ver. O sea 18 entradas de
+`/executors` que se ofrecen y no pueden funcionar — la regla del proyecto *«un ejecutor que
+hace otra cosa de la que crees es peor que uno que falta»*, por 18.
+
+**La regla que sustituye a la de este documento**, y que es la que hay que respetar:
+
+> **La simetría es de CAPACIDADES, no de carga.** Levantar, destruir y hablar con la otra
+> máquina lo dan el **llavero**, la **clave de flota** y el **repo del lanzador**. Un repo
+> de trabajo no participa en ninguna de las tres: `provision` clona **desde GitHub en la
+> máquina destino** ([do_droplet.py:2777](../scripts/do_droplet.py#L2777)) y la lista sale
+> de `types/dev.json`. Quitar un repo del mini **no le quita nada al dev que pare**.
+
+Se quitaron `foveal-vision`, `image-text-sample-generator` (se va **con** el anterior y
+nunca antes: `bench_dataset.py:46` lo busca en `ROOT.parent`) y `estudios-redes-neuronales`
+(su motivo —que un dev compruebe si un estudio ya se corrió— es del **dev**, que es el que
+tiene Claude Code). Son **48,8 MB**: el ahorro es lo de menos. `/executors` pasa de **40 a
+22**.
+
+⚠ **`foveal-vision-data` se queda, POR AHORA, y no por peso** —son 628 MB, el 85 % de lo
+que había— sino porque `telegram-coordinator/scripts/errores.mjs:51-56` escribe ahí el log
+de errores del bot y devuelve **`null` en silencio** si el repo no está. No es teórico: el
+mini tenía **8 entradas, 4 de ese mismo día**. Es la única máquina siempre encendida y no
+puede quedarse ciega. Sacar ese dato de un repo de git a un **volumen** es un pendiente del
+usuario, anotado en [`CLAUDE.md`](../CLAUDE.md) § «Pendientes abiertos».
 
 ---
 

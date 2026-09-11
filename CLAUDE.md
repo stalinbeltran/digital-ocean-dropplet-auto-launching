@@ -871,6 +871,44 @@ Lo que está decidido que hay que hacer y todavía no se ha hecho. **No lo hagas
 cuenta**: cada uno dice de quién es. Cuando se cierre, se borra de aquí y lo que se
 aprendió se anota donde corresponda.
 
+- **⏳ DEL USUARIO: sacar los DATOS de un repo de git a un volumen (o a Spaces) de
+  DigitalOcean.** Anotado el **2026-09-11**, pedido por el dueño con estas palabras: *«un
+  repo no es buen lugar»*. Es la condición para poder quitar `foveal-vision-data` del mini,
+  que hoy es lo único de trabajo que clona.
+  **El dato que lo motiva** (medido el 2026-09-11 con `du -sh`, idéntico en mini y dev):
+  `foveal-vision-data` pesa **628 MB**, de los que **337 MB son `.git/objects/pack`**. Git
+  guarda **todas** las versiones para siempre, y el repo recibe un commit
+  `conversaciones: archivo automático` por sesión más los runs de cada experimento. O sea
+  que crece monótonamente y **no se puede podar**. Hoy el mini arrastra esos 628 MB para
+  escribir un log de errores de 8 líneas (`telegram-coordinator/scripts/errores.mjs:51-56`).
+  **El mecanismo ya existe y es dato, no código**: `volume create|list|attach|detach|destroy`
+  (`cmd_volume`, [do_droplet.py:1570](scripts/do_droplet.py#L1570)) y un **tipo puede
+  declarar `"volume": "<nombre>"`** ([do_droplet.py:1088](scripts/do_droplet.py#L1088)), que
+  se comprueba **antes** de crear el droplet para que un nombre mal escrito salga gratis.
+  Cuesta **0,10 $/GB y mes** y **sobrevive a su droplet**, que es justo la propiedad que
+  falta. Hoy **ningún tipo lo usa**.
+  ⚠⚠ **Pero un volumen NO resuelve esto tal cual, y ésa es la parte que hay que decidir
+  antes de tocar nada.** Dos límites, los dos ya documentados y los dos mordientes:
+  1. **Un volumen se conecta a UNA máquina a la vez, y en su misma región.** Mini y dev no
+     pueden montar el mismo. Si el bot de las **dos** tiene que escribir sus errores, un
+     volumen no es la respuesta para *ese* trozo.
+  2. **No se puede conectar un volumen de DO a una máquina de otro proveedor**
+     (`scripts/dataset.py`, cabecera). Los estudios corren en **Vast**, así que el dato que
+     ellos producen o consumen no puede vivir sólo ahí.
+  **Por eso la pregunta no es «¿volumen sí o no?» sino «¿qué dato es cada cosa?».** Hoy
+  `foveal-vision-data` mezcla al menos tres, con necesidades opuestas:
+  | qué | tamaño | quién escribe | qué querría |
+  |---|---:|---|---|
+  | `errores/` | KB | el bot de **cada** máquina, siempre | algo compartido y de sólo-añadir; un volumen **no** vale (límite 1) |
+  | `conversaciones/` | 30 MB y subiendo | el hook, una vez por sesión | almacenamiento de objetos (**Spaces**): se escribe una vez y casi no se lee |
+  | `runs/`, `sweeps/`, `2026/`, `preprocesado/` | ~350 MB | los estudios, en Vast | **el candidato real** a volumen o Spaces |
+  ⚠ **Spaces (S3) cubre los tres límites** —se llega desde cualquier proveedor, no hay
+  conexión exclusiva— y `dataset.py` **ya sabe leer de una `url`**, así que ese camino no
+  pide mecanismo nuevo. No está medido ni presupuestado: es lo primero que habría que mirar.
+  ⚠ **Y lo que NO hay que hacer sin decidir lo de arriba**: quitar `foveal-vision-data` del
+  mini. Ahí `errores.mjs` devuelve `null` **en silencio** y la única máquina siempre
+  encendida se queda sin log de errores — y su `journalctl` muere con ella.
+
 - **⏳ DEL USUARIO: repasar la lista de ejecutores y quitar los que no usa.** Anotado el
   2026-09-10. Hay **40 ejecutores** cargados en una máquina de la flota (medido ese día en
   el journal del mini, de tres fuentes: `telegram-coordinator`, este repo y

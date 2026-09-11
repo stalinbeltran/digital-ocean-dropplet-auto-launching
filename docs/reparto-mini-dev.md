@@ -20,9 +20,10 @@ permisos.
 | tamaño | 512 MB (`s-1vcpu-512mb-10gb`), 4 $/mes | 2 vCPU / 4 GB, 24 $/mes |
 | Claude Code | **no** — en 512 MB lo mata el kernel | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
-| **llavero, repos, clave de flota, crear y destruir** | **iguales** | **iguales** |
+| repos de trabajo | **sólo `foveal-vision-data`** (2026-09-11) | los cuatro |
+| **llavero, clave de flota, crear y destruir** | **iguales** | **iguales** |
 
-Las **tres** diferencias que quedan, y el motivo de cada una:
+Las **cuatro** diferencias que quedan, y el motivo de cada una:
 
 1. **La talla**, de donde sale lo de Claude Code. Es la única que el dueño aceptó como
    permanente.
@@ -30,6 +31,8 @@ Las **tres** diferencias que quedan, y el motivo de cada una:
 3. **El bot**, que **no es opcional**: Telegram sólo admite un proceso haciendo long
    polling por token y el segundo recibe un **409**. Con un solo bot, una de las dos se
    queda muda.
+4. **Los repos de trabajo**, desde el 2026-09-11 — ver § «Lo que NO va en el mini». Y es
+   la que mejor resume el resto: **la simetría es de capacidades, no de carga.**
 
 ---
 
@@ -186,16 +189,64 @@ frase en un README que nadie relee.
 
 ## Lo que NO va en el mini
 
-Sólo **Claude Code**, y el volumen de bloques. Los repos de trabajo **sí van** desde el
-2026-09-10, tras medirlo: los siete pesan 365,7 MB clonados contra 4,4 GB libres de los
-8,7 del disco. Si algún día `foveal-vision-data` (334 MB, el que crece) apretara, **ésa es
-la primera línea que se corta** — el mini no mide nada — y se anota aquí como excepción en
-vez de dejarlo en una conversación.
+**Claude Code, el volumen de bloques, y desde el 2026-09-11 los repos de trabajo salvo
+uno.** El mini clona **`foveal-vision-data` y nada más**; fuera quedan `foveal-vision`,
+`image-text-sample-generator` y `estudios-redes-neuronales`.
 
-**Hueco conocido**, que sale de la federación de ejecutores: el mini ofrece `c` y
-`creset` en `/executors` y **fallan**, porque vienen de `data/executors/` del
-repo del coordinador —que siempre está ahí, es el propio servicio— pero `claude`
-no está instalado. La federación ata un comando a un **repo**; `c` depende de un
-**binario**. La salida barata sería un campo `requiere: ["claude"]` en el JSON del
-ejecutor, y que `/executors` lo marque como no disponible en vez de ofrecerlo. No
-está implementado.
+**El motivo NO es el disco, y confundirlo lleva a cortar el repo equivocado.** Medido el
+2026-09-11 por SSH en el mini vivo:
+
+```
+$ du -sh ~/src/*          →  738 MB los seis
+$ df -h /                 →  4,0 G usados · 4,7 G LIBRES de 8,7 G
+```
+
+O sea que por disco no había nada que hacer, y los tres que se van suman **48,8 MB**. Lo
+que sí pasaba es que **`foveal-vision` aportaba 18 ejecutores federados que aquí fallan los
+18**, medido corriendo el comando de uno tal cual en el mini:
+
+```
+$ cd ~/src/foveal-vision && .venv/bin/python scripts/estudio_progreso.py
+bash: line 1: .venv/bin/python: No such file or directory
+```
+
+`cloud-init.mini.yaml` no instala `python3-venv` —y hace bien, aquí no se desarrolla
+nunca—, así que no hay ni habrá `.venv`. `/executors` pasa de **40 a 22**, y los 22 que
+quedan funcionan.
+
+⚠ **Y los tres se quitan en un orden que importa**: `image-text-sample-generator` sale
+**con** `foveal-vision` y nunca antes, porque el que lo busca es él
+(`foveal-vision/scripts/bench_dataset.py:46`, `ROOT.parent`). Quitarlo solo ahorra 6,7 MB y
+rompe la reconstrucción de datasets.
+
+**La regla que deja, y que vale para la próxima vez que alguien iguale las dos máquinas:**
+
+> **La simetría es de CAPACIDADES, no de carga.** Levantar, destruir y hablar con la otra
+> la dan el **llavero**, la **clave de flota** y el **repo del lanzador**. Un repo de
+> trabajo no participa: `provision` clona **desde GitHub en la máquina destino**
+> ([`do_droplet.py:2777`](../scripts/do_droplet.py#L2777)) y la lista sale de
+> `types/dev.json`. **Quitar un repo del mini no le quita nada al dev que pare.**
+
+⚠ **`foveal-vision-data` se queda POR AHORA, y no por peso** —son 628 MB, el 85 % de lo que
+había, así que es el que de verdad ocupa— sino porque
+`telegram-coordinator/scripts/errores.mjs:51-56` escribe ahí el **log de errores del bot** y
+devuelve **`null` en silencio** si el repo no está. No es teórico: el mini tenía **8
+entradas, 4 de ese mismo día**. Es la única máquina siempre encendida y no puede quedarse
+ciega. **Un repo de git no es sitio para ese dato**: sacarlo a un volumen es un pendiente
+del usuario, anotado en [`CLAUDE.md`](../CLAUDE.md) § «Pendientes abiertos».
+
+**Hueco conocido**, que sale de la federación de ejecutores: el mini ofrece `c` y `creset`
+en `/executors` y **fallan**, porque vienen de `data/executors/` del repo del coordinador
+—que siempre está ahí, es el propio servicio— pero `claude` no está instalado. La
+federación ata un comando a un **repo**; `c` depende de un **binario**.
+
+✅ **El campo `requiere: ["claude"]` que aquí se proponía SÍ está implementado** desde
+entonces (`telegram-coordinator/src/registry.ts:39,251`): `/executors` los marca
+`⛔ falta claude` en vez de ofrecerlos a secas.
+
+⚠⚠ **Pero no resuelve el caso del `.venv`, y conviene saber por qué**: `requiere` comprueba
+el **PATH**, y los ejecutores de `foveal-vision` declaran `requiere: ["python3"]` — que en
+el mini **sí** está (`/usr/bin/python3`). La dependencia real es `.venv/bin/python`, una
+**ruta relativa al cwd del ejecutor**, que una comprobación del PATH no puede ver. Por eso
+los 18 salían como disponibles y fallaban, y por eso la salida fue **quitar el repo**, no
+declarar un requisito.
