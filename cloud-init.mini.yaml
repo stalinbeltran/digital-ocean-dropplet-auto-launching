@@ -38,14 +38,26 @@ swap:
   maxsize: 1073741824
 
 # Lo mismo que en cloud-init.yaml, y aqui aprieta mas: en 512 MB una pelea por
-# el cerrojo de dpkg entre `apt-daily` y el `package_upgrade` de cloud-init sale
+# el cerrojo de dpkg entre `apt-daily` y los `apt-get install` del arranque sale
 # todavia mas cara. El detalle de por que y de que se midio, en cloud-init.yaml.
 # Los timers vuelven al final de `runcmd`.
 bootcmd:
   - [cloud-init-per, once, apt-daily-fuera, systemctl, stop, apt-daily.timer, apt-daily-upgrade.timer]
 
 package_update: true
-package_upgrade: true
+
+# `package_upgrade: false` por lo mismo que en cloud-init.yaml, donde esta el
+# desglose medido: el dist-upgrade eran 119 s de los 293 del arranque, y ese
+# numero crece solo segun envejece la imagen. `unattended-upgrades` viene armado
+# y los mete despues en segundo plano.
+#
+# Ojo, que aqui la pregunta es distinta y aun asi da lo mismo: el mini es de
+# LARGA VIDA y esta siempre encendido, asi que "actualizalo al nacer" suena mas
+# razonable. Pero justamente por estar siempre encendido, unattended-upgrades le
+# llega de sobra; lo que no se puede permitir es que tarde de mas en levantarse,
+# porque mientras no este no hay mando desde el movil.
+package_upgrade: false
+
 packages:
   - git
   - curl

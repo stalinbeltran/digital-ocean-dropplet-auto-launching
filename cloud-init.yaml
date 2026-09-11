@@ -17,10 +17,11 @@ ssh_pwauth: false
 disable_root: false
 
 # Quitar de en medio las actualizaciones automaticas de Ubuntu MIENTRAS dura
-# este primer arranque. No es manía: el `package_upgrade` de aqui abajo pide el
-# cerrojo de dpkg, y si `apt-daily` arranca a la vez se queda esperando el
-# tiempo que haga falta. Y arranca cuando le toca: su timer lleva un retardo
-# ALEATORIO de hasta 12 h, asi que unas veces cae en el primer arranque y otras
+# este primer arranque. No es mania: los `packages:` de aqui abajo y el
+# `apt-get install` de las herramientas piden el cerrojo de dpkg, y si
+# `apt-daily` arranca a la vez se quedan esperando el tiempo que haga falta.
+# Y arranca cuando le toca: su timer lleva un retardo ALEATORIO de hasta 12 h,
+# asi que unas veces cae en el primer arranque y otras
 # no. Medido el 2026-09-11 en dos droplets recien creados: el siguiente disparo
 # salia a las 23:36 en uno y a la 01:46 del dia siguiente en el otro. Eso
 # convierte la duracion del arranque en una loteria, y el 2026-09-10 por la
@@ -33,8 +34,42 @@ disable_root: false
 bootcmd:
   - [cloud-init-per, once, apt-daily-fuera, systemctl, stop, apt-daily.timer, apt-daily-upgrade.timer]
 
+# `package_update` SI: sin listas frescas, el `packages:` de aqui abajo puede
+# pedir versiones que ya no estan y fallar.
 package_update: true
-package_upgrade: true
+
+# `package_upgrade` NO, y esto es una decision medida, no un descuido. Desglose
+# del arranque del 2026-09-11 (dev real, 293 s de punta a punta):
+#   119 s  el dist-upgrade, 148 paquetes    <- esto
+#    57 s  apt-get update y el resto del modulo de paquetes
+#    42 s  los scripts de DigitalOcean (do-agent, droplet-agent), no nuestros
+#    40 s  runcmd ENTERO, con Node, Claude Code, gh y uv dentro
+#    16 s  los `packages:` de aqui abajo, 69 paquetes
+#    26 s  de la API al arranque del kernel, tampoco nuestro
+# O sea que lo que justifica la maquina cuesta 40 s, y el 40 % del arranque se
+# iba en poner al dia un sistema que va a vivir horas.
+#
+# Y el problema no es el 40 %: es que ese numero CRECE SOLO. Cuantos mas meses
+# pasen desde que DigitalOcean refresco la imagen, mas paquetes hay que subir.
+# Es la clase de coste que un dia se sale del plazo del lanzador, y el plazo ya
+# se salio dos veces la noche del 2026-09-10.
+#
+# Lo que se pierde, y por que se puede perder: la maquina nace con la imagen tal
+# como la publica DigitalOcean. `unattended-upgrades` viene armado y `enabled`
+# (comprobado el 2026-09-11: APT::Periodic::Unattended-Upgrade "1"), asi que los
+# parches entran solos despues, en segundo plano, sin bloquear el arranque.
+#
+# Y un motivo que no es de tiempo: de esos 148 paquetes, 6 eran de `openssh` o
+# del kernel. Actualizar openssh en pleno primer arranque es justo lo que este
+# repo tiene anotado como causa de que sshd se quede sin arrancar, y el kernel
+# nuevo no hace nada sin reiniciar -y aqui no se reinicia-. Sacarlo del camino
+# critico quita tiempo Y quita riesgo del minuto mas fragil del droplet.
+#
+# MEDIDO DESPUES, mismo dia, misma region, droplet real: del arranque a
+# DEV_READY, 168 s contra 293 s. El modulo de paquetes bajo de 192 s a 68,8 s,
+# y todas las herramientas quedaron puestas igual.
+package_upgrade: false
+
 packages:
   - git
   - curl

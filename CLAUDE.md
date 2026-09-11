@@ -421,8 +421,8 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   24 $/mes encendidas sin que hicieran falta.
 - **El plazo era de 900 s y se quedó corto dos veces.** Hoy sale de `DO_DEV_TOOLS_TIMEOUT`
   (1800 s por defecto). Esperar de más cuesta céntimos; relanzar cuesta el lanzamiento entero.
-- **La duración del arranque es una lotería, y la echa `apt-daily`.** El `package_upgrade` de
-  cloud-init pide el cerrojo de dpkg, y el timer de las actualizaciones automáticas de Ubuntu
+- **La duración del arranque es una lotería, y la echa `apt-daily`.** Los `apt-get install` del
+  arranque piden el cerrojo de dpkg, y el timer de las actualizaciones automáticas de Ubuntu
   lleva un retardo **aleatorio de hasta 12 h**: unas veces cae en el primer arranque y otras no
   (medido el 2026-09-11 en dos droplets recién creados: el siguiente disparo salía a las 23:36
   en uno y a la 01:46 del día siguiente en el otro). Si caen juntos, cloud-init espera lo que
@@ -434,7 +434,37 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   al menos se notaba. Por encima de `LENTO_SOSPECHOSO` (600 s, el doble de lo peor medido) la
   espera dice cuánto tardó y adjunta el diagnóstico. Va por `stdout` a propósito: en un `launch`
   que sale con 0, eso es justo lo que el coordinador publica en el chat.
-- 15 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
+- **Y cuando la espera se agota, el error dice que la máquina está A MEDIO HACER.** `launch`
+  muere ahí, que es **antes** de `provision`: sin secretos, sin repos y sin servicios. El
+  2026-09-10, tras el fallo, se le escribió al bot de ese dev y no contestó nunca, y eso se leyó
+  como «además se rompió algo». No se había roto nada: el bot no estaba instalado todavía.
+- 16 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
+
+### Y lo que hacía largo el arranque: `package_upgrade`
+
+Desglose medido el 2026-09-11 en un dev real (293 s del arranque a `DEV_READY`): **119 s el
+`dist-upgrade` de 148 paquetes**, 57 s el resto del módulo de apt, 45 s los scripts de
+DigitalOcean, **40 s el `runcmd` entero —con Node, Claude Code, gh y uv dentro—** y 16 s los
+`packages:` de la plantilla. O sea que **lo que justifica la máquina costaba 40 s**, y el 40 %
+del arranque se iba en poner al día un sistema que va a vivir horas.
+
+Y el problema no era el 40 %: **ese número crece solo**, cuantos más meses pasen desde que
+DigitalOcean refrescó la imagen. Es la clase de coste que un día se sale del plazo.
+
+Desde entonces las dos plantillas llevan `package_upgrade: false` (y `package_update: true`, que
+hace falta para que los `packages:` no pidan versiones que ya no están). Medido después, mismo
+día y misma región: **168 s contra 293 s**, con el módulo de paquetes de 192 s a 68,8 s.
+
+- **Lo que se pierde y por qué se puede perder:** la máquina nace con la imagen tal como la
+  publica DigitalOcean. `unattended-upgrades` viene armado y `enabled` (comprobado:
+  `APT::Periodic::Unattended-Upgrade "1"`), así que los parches entran solos después, en segundo
+  plano, sin bloquear el arranque.
+- **Y hay un motivo que no es de tiempo:** de esos 148 paquetes, 6 eran de `openssh` o del
+  kernel. Actualizar `openssh-server` en pleno primer arranque es justo lo que este fichero tiene
+  anotado como causa de que sshd se quede sin arrancar, y el kernel nuevo no hace nada sin
+  reiniciar —y aquí no se reinicia—.
+- ⚠ **`packages:` NO se toca: son 16 s.** El instinto decía «quita `build-essential`»; la
+  medición dice que no hay nada que ganar ahí. Mídelo antes de recortar.
 
 ⚠ Y lo que NO se sabe, dicho como lo que es: **no se ha podido reproducir el fallo de aquella
 noche.** El 2026-09-11 se lanzó un `dev` desde la laptop y un droplet desde el mini, y los dos

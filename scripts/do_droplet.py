@@ -57,8 +57,8 @@ DEFAULTS = {
     # Cuanto se espera a que cloud-init acabe de instalar las herramientas antes
     # de dar el arranque por perdido. Medido el 2026-09-11 en dos droplets:
     # 272 s y 348 s desde el arranque. El techo es muy superior a proposito: la
-    # parte lenta es el `package_upgrade` de Ubuntu, y su duracion no depende de
-    # nosotros -si `apt-daily` coge el cerrojo de dpkg, espera lo que haga falta-.
+    # parte lenta es apt, y su duracion no depende de nosotros -si `apt-daily`
+    # coge el cerrojo de dpkg, se espera lo que haga falta-.
     # El 2026-09-10 por la noche, con 900 s, dos `launch dev` seguidos murieron
     # ahi. Esperar de mas cuesta centimos; relanzar cuesta el lanzamiento entero.
     "DO_DEV_TOOLS_TIMEOUT": "1800",
@@ -2064,9 +2064,10 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
                 log(f"  la comprobación no llega a la máquina: {pega}")
                 ultima_pega = pega
         if not warned:
-            # La espera larga no son las herramientas (30 s medidos), sino el
-            # package_upgrade de Ubuntu que corre antes: 154 s en la medición.
-            log("  esperando a que cloud-init termine de instalar (unos 4 min)…")
+            # La espera larga no son las herramientas -40 s medidos el
+            # 2026-09-11, con Node, Claude Code, gh y uv dentro-, sino apt y
+            # los scripts de DigitalOcean, que corren antes.
+            log("  esperando a que cloud-init termine de instalar (unos 3 min)…")
             warned = True
         if time.time() >= proximo_parte:
             log("  sigue sin terminar. Esto es lo que dice la máquina:")
@@ -2079,7 +2080,11 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
         "Lo que dice la máquina ahora mismo:\n"
         + diagnostico_de_arranque(ip, port)
         + (f"\n  (la comprobación se quejaba de: {ultima_pega})" if ultima_pega else "")
-        + "\n\nSi la instalación sigue avanzando, dale tiempo y remátala con:\n"
+        + "\n\nY OJO CON LO QUE ESA MAQUINA ES AHORA MISMO: `launch` muere aquí,\n"
+        "que es ANTES de aprovisionar. O sea que no tiene secretos, ni repos, ni\n"
+        "servicios: sistema operativo y SSH, y nada más. Si esperabas que su bot\n"
+        "de Telegram contestase, no va a contestar, y no es que esté rota.\n\n"
+        "Si la instalación sigue avanzando, dale tiempo y remátala con:\n"
         "  python scripts/do_droplet.py provision <nombre>\n"
         "Si está atascada, destrúyela para no pagarla:\n"
         "  python scripts/do_droplet.py destroy <nombre> --yes"

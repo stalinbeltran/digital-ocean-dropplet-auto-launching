@@ -109,6 +109,14 @@ def main() -> int:
          "es lo unico que llega al chat: el coordinador solo publica stderr")
     caso("el error dice como rematar y como destruir",
          "provision" in msg and "destroy" in msg)
+    # El 2026-09-10, tras el fallo, el usuario probo a escribirle al bot de esa
+    # maquina y no contesto nunca, y lo leyo como "ademas se rompio algo". No se
+    # habia roto nada: `launch` muere AQUI, que es antes de `provision`, o sea
+    # antes de los secretos, los repos y los servicios. La maquina estaba a
+    # medio hacer y nada lo decia.
+    caso("el error avisa de que la maquina esta a medio hacer",
+         "ni repos" in msg and "Telegram" in msg,
+         "un bot que no contesta se lee como averia, y solo es que no esta puesto")
 
     # --- una sonda que NO LLEGA no es un 'todavia no' ----------------------
     dicho.clear()
@@ -185,7 +193,7 @@ def main() -> int:
          mod.DEFAULTS.get("DO_DEV_TOOLS_TIMEOUT") == "1800",
          "900 s se quedo corto dos veces seguidas el 2026-09-10")
 
-    total = 15
+    total = 16
     print(f"\n{total - fallos}/{total} pasan")
     return 1 if fallos else 0
 
