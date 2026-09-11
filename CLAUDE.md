@@ -445,7 +445,27 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   muere ahí, que es **antes** de `provision`: sin secretos, sin repos y sin servicios. El
   2026-09-10, tras el fallo, se le escribió al bot de ese dev y no contestó nunca, y eso se leyó
   como «además se rompió algo». No se había roto nada: el bot no estaba instalado todavía.
-- 16 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
+- **⚠⚠ Y LA CAUSA DE VERDAD, encontrada el 2026-09-11 en vivo: el entorno de un servicio es una
+  FOTO de cuando arrancó.** `provision` instala y ARRANCA los servicios, y `hacer_lanzador()` y
+  los `post` del tipo escriben en `dev-secrets.env` **después**. Todo lo que se escriba a partir
+  de ahí es invisible para ese servicio **para siempre**, y nada lo delata.
+  Lo concreto: un mini recién hecho arranca su bot antes de que exista
+  `DO_SSH_KEY_FILE=~/.ssh/do_flota`, así que **todo `launch` que salga del bot** cae al defecto
+  `~/.ssh/do_droplet` —una clave local que **nadie registró en la cuenta**— y se queda sondeando
+  con `Permission denied` hasta agotar el plazo. Desde una sesión SSH el mismo comando funciona,
+  porque un shell de login sí lee el fichero.
+  ⚠ **Por eso no se reproducía**: el 2026-09-11 por la mañana se probó «desde el mini» con
+  `ssh … bash -lc`, que es justo el único entorno que NO falla. Para probar el camino del bot hay
+  que usar el buzón `data/entrada/`, no SSH.
+  Desde entonces `provision` llama a `reiniciar_servicios()` al final, después de
+  `hacer_lanzador()`. **No lo quites**: sin eso, cualquier variable nueva que se escriba tarde
+  nace invisible.
+- **Una clave RECHAZADA no se arregla esperando, y ahora no se espera.** Un droplet sólo acepta
+  las claves registradas **cuando se creó**, así que un `Permission denied` es definitivo. Tras
+  `RECHAZOS_FATALES` (6 sondas, ~1 min) la espera muere diciendo **con qué clave** se estaba
+  intentando y que mire `keys`. Un `Connection refused` NO mata: durante el arranque sshd se
+  reinicia y eso sí se arregla solo.
+- 21 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
 
 ### Y lo que hacía largo el arranque: `package_upgrade`
 

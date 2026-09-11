@@ -177,6 +177,11 @@ def main() -> int:
     limpio.diagnostico_de_arranque = lambda ip, port, timeout=45: "  - cloud-init: status: done"
     # Reloj de mentira: el `inicio` y la comprobacion del plazo ven 0, y la
     # medicion de cuanto tardo ve 9999. Asi no hay que esperar de verdad.
+    # ⚠ `limpio.time` es el modulo `time` GLOBAL -importlib da un modulo nuevo
+    # para do_droplet, no para lo que este importa-, asi que esto parchea el
+    # reloj de TODO el proceso. Sin restaurarlo despues, los casos siguientes
+    # ven un reloj parado y sus bucles no vencen nunca: colgaron el test.
+    reloj_real = limpio.time.time
     lento = iter([0.0, 0.0])
     limpio.time.time = lambda: next(lento, 9999.0)
     limpio.subprocess.run = lambda *a, **k: Salida(stdout="READY\n")
@@ -185,15 +190,68 @@ def main() -> int:
          any("tard" in d for d in dicho),
          "si no, el plazo mas largo esconde justo lo que hay que ver")
 
+    limpio.time.time = reloj_real  # ver el aviso de arriba
     caso("el umbral de sospecha es el doble de lo peor medido",
          mod.LENTO_SOSPECHOSO == 600, "272 s y 348 s el 2026-09-11")
+
+    # --- una clave RECHAZADA no se arregla esperando ----------------------
+    # El 2026-09-11 esto costo 30 min por lanzamiento, y dos dias de no dar con
+    # ello: el bot del mini arrancaba antes de que existiera DO_SSH_KEY_FILE en
+    # `dev-secrets.env`, caia al defecto `~/.ssh/do_droplet` -una clave que nadie
+    # registro en la cuenta- y sondeaba con "Permission denied" hasta agotar el
+    # plazo. Un droplet solo acepta las claves registradas CUANDO SE CREO, asi
+    # que ese rechazo no iba a cambiar nunca.
+    dicho.clear()
+    limpio = cargar()
+    limpio.log = lambda m: dicho.append(str(m))
+    limpio.time.sleep = lambda s: None
+    limpio.diagnostico_de_arranque = lambda ip, port, timeout=45: "  - cloud-init: status: done"
+    limpio.subprocess.run = lambda *a, **k: Salida(
+        stdout="", stderr="root@1.2.3.4: Permission denied (publickey)." + chr(10), returncode=255)
+    buf = io.StringIO()
+    t0 = __import__("time").time()
+    with redirect_stderr(buf):
+        try:
+            limpio.wait_for_dev_tools("1.2.3.4", 22, timeout=99999)
+            murio = False
+        except SystemExit:
+            murio = True
+    msg = buf.getvalue()
+    caso("una clave rechazada mata la espera en vez de agotar el plazo", murio,
+         "con timeout=99999: si esperase, este test no volveria")
+    caso("y el error dice CON QUE CLAVE se estaba intentando",
+         "DO_SSH_KEY_FILE" in msg and "keys" in msg,
+         "el dato que faltaba: la clave por defecto puede no ser la tuya")
+    caso("y recuerda que la maquina sigue facturando",
+         "FACTURANDO" in msg)
+    caso("no se rinde a la primera sonda", limpio.RECHAZOS_FATALES >= 3,
+         f"son {limpio.RECHAZOS_FATALES}: la primera puede caer con sshd colocandose")
+
+    # Y el simetrico: un fallo de SSH que NO es de clave sigue esperando, porque
+    # "connection refused" durante el arranque es normal y se arregla solo.
+    limpio2 = cargar()
+    limpio2.log = lambda m: None
+    limpio2.time.sleep = lambda s: None
+    limpio2.diagnostico_de_arranque = lambda ip, port, timeout=45: ""
+    limpio2.subprocess.run = lambda *a, **k: Salida(
+        stdout="", stderr="ssh: connect to host 1.2.3.4 port 22: Connection refused" + chr(10),
+        returncode=255)
+    buf2 = io.StringIO()
+    with redirect_stderr(buf2):
+        try:
+            limpio2.wait_for_dev_tools("1.2.3.4", 22, timeout=0.01)
+        except SystemExit:
+            pass
+    caso("un 'connection refused' NO mata: eso si se arregla solo",
+         "RECHAZA la clave" not in buf2.getvalue(),
+         "durante el arranque sshd se reinicia, y eso es normal")
 
     # --- el techo de la espera es configurable ----------------------------
     caso("el plazo por defecto sale de la configuracion",
          mod.DEFAULTS.get("DO_DEV_TOOLS_TIMEOUT") == "1800",
          "900 s se quedo corto dos veces seguidas el 2026-09-10")
 
-    total = 16
+    total = 21
     print(f"\n{total - fallos}/{total} pasan")
     return 1 if fallos else 0
 

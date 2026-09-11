@@ -87,6 +87,14 @@ DEFAULTS = {
 # de lo peor visto, así que pasar de ahí no es "iba un poco lento".
 LENTO_SOSPECHOSO = 600
 
+# Sondas seguidas con la clave rechazada antes de dar el acceso por imposible.
+# No es 1 porque la primera puede caer mientras sshd aun se esta colocando; no es
+# 20 porque un rechazo de clave NO se arregla esperando: el droplet solo acepta
+# las claves registradas cuando se creo, y eso ya no cambia. Con la sonda cada
+# 10 s, seis son ~1 minuto: suficiente para descartar el arranque y muy lejos de
+# los 30 del plazo, que es lo que se perdia antes en silencio.
+RECHAZOS_FATALES = 6
+
 
 # ---------------------------------------------------------------- configuración
 
@@ -2010,6 +2018,7 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
     warned = False
     proximo_parte = inicio + 180
     ultima_pega = ""
+    rechazos = 0
     while time.time() < deadline:
         try:
             probe = subprocess.run(
@@ -2063,6 +2072,29 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
             if pega != ultima_pega:
                 log(f"  la comprobación no llega a la máquina: {pega}")
                 ultima_pega = pega
+            # ⚠ Y hay un motivo que NO es cuestión de esperar más: si la máquina
+            # rechaza la clave, va a rechazarla las mil veces siguientes. Esperar
+            # media hora a que eso cambie es perder media hora y, desde el móvil,
+            # no enterarse de nada. Se cuentan seguidos -no el primero, que puede
+            # caer mientras sshd aún se está colocando- y se muere diciendo con
+            # QUÉ clave se estaba intentando, que es el dato que falta.
+            if "Permission denied" in pega or "Too many authentication" in pega:
+                rechazos += 1
+                if rechazos >= RECHAZOS_FATALES:
+                    die(
+                        f"El droplet RECHAZA la clave. No es que no esté listo:\n"
+                        f"  {pega}\n\n"
+                        f"Se está intentando con:  {cfg('DO_SSH_KEY_FILE')}\n"
+                        "(de DO_SSH_KEY_FILE; si esa variable no está en el entorno,\n"
+                        " ése es el valor por defecto, y puede no ser tu clave real)\n\n"
+                        "Mira si esa clave está registrada en la cuenta:\n"
+                        "  python scripts/do_droplet.py keys\n"
+                        "Un droplet sólo acepta las claves registradas CUANDO SE CREÓ.\n\n"
+                        "OJO: el droplet SIGUE VIVO Y FACTURANDO.\n"
+                        "  python scripts/do_droplet.py destroy <nombre> --yes"
+                    )
+            else:
+                rechazos = 0
         if not warned:
             # La espera larga no son las herramientas -40 s medidos el
             # 2026-09-11, con Node, Claude Code, gh y uv dentro-, sino apt y
@@ -2788,6 +2820,49 @@ def build_provision_script(
     return "\n".join(parts) + "\n"
 
 
+def reiniciar_servicios(ip: str, port: int, services: list[str]) -> None:
+    """Reinicia los servicios instalados para que vean el entorno FINAL.
+
+    ⚠⚠ ESTO NO ES HIGIENE, es la diferencia entre una máquina que funciona y una
+    que miente. **El entorno de un proceso es una FOTO de cuando arrancó**, y
+    aquí los servicios arrancan A MITAD del aprovisionamiento: `hacer_lanzador()`
+    y los `post` del tipo escriben en `dev-secrets.env` DESPUÉS. Todo lo que se
+    escriba a partir de ese punto es invisible para el servicio **para siempre**,
+    y ningún error lo delata.
+
+    Medido el 2026-09-11, y costó dos días y media docena de droplets: el mini
+    recién hecho arrancaba su bot antes de que existiera
+    `DO_SSH_KEY_FILE=~/.ssh/do_flota`, así que todo `launch` que salía del bot
+    caía al defecto `~/.ssh/do_droplet` -una clave local que NADIE registró en la
+    cuenta-, y se quedaba sondeando con `Permission denied` hasta agotar el
+    plazo. Desde una sesión SSH el mismo comando funcionaba, porque un shell de
+    login sí lee el fichero. El mismo comando, dos entornos, y sólo uno roto:
+    por eso no se reproducía.
+
+    Un fallo aquí no aborta nada: para cuando esto corre, la máquina ya está
+    hecha, y tumbar el lanzamiento por un `systemctl` sale peor que avisar.
+    """
+    if not services:
+        return
+    log("\nReiniciando los servicios para que vean el entorno final…")
+    guion = "\n".join(
+        [
+            "set -u",
+            *[
+                f'systemctl restart {shq(s)} 2>/dev/null'
+                f' && echo "  {s}: reiniciado"'
+                f' || echo "  AVISO: {s}: no se pudo reiniciar; puede que le falten'
+                f' variables escritas despues de arrancar."'
+                for s in services
+            ],
+        ]
+    )
+    try:
+        run_remote_script(ip, port, guion, timeout=120)
+    except Exception as exc:  # noqa: BLE001 - ver el docstring
+        log(f"  AVISO: no se pudieron reiniciar ({type(exc).__name__}). La máquina está hecha.")
+
+
 def cmd_provision(args: argparse.Namespace) -> bool:
     """Deja la máquina lista. Devuelve False si quedó a medias (algún repo sin clonar).
 
@@ -2870,6 +2945,8 @@ def cmd_provision(args: argparse.Namespace) -> bool:
     if make_launcher:
         log("\nDejando la máquina en condiciones de lanzar droplets…")
         hacer_lanzador(name, ip, port)
+
+    reiniciar_servicios(ip, port, services)
 
     if incompleto:
         if getattr(args, "desde_launch", False):
