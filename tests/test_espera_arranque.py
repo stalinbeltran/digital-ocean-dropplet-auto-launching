@@ -158,12 +158,34 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         caso("el diagnostico vuelve si la maquina calla", False, f"levanto {type(exc).__name__}")
 
+    # --- un arranque MUY lento que acaba bien tampoco puede pasar mudo ----
+    # Subir el plazo dejo de perder lanzamientos, pero de paso convertia el
+    # arranque patologico en un exito sin rastro. Va por stdout a proposito: en
+    # un `launch` que sale con 0, eso es lo que el coordinador publica al chat.
+    dicho.clear()
+    limpio = cargar()
+    limpio.log = lambda m: dicho.append(str(m))
+    limpio.time.sleep = lambda s: None
+    limpio.diagnostico_de_arranque = lambda ip, port, timeout=45: "  - cloud-init: status: done"
+    # Reloj de mentira: el `inicio` y la comprobacion del plazo ven 0, y la
+    # medicion de cuanto tardo ve 9999. Asi no hay que esperar de verdad.
+    lento = iter([0.0, 0.0])
+    limpio.time.time = lambda: next(lento, 9999.0)
+    limpio.subprocess.run = lambda *a, **k: Salida(stdout="READY\n")
+    limpio.wait_for_dev_tools("1.2.3.4", 22, timeout=99999)
+    caso("un arranque lentisimo se denuncia aunque acabe bien",
+         any("tard" in d for d in dicho),
+         "si no, el plazo mas largo esconde justo lo que hay que ver")
+
+    caso("el umbral de sospecha es el doble de lo peor medido",
+         mod.LENTO_SOSPECHOSO == 600, "272 s y 348 s el 2026-09-11")
+
     # --- el techo de la espera es configurable ----------------------------
     caso("el plazo por defecto sale de la configuracion",
          mod.DEFAULTS.get("DO_DEV_TOOLS_TIMEOUT") == "1800",
          "900 s se quedo corto dos veces seguidas el 2026-09-10")
 
-    total = 13
+    total = 15
     print(f"\n{total - fallos}/{total} pasan")
     return 1 if fallos else 0
 

@@ -429,7 +429,12 @@ aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
   haga falta. Por eso las dos plantillas paran esos timers en `bootcmd` y los devuelven al final
   de `runcmd`: **lo que se desactiva es la carrera, no las actualizaciones**, y la ventana es
   exactamente el aprovisionamiento. `systemctl stop` de un timer no es persistente.
-- 13 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
+- **Y un arranque lentísimo que ACABA BIEN también se denuncia.** Subir el plazo dejó de perder
+  lanzamientos, pero de paso convertía el arranque patológico en un éxito mudo: antes fallaba y
+  al menos se notaba. Por encima de `LENTO_SOSPECHOSO` (600 s, el doble de lo peor medido) la
+  espera dice cuánto tardó y adjunta el diagnóstico. Va por `stdout` a propósito: en un `launch`
+  que sale con 0, eso es justo lo que el coordinador publica en el chat.
+- 15 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
 
 ⚠ Y lo que NO se sabe, dicho como lo que es: **no se ha podido reproducir el fallo de aquella
 noche.** El 2026-09-11 se lanzó un `dev` desde la laptop y un droplet desde el mini, y los dos

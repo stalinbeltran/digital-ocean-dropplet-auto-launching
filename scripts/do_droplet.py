@@ -80,6 +80,13 @@ DEFAULTS = {
     "DO_VOLUME_SIZE_GB": "10",
 }
 
+# A partir de aquí, un arranque que acabe bien se denuncia igualmente. Subir el
+# plazo de espera de 900 a 1800 s dejó de perder lanzamientos, pero de paso
+# convertía el arranque patológico en un ÉXITO MUDO: antes fallaba y al menos se
+# notaba. Medido el 2026-09-11 en dos droplets: 272 s y 348 s. 600 s es el doble
+# de lo peor visto, así que pasar de ahí no es "iba un poco lento".
+LENTO_SOSPECHOSO = 600
+
 
 # ---------------------------------------------------------------- configuración
 
@@ -1998,9 +2005,10 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
         y sólo va a ver eso.
     """
     timeout = timeout or int(cfg("DO_DEV_TOOLS_TIMEOUT") or 1800)
-    deadline = time.time() + timeout
+    inicio = time.time()
+    deadline = inicio + timeout
     warned = False
-    proximo_parte = time.time() + 180
+    proximo_parte = inicio + 180
     ultima_pega = ""
     while time.time() < deadline:
         try:
@@ -2023,6 +2031,20 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
             continue
         state = probe.stdout.strip()
         if state == "READY":
+            # Un arranque MUY lento tiene que dejar rastro aunque acabe bien.
+            # Subir el plazo de 900 a 1800 s arregló que se perdieran
+            # lanzamientos, pero de paso convirtió el arranque patológico en un
+            # éxito mudo: antes fallaba y al menos se notaba. Esto se imprime
+            # por `stdout`, que en un `launch` que sale con 0 es lo que el
+            # coordinador SÍ publica en el chat.
+            tardanza = int(time.time() - inicio)
+            if tardanza > LENTO_SOSPECHOSO:
+                log(
+                    f"  OJO: la instalación tardó {tardanza} s. Lo medido el "
+                    f"2026-09-11 fueron 272 y 348 s desde el arranque, así que"
+                )
+                log("       esto no es normal. Si se repite, mira el arranque:")
+                log(diagnostico_de_arranque(ip, port))
             return
         if state == "FAILED":
             die(
