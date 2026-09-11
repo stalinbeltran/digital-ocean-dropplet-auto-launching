@@ -54,6 +54,14 @@ DEFAULTS = {
     # El droplet escucha en ambos; se prueba en este orden y se usa el primero
     # que responda. Sirve para redes que bloquean el 22 saliente.
     "DO_SSH_PORTS": "22,443",
+    # Cuanto se espera a que cloud-init acabe de instalar las herramientas antes
+    # de dar el arranque por perdido. Medido el 2026-09-11 en dos droplets:
+    # 272 s y 348 s desde el arranque. El techo es muy superior a proposito: la
+    # parte lenta es el `package_upgrade` de Ubuntu, y su duracion no depende de
+    # nosotros -si `apt-daily` coge el cerrojo de dpkg, espera lo que haga falta-.
+    # El 2026-09-10 por la noche, con 900 s, dos `launch dev` seguidos murieron
+    # ahi. Esperar de mas cuesta centimos; relanzar cuesta el lanzamiento entero.
+    "DO_DEV_TOOLS_TIMEOUT": "1800",
     # Usuario del droplet que acaba con las credenciales y los repos. Lo crea
     # cloud-init. El aprovisionamiento entra siempre como root (hace falta para
     # escribir en el home de otro usuario), pase lo que pase con DO_SSH_USER.
@@ -1924,14 +1932,76 @@ def hacer_lanzador(name: str, ip: str, port: int) -> None:
     log("  (los droplets que cree esta máquina la aceptarán; los creados ANTES, no)")
 
 
-def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
+def diagnostico_de_arranque(ip: str, port: int, timeout: int = 45) -> str:
+    """Qué está haciendo la máquina AHORA, preguntándoselo a ella.
+
+    Existe para meterlo DENTRO del mensaje de error, no para imprimirlo por el
+    camino: cuando el lanzamiento sale del bot de Telegram, el coordinador sólo
+    publica `stderr` y sólo si el código no es 0, así que todo lo que se cuente
+    por `stdout` mientras se espera no llega a ningún sitio. Un diagnóstico que
+    no llega al chat es un diagnóstico que no existe para quien lanza del móvil.
+
+    Se traga cualquier fallo y devuelve texto igualmente: esto se llama cuando
+    algo ya ha ido mal, y no puede tapar el fallo que estaba contándose.
+    """
+    guion = r"""
+echo "- cloud-init: $(cloud-init status 2>&1 | head -1)"
+# `unattended-upgrade-shutdown` esta SIEMPRE ahi esperando una senal, asi que
+# nombrarlo seria ruido constante. Lo que importa es un apt de verdad: si sale
+# uno aqui, el `package_upgrade` de cloud-init esta peleando por el cerrojo.
+echo "- apt en marcha: $(pgrep -a -f 'apt-get|unattended-upgrade' \
+  | grep -v unattended-upgrade-shutdown | head -2 | tr '\n' ';')"
+if [ -e /var/log/dev-tools-install.log ]; then
+  echo "- ultimas lineas de /var/log/dev-tools-install.log:"
+  tail -5 /var/log/dev-tools-install.log | sed "s/^/    /"
+else
+  echo "- /var/log/dev-tools-install.log todavia no existe:"
+  echo "  cloud-init no ha llegado siquiera a instalar las herramientas."
+fi
+"""
+    try:
+        salida = subprocess.run(
+            ssh_command(ip, port, user="root") + ["bash -s"],
+            input=guion.encode("utf-8"),
+            capture_output=True,
+            timeout=timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - ver el docstring
+        return f"  (no se pudo preguntar a la máquina: {type(exc).__name__})"
+    texto = salida.stdout.decode("utf-8", "replace").strip()
+    if not texto:
+        pega = salida.stderr.decode("utf-8", "replace").strip().splitlines()
+        return "  (la máquina no contestó" + (f": {pega[-1]}" if pega else "") + ")"
+    return "\n".join("  " + linea for linea in texto.splitlines())
+
+
+def wait_for_dev_tools(ip: str, port: int, timeout: int = 0) -> None:
     """Espera a que cloud-init termine de instalar Node, Claude Code y gh.
 
     SSH responde bastante antes de que cloud-init acabe, así que inyectar los
     secretos nada más conectar pillaría la máquina a medio hacer.
+
+    ⚠ Aquí EL SILENCIO ES EL FALLO, y costó una mañana entera de investigación.
+    El 2026-09-10 por la noche dos `launch dev` seguidos desde el mini murieron
+    con "se agotó la espera" y nada más: ni si la máquina iba lenta, ni si
+    estaba atascada, ni si la sonda llegaba siquiera. Y no llegar se parece
+    demasiado a no estar lista -una sonda que falla por SSH deja `stdout`
+    vacío, exactamente igual que un "todavía no"-, así que los dos casos se
+    confundían en el mismo bucle mudo de quince minutos.
+
+    De ahí las tres cosas que hace ahora, y ninguna es cosmética:
+      - mira el `stderr` de la sonda, para distinguir "no está lista" de "no
+        llego a ella";
+      - cuenta cada pocos minutos qué está haciendo la máquina, para quien
+        mira la terminal;
+      - y mete el diagnóstico DENTRO del error, para quien lanzó desde el móvil
+        y sólo va a ver eso.
     """
+    timeout = timeout or int(cfg("DO_DEV_TOOLS_TIMEOUT") or 1800)
     deadline = time.time() + timeout
     warned = False
+    proximo_parte = time.time() + 180
+    ultima_pega = ""
     while time.time() < deadline:
         try:
             probe = subprocess.run(
@@ -1960,15 +2030,37 @@ def wait_for_dev_tools(ip: str, port: int, timeout: int = 900) -> None:
                 "  python scripts/do_droplet.py ssh --cmd "
                 "'tail -40 /var/log/dev-tools-install.log'"
             )
+        if state != "WAIT":
+            # La sonda no llegó a correr: lo que ha fallado es el SSH, no la
+            # instalación. Sin esto, un ssh que no conecta deja `stdout` vacío y
+            # es indistinguible de un "todavía no", así que el bucle esperaba en
+            # silencio hasta agotar el plazo y el error no decía por qué. Eso no
+            # se puede depurar desde un chat de Telegram.
+            lineas = (probe.stderr or "").strip().splitlines()
+            pega = lineas[-1] if lineas else f"ssh salió con {probe.returncode}"
+            if pega != ultima_pega:
+                log(f"  la comprobación no llega a la máquina: {pega}")
+                ultima_pega = pega
         if not warned:
             # La espera larga no son las herramientas (30 s medidos), sino el
             # package_upgrade de Ubuntu que corre antes: 154 s en la medición.
             log("  esperando a que cloud-init termine de instalar (unos 4 min)…")
             warned = True
+        if time.time() >= proximo_parte:
+            log("  sigue sin terminar. Esto es lo que dice la máquina:")
+            log(diagnostico_de_arranque(ip, port))
+            proximo_parte = time.time() + 300
         time.sleep(10)
     die(
-        "Se agotó la espera a que el droplet terminase de instalar las herramientas.\n"
-        "  python scripts/do_droplet.py ssh --cmd 'tail -40 /var/log/dev-tools-install.log'"
+        f"Se agotó la espera ({timeout} s) a que el droplet terminase de instalar\n"
+        "las herramientas. OJO: EL DROPLET SIGUE VIVO Y FACTURANDO.\n\n"
+        "Lo que dice la máquina ahora mismo:\n"
+        + diagnostico_de_arranque(ip, port)
+        + (f"\n  (la comprobación se quejaba de: {ultima_pega})" if ultima_pega else "")
+        + "\n\nSi la instalación sigue avanzando, dale tiempo y remátala con:\n"
+        "  python scripts/do_droplet.py provision <nombre>\n"
+        "Si está atascada, destrúyela para no pagarla:\n"
+        "  python scripts/do_droplet.py destroy <nombre> --yes"
     )
 
 

@@ -16,6 +16,23 @@ users:
 ssh_pwauth: false
 disable_root: false
 
+# Quitar de en medio las actualizaciones automaticas de Ubuntu MIENTRAS dura
+# este primer arranque. No es manía: el `package_upgrade` de aqui abajo pide el
+# cerrojo de dpkg, y si `apt-daily` arranca a la vez se queda esperando el
+# tiempo que haga falta. Y arranca cuando le toca: su timer lleva un retardo
+# ALEATORIO de hasta 12 h, asi que unas veces cae en el primer arranque y otras
+# no. Medido el 2026-09-11 en dos droplets recien creados: el siguiente disparo
+# salia a las 23:36 en uno y a la 01:46 del dia siguiente en el otro. Eso
+# convierte la duracion del arranque en una loteria, y el 2026-09-10 por la
+# noche dos `launch dev` seguidos se pasaron del plazo del lanzador.
+#
+# `systemctl stop` de un timer NO es persistente -vuelve solo en el siguiente
+# arranque-, y ademas la ultima linea de `runcmd` los rearranca. O sea que lo
+# que se desactiva es la CARRERA, no las actualizaciones: la ventana es
+# exactamente el aprovisionamiento.
+bootcmd:
+  - [cloud-init-per, once, apt-daily-fuera, systemctl, stop, apt-daily.timer, apt-daily-upgrade.timer]
+
 package_update: true
 package_upgrade: true
 packages:
@@ -212,6 +229,9 @@ runcmd:
   # Después de asegurar el acceso, nunca antes: si la instalación se atasca, el
   # droplet ya es accesible y se puede mirar el log por SSH.
   - /usr/local/sbin/dev-tools-install
+  # Y se devuelven las actualizaciones automaticas, que solo estaban apartadas
+  # para que no compitieran por el cerrojo de dpkg durante el arranque.
+  - sh -c 'systemctl start apt-daily.timer apt-daily-upgrade.timer || true'
   # Centinela: su existencia significa que el arranque terminó de verdad.
   # Compruébalo con: ssh <droplet> 'cloud-init status --wait'
   - touch /var/lib/cloud/READY

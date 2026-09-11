@@ -398,6 +398,44 @@ Lo imprescindible:
   saliendo en `GET /v2/droplets` unos segundos. Destruir y recrear con el mismo nombre sin esperar
   falla con un "ya existe" falso; `cmd_destroy` espera con `wait_until_gone()`.
 
+## Esperar al arranque: una espera que no cuenta nada no se puede depurar
+
+El 2026-09-10 por la noche dos `launch dev` seguidos desde el mini murieron con **«Se agotó la
+espera a que el droplet terminase de instalar las herramientas»** y nada más. Encontrarlo costó
+una mañana entera y dos droplets lanzados a mano —que salieron bien, en 272 s y 348 s—, y aun
+así la conclusión honesta fue *no se sabe*: el bucle no había guardado un solo dato. Lo que se
+aprende de ahí, y aplica a **cualquier** espera que se escriba en este repo:
+
+- **Una sonda por SSH que falla deja `stdout` vacío, que es idéntico a un «todavía no».** Esos
+  dos casos —la máquina va lenta y no llego a la máquina— no se pueden confundir, porque el
+  arreglo de cada uno no se parece en nada. Se distinguen mirando el `stderr` y el código de
+  salida, que antes se tiraban a la basura.
+- **El diagnóstico va DENTRO del mensaje de error, no impreso por el camino.** Cuando el
+  lanzamiento sale del bot, el coordinador sólo publica `stderr` y sólo si el código no es 0:
+  todo lo que se cuente por `stdout` mientras se espera no llega a ningún sitio. De ahí
+  `diagnostico_de_arranque()`, que pregunta a la máquina qué está haciendo justo antes de morir
+  —`cloud-init status`, si hay un apt peleando, y las últimas líneas del log de instalación— y
+  lo mete en el `die()`.
+- **Y el error avisa de que el droplet SIGUE VIVO Y FACTURANDO**, con cómo rematarlo
+  (`provision`) y cómo tirarlo (`destroy`). Ayer nadie lo dijo, y quedaron dos máquinas de
+  24 $/mes encendidas sin que hicieran falta.
+- **El plazo era de 900 s y se quedó corto dos veces.** Hoy sale de `DO_DEV_TOOLS_TIMEOUT`
+  (1800 s por defecto). Esperar de más cuesta céntimos; relanzar cuesta el lanzamiento entero.
+- **La duración del arranque es una lotería, y la echa `apt-daily`.** El `package_upgrade` de
+  cloud-init pide el cerrojo de dpkg, y el timer de las actualizaciones automáticas de Ubuntu
+  lleva un retardo **aleatorio de hasta 12 h**: unas veces cae en el primer arranque y otras no
+  (medido el 2026-09-11 en dos droplets recién creados: el siguiente disparo salía a las 23:36
+  en uno y a la 01:46 del día siguiente en el otro). Si caen juntos, cloud-init espera lo que
+  haga falta. Por eso las dos plantillas paran esos timers en `bootcmd` y los devuelven al final
+  de `runcmd`: **lo que se desactiva es la carrera, no las actualizaciones**, y la ventana es
+  exactamente el aprovisionamiento. `systemctl stop` de un timer no es persistente.
+- 13 tests en `tests/test_espera_arranque.py`: `python3 tests/test_espera_arranque.py`.
+
+⚠ Y lo que NO se sabe, dicho como lo que es: **no se ha podido reproducir el fallo de aquella
+noche.** El 2026-09-11 se lanzó un `dev` desde la laptop y un droplet desde el mini, y los dos
+nacieron bien. O sea que esto no es «arreglado el fallo», es «la próxima vez el fallo dirá qué
+le pasa» más «la causa más probable, que era una carrera, ya no puede darse».
+
 ## Entorno de desarrollo dentro del droplet
 
 El objetivo es poder seguir cualquier proyecto en una máquina recién creada sin

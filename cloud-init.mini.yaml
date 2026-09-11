@@ -37,6 +37,13 @@ swap:
   size: 1073741824
   maxsize: 1073741824
 
+# Lo mismo que en cloud-init.yaml, y aqui aprieta mas: en 512 MB una pelea por
+# el cerrojo de dpkg entre `apt-daily` y el `package_upgrade` de cloud-init sale
+# todavia mas cara. El detalle de por que y de que se midio, en cloud-init.yaml.
+# Los timers vuelven al final de `runcmd`.
+bootcmd:
+  - [cloud-init-per, once, apt-daily-fuera, systemctl, stop, apt-daily.timer, apt-daily-upgrade.timer]
+
 package_update: true
 package_upgrade: true
 packages:
@@ -176,6 +183,9 @@ runcmd:
   - systemctl enable --now ssh-watchdog.timer
   - systemctl enable --now fail2ban
   - /usr/local/sbin/dev-tools-install
+  # Se devuelven las actualizaciones automaticas, apartadas solo durante el
+  # arranque para que no compitieran por el cerrojo de dpkg.
+  - sh -c 'systemctl start apt-daily.timer apt-daily-upgrade.timer || true'
   - touch /var/lib/cloud/READY
 
 final_message: "Maquina de control lista tras $UPTIME segundos."
