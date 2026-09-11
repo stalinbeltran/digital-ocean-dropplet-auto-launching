@@ -4,7 +4,7 @@
   "ejemplos": [
     "--service foveal-vision-web"
   ],
-  "command": "python3 scripts/do_droplet.py install-service {{input}} 2>&1; true",
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/do_droplet.py install-service {{input}} 2>&1; true",
   "encargados": [
     "echo"
   ],

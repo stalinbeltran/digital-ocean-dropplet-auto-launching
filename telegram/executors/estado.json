@@ -4,7 +4,7 @@
   "ejemplos": [
     ""
   ],
-  "command": "python3 scripts/estado_nubes.py --exit0",
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/estado_nubes.py --exit0",
   "encargados": [
     "echo"
   ],

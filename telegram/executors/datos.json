@@ -6,7 +6,7 @@
     "check",
     "fetch dirty-1000-80px"
   ],
-  "command": "python3 scripts/dataset.py {{input}}",
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/dataset.py {{input}}",
   "encargados": [
     "echo"
   ],

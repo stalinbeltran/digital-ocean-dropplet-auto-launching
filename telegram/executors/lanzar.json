@@ -9,7 +9,7 @@
     "destroy bench-control --yes",
     "ssh bench-control --cmd 'uptime'"
   ],
-  "command": "set -- {{input}}; if [ $# -eq 1 ] && [ \"$1\" = list ]; then exec python3 scripts/estado_nubes.py --exit0; fi; exec python3 scripts/do_droplet.py \"$@\"",
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; set -- {{input}}; if [ $# -eq 1 ] && [ \"$1\" = list ]; then exec python3 scripts/estado_nubes.py --exit0; fi; exec python3 scripts/do_droplet.py \"$@\"",
   "encargados": [
     "echo"
   ],

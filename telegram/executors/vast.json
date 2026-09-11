@@ -7,7 +7,7 @@
     "sweep --bench foveal-cpu --dry-run",
     "destroy --all --yes"
   ],
-  "command": "python3 scripts/vast_instance.py {{input}}",
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/vast_instance.py {{input}}",
   "encargados": [
     "echo"
   ],

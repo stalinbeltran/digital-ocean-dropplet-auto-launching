@@ -4,7 +4,7 @@
   "ejemplos": [
     ""
   ],
-  "command": "python3 scripts/vast_instance.py destroy --all --yes",
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/vast_instance.py destroy --all --yes",
   "encargados": [
     "echo"
   ],
