@@ -68,6 +68,20 @@ def main() -> int:
         return 1
 
     fallos = 0
+
+    # El OTRO lado del contrato: que el servicio declare un comando que imprima
+    # UNA linea, no un texto. Reproducido el 2026-09-12 ejecutando el codigo:
+    # `cweb url` a secas es prosa para un humano y a veces acaba en el comando
+    # que arregla el serve, que lleva un `http://127.0.0.1:8020` dentro; con el
+    # parser de aqui arriba eso se publicaba como si fuera la direccion.
+    #
+    # Se comprueba el DESCRIPTOR y no la salida remota a proposito: la salida
+    # depende de una maquina, y esto tiene que fallar aqui, sin una.
+    cweb = mod.load_service("claude-web")
+    ok = "--plano" in (cweb.get("url") or "")
+    fallos += not ok
+    print(f"  {'ok   ' if ok else 'FALLO'} {'claude-web pide --plano':24} -> {cweb.get('url')}")
+
     for nombre, respuesta, espera_url in CASOS:
         mod.run_remote_split = lambda ip, port, s, _r=respuesta: _r
         direccion, aviso = mod.url_de_servicio(svc, "dev", "1.2.3.4", 22, "deploy")
@@ -81,7 +95,8 @@ def main() -> int:
         print(f"  {'ok   ' if ok else 'FALLO'} {nombre:24} -> "
               f"{direccion or aviso.splitlines()[0]}")
 
-    print(f"\n{len(CASOS) - fallos}/{len(CASOS)} pasan")
+    total = len(CASOS) + 1
+    print(f"\n{total - fallos}/{total} pasan")
     return 1 if fallos else 0
 
 
