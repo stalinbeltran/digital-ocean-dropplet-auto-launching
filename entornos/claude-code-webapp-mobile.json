@@ -2,68 +2,19 @@
   "descripcion": "La web de lectura en el movil. Su .env sale del llavero, no se copia entre maquinas.",
   "dir": "claude-code-webapp-mobile",
   "fichero": ".env",
-  "notas": "El nombre de destino NO lo elige quien transporta: lo declara quien consume. Aqui la variable se llama TS_AUTHKEY porque asi la lee scripts/tailscale-unir.mjs, y en el llavero se llama CWEB_TS_AUTHKEY porque services/claude-web.json declara env_prefix CWEB_. El 2026-09-10 se puso como TAILSCALE_AUTHKEY y no llegaba a ninguna parte: el secreto se quedaba en el llavero sin bajar al servicio, y la app arrancaba sin unirse al tailnet y sin un solo error. `recoger` es el camino de VUELTA (desde el 2026-09-11): un comando, corrido en el dir del proyecto como el usuario de desarrollo, que imprime NOMBRE=valor en los nombres del PROYECTO; `entornos recoger` los traduce con este mismo mapa (nombre -> desde) y los escribe en el llavero de esta maquina. Solo viaja lo declarado aqui; lo que imprima de mas se ignora y se dice. Hoy recoge el certificado TLS de la web movil, que tailscaled emite en el dev y tiene que sobrevivirlo.",
-  "recoger": "node scripts/cweb.mjs cert exportar",
+  "notas": "El nombre de destino NO lo elige quien transporta: lo declara quien consume. ⚠⚠ CERO TAILSCALE DESDE EL 2026-09-12 (decision del dueno): se fueron TS_AUTHKEY, TS_CERT_B64, TS_KEY_B64, CWEB_ACCESO, CF_TUNNEL_TOKEN, CF_HOSTNAME, CWEB_TS_ESQUEMA, CWEB_PUERTO_TS y CWEB_HOSTNAME, y con ellas el `recoger` (recogia el certificado que tailscaled emitia en el dev). Hoy la web se ata al puerto publico con un TOKEN en la puerta y no hay nada que recoger de vuelta: el token se GENERA en el dev si falta, y si se quiere que sobreviva a rehacer la maquina se declara en el llavero. La leccion del 2026-09-10 sigue valiendo y por eso se conserva escrita: aquel dia la variable se puso como TAILSCALE_AUTHKEY en vez del nombre que el consumidor lee, y el secreto se quedaba en el llavero sin bajar al servicio -la app arrancaba sin unirse a nada y SIN UN SOLO ERROR-. El mapa nombre->desde es lo que evita eso, y vale igual para CWEB_TOKEN.",
   "variables": [
     {
-      "nombre": "TS_AUTHKEY",
-      "desde": "CWEB_TS_AUTHKEY",
+      "nombre": "CWEB_TOKEN",
+      "desde": "CWEB_TOKEN",
       "obligatoria": false,
-      "porque": "une el nodo al tailnet. Opcional porque el install del servicio avisa y NO aborta si falta: sin ella hay que hacer el login por enlace a mano, pero la maquina sirve."
-    },
-    {
-      "nombre": "TS_CERT_B64",
-      "desde": "CWEB_TS_CERT_B64",
-      "obligatoria": false,
-      "porque": "el certificado con el que se publica por https, para no pedir uno por cada dev (5 por semana y por nombre en Let's Encrypt). Lo coloca el install antes del serve si vale para el nombre del nodo. Sin el, la app publica por http."
-    },
-    {
-      "nombre": "TS_KEY_B64",
-      "desde": "CWEB_TS_KEY_B64",
-      "obligatoria": false,
-      "porque": "la clave privada del certificado de arriba. Los dos o ninguno: tailscaled exige el par."
-    },
-    {
-      "nombre": "CWEB_ACCESO",
-      "desde": "CWEB_ACCESO",
-      "obligatoria": false,
-      "porque": "tailscale o cloudflare. Vacio: lo decide el dato (hay token de tunel -> cloudflare)."
-    },
-    {
-      "nombre": "CF_TUNNEL_TOKEN",
-      "desde": "CWEB_CF_TUNNEL_TOKEN",
-      "obligatoria": false,
-      "porque": "el token del tunel de Cloudflare. Con el, el install levanta el tunel en vez de unirse a la tailnet."
-    },
-    {
-      "nombre": "CF_HOSTNAME",
-      "desde": "CWEB_CF_HOSTNAME",
-      "obligatoria": false,
-      "porque": "el public hostname del tunel: la direccion de la PWA por Cloudflare."
-    },
-    {
-      "nombre": "CWEB_TS_ESQUEMA",
-      "desde": "CWEB_TS_ESQUEMA",
-      "obligatoria": false,
-      "porque": "http o https con Tailscale. Vacio: https si el llavero trae certificado, http si no. https explicito es lo que pide el PRIMER certificado a Let's Encrypt."
+      "porque": "el token de la PUERTA de la web movil. Sin el, la web solo escucha en loopback a proposito: por ese puerto se llega al mismo sitio que un mensaje de Telegram -una maquina donde claude corre con bypassPermissions- y SIN la allowlist del bot, asi que la exposicion y la puerta son la misma decision. Opcional porque `cweb instalar` genera uno si falta; pero entonces CAMBIA en cada dev rehecho y hay que volver a pedir el enlace. Declararlo aqui es lo unico que lo hace sobrevivir a la maquina. ⚠ Viaja EN CLARO por HTTP: no hay TLS."
     },
     {
       "nombre": "CWEB_PORT",
       "desde": "CWEB_PORT",
       "obligatoria": false,
       "porque": "puerto del servidor de lectura. Escucha SOLO en loopback a proposito."
-    },
-    {
-      "nombre": "CWEB_PUERTO_TS",
-      "desde": "CWEB_PUERTO_TS",
-      "obligatoria": false,
-      "porque": "puerto que publica `tailscale serve`. No puede ser el 443: ahi escucha sshd en 0.0.0.0, o sea tambien en la interfaz del tailnet."
-    },
-    {
-      "nombre": "CWEB_HOSTNAME",
-      "desde": "CWEB_HOSTNAME",
-      "obligatoria": false,
-      "porque": "nombre del nodo en el tailnet. Es lo que hace que la PWA ya instalada en el movil siga resolviendo tras rehacer la maquina."
     },
     {
       "nombre": "CWEB_DATA_DIR",

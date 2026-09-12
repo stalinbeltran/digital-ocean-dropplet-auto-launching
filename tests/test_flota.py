@@ -161,29 +161,43 @@ def test_entornos_descriptores(mod):
     return fallos
 
 
-def test_puente_tailscale(mod):
-    """El caso que costo el error: CWEB_TS_AUTHKEY aqui -> TS_AUTHKEY alli.
+def test_puente_env_prefix(mod):
+    """El puente del llavero al servicio: CWEB_<X> aqui -> <X> alli.
 
-    El nombre de destino lo declara quien CONSUME (scripts/tailscale-unir.mjs lee
-    TS_AUTHKEY), no quien transporta. El 2026-09-10 se puso como
-    TAILSCALE_AUTHKEY y no llegaba a ninguna parte: el secreto se quedaba en el
-    llavero sin bajar al servicio, y la app arrancaba sin unirse al tailnet y sin
-    un solo error.
+    El caso que costo el error, y la leccion sigue aunque su variable ya no este:
+    el nombre de destino lo declara quien CONSUME, no quien transporta. El
+    2026-09-10 la authkey se puso como TAILSCALE_AUTHKEY en vez del nombre que el
+    consumidor leia, y el secreto se quedaba en el llavero sin bajar al servicio:
+    la app arrancaba sin unirse a nada y SIN UN SOLO ERROR.
+
+    ⚠ Hasta el 2026-09-12 esto miraba TS_AUTHKEY por su nombre, y al quitar
+    Tailscale el test paso a fallar por una razon que no era un fallo: la variable
+    de ejemplo ya no existe. Un test atado al ejemplo de hoy deja de medir el dia
+    que el ejemplo cambia. Ahora se comprueba la INVARIANTE sobre TODAS las
+    variables que el entorno declare, sean las que sean.
     """
     ent = mod.load_entorno("claude-code-webapp-mobile")
-    var = next((v for v in ent["variables"] if v["nombre"] == "TS_AUTHKEY"), None)
-    if not var:
-        return ["el entorno de la app movil ya no declara TS_AUTHKEY"]
-    fallos = []
-    if var["desde"] != "CWEB_TS_AUTHKEY":
-        fallos.append(f"el origen deberia ser CWEB_TS_AUTHKEY y es {var['desde']}")
-    # Y el prefijo tiene que cuadrar con el env_prefix del servicio, o el puente
-    # de provision y el de `entornos aplicar` escribirian cosas distintas.
     svc = mod.load_service("claude-web")
-    if not var["desde"].startswith(svc["env_prefix"]):
-        fallos.append(
-            f"'{var['desde']}' no empieza por el env_prefix del servicio "
-            f"('{svc['env_prefix']}'): los dos caminos divergirian")
+    prefijo = svc["env_prefix"]
+    variables = ent.get("variables") or []
+    if not variables:
+        return ["el entorno de la app movil no declara ninguna variable"]
+
+    fallos = []
+    for var in variables:
+        # El prefijo tiene que cuadrar con el env_prefix del servicio, o el puente
+        # de provision y el de `entornos aplicar` escribirian cosas distintas.
+        if not var["desde"].startswith(prefijo):
+            fallos.append(
+                f"'{var['desde']}' no empieza por el env_prefix del servicio "
+                f"('{prefijo}'): los dos caminos divergirian")
+        # Y el destino tiene que ser el origen SIN el prefijo, que es lo que hace
+        # el puente. Si no, el secreto llega con otro nombre y nadie lo lee.
+        esperado = var["desde"][len(prefijo):] if var["desde"].startswith(prefijo) else None
+        if esperado and var["nombre"] not in (esperado, var["desde"]):
+            fallos.append(
+                f"'{var['desde']}' deberia llegar como '{esperado}' (o igual), "
+                f"y el entorno dice '{var['nombre']}'")
     return fallos
 
 
@@ -376,7 +390,7 @@ def main():
         ("ruta_publica concatena, no sustituye", test_ruta_publica),
         ("git_ignora distingue tres estados", test_git_ignora),
         ("los entornos declaran origen y destino", test_entornos_descriptores),
-        ("el puente CWEB_TS_AUTHKEY -> TS_AUTHKEY", test_puente_tailscale),
+        ("el puente del llavero al servicio (env_prefix)", test_puente_env_prefix),
         ("dos entornos al mismo fichero paran", test_colision_de_entornos),
         ("los scripts remotos no llevan \\n de Python", test_escapes_de_scripts_remotos),
         ("los ejecutores del bot estan y son validos", test_ejecutores),

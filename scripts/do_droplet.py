@@ -4236,12 +4236,20 @@ def _entornos_recoger(base: Path, args: argparse.Namespace) -> None:
     mismo mapa (`nombre` -> `desde`) y se escriben en el llavero de esta máquina.
     Sólo viaja lo declarado: lo que el comando imprima de más se ignora y se dice.
 
-    Existe por el certificado de la web móvil (2026-09-11): lo emite Let's Encrypt
-    en el dev, vive en `/var/lib/tailscale/certs/` del droplet que se destruye, y
-    Let's Encrypt sólo da 5 por semana y por nombre. Pedirlo una vez y hacerlo
-    viajar es la única forma de que rehacer el dev no lo gaste. Pero el mecanismo
-    no sabe nada de certificados: un proyecto que produzca cualquier otra cosa que
-    tenga que sobrevivir a su máquina lo declara igual.
+    HISTORIA, y no la leas como el presente: existió por el certificado de la web
+    móvil (2026-09-11), que emitía Let's Encrypt en el dev, vivía en
+    `/var/lib/tailscale/certs/` del droplet que se destruye, y del que Let's
+    Encrypt sólo da 5 por semana y por nombre. Pedirlo una vez y hacerlo viajar era
+    la única forma de que rehacer el dev no lo gastara.
+
+    ⚠ HOY NO LO DECLARA NINGÚN ENTORNO: el 2026-09-12 se quitó Tailscale entero y
+    con él ese certificado. O sea que este mecanismo está VIVO Y SIN USUARIOS, y
+    conviene saberlo antes de fiarse de un test que lo toque — un test que se apoya
+    en que alguien use un mecanismo pasa a medir un caso vacío el día que ese
+    alguien desaparece, y no lo dice (pasó ese mismo día con `pre_destroy`).
+
+    El mecanismo no sabe nada de certificados: un proyecto que produzca cualquier
+    otra cosa que tenga que sobrevivir a su máquina lo declara igual.
 
     Termina diciendo cómo llevarlo a la OTRA máquina (`llavero enviar`): aquí sólo
     llega al llavero de ésta, y un secreto que está en una sola máquina de la flota

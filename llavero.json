@@ -63,36 +63,6 @@
       "porque": "idem."
     },
     {
-      "nombre": "CWEB_TS_AUTHKEY",
-      "obligatoria": false,
-      "porque": "auth key de Tailscale de la web de lectura en el movil. El prefijo CWEB_ ES el mecanismo: services/claude-web.json declara env_prefix CWEB_, asi que aqui va con prefijo y llega como TS_AUTHKEY. Opcional porque el install del servicio avisa y no aborta si falta. CADUCA a los 90 dias como maximo."
-    },
-    {
-      "nombre": "CWEB_TS_CERT_B64",
-      "obligatoria": false,
-      "porque": "el certificado TLS (cadena PEM en base64, una linea) con el que tailscaled publica la web movil por https. VIAJA en vez de pedirse en cada dev porque Let's Encrypt da 5 por semana y por nombre exacto, y cada dev rehecho pedia uno nuevo (medido el 2026-09-11: el sexto dev de la semana nacia con todo verde y el movil colgado en el handshake TLS). tailscaled reutiliza el par que encuentre en /var/lib/tailscale/certs/. Lo produce el dev (`cweb cert exportar`) y lo recoge `entornos recoger`; lo coloca el install de claude-web antes del serve. Opcional: sin el, la app publica por http, que se ve pero no se instala en el movil."
-    },
-    {
-      "nombre": "CWEB_TS_KEY_B64",
-      "obligatoria": false,
-      "porque": "la clave privada del certificado de arriba, base64 en una linea. Sin ella el certificado no sirve (tailscaled exige los DOS ficheros). Viaja como ya viajan la clave SSH de la flota y la authkey: solo sirve para suplantar a dev.<tailnet>.ts.net, que solo existe dentro de la tailnet."
-    },
-    {
-      "nombre": "CWEB_ACCESO",
-      "obligatoria": false,
-      "porque": "por donde se llega a la web movil: tailscale (lo que habia, marcado VALIDO el 2026-09-12) o cloudflare (la prueba, decision P14 de la app). Vacio: cloudflare si hay CWEB_CF_TUNNEL_TOKEN, tailscale si no. Es un dato para que la vuelta atras sea cambiar una variable y no codigo."
-    },
-    {
-      "nombre": "CWEB_CF_TUNNEL_TOKEN",
-      "obligatoria": false,
-      "porque": "el token del tunel de Cloudflare (Zero Trust -> Networks -> Tunnels). NO caduca, al reves que la authkey. Llega a la app como CF_TUNNEL_TOKEN y acaba en /etc/cloudflared/claude-web.env (root, 0600): nunca se imprime ni pasa por la linea de ordenes. Un dev nuevo levanta el MISMO tunel con el: no hay nombre que recuperar."
-    },
-    {
-      "nombre": "CWEB_CF_HOSTNAME",
-      "obligatoria": false,
-      "porque": "el public hostname del tunel (claude.<tu-dominio>), que es la direccion de la PWA. Llega a la app como CF_HOSTNAME. No es secreto, pero viaja aqui porque sin el la app no sabe que direccion anunciar ni probar."
-    },
-    {
       "nombre": "FVW_WEB_TOKEN",
       "obligatoria": false,
       "porque": "token de la web app de foveal-vision. Si no viaja desde aqui, se regenera en cada dev y la direccion vieja deja de valer."
@@ -111,6 +81,11 @@
       "nombre": "DO_SSH_USER",
       "obligatoria": false,
       "porque": "NO es un secreto, y va aqui igual porque es lo unico del viejo mini que se perdio al rehacerlo con efecto real. Medido el 2026-09-10 comparando el mini original con el renacido: de las 24 variables que tenia, 9 no viajaban, 8 las aporta ahora el tipo (repos, size, image, region, tag, servicios) y esta no. Sin ella, `do_droplet.py ssh <maquina>` desde la flota entra como root en vez de como el usuario de desarrollo, y en el home de root no esta dev-secrets.env: el sintoma es un 'falta el token' en una maquina donde el token si esta, que es la trampa mejor documentada de este repo."
+    },
+    {
+      "nombre": "CWEB_TOKEN",
+      "obligatoria": false,
+      "porque": "el token de la puerta de la web movil (claude-web). El prefijo CWEB_ ES el mecanismo: services/claude-web.json declara env_prefix CWEB_. Opcional porque `cweb instalar` lo genera si falta -- pero entonces cambia en cada dev rehecho y hay que volver a pedir el enlace desde Telegram. Declararlo aqui es lo unico que hace que el enlace del movil siga valiendo tras rehacer la maquina. ⚠ Es una LLAVE: quien tenga la URL entra a una maquina donde claude corre con bypassPermissions. Viaja en claro por HTTP (no hay TLS), igual que el de foveal-vision-web. Se rota con `cweb instalar --token-nuevo`."
     }
   ]
 }
