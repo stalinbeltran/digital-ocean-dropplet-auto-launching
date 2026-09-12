@@ -24,6 +24,7 @@ nbjCKGjnuo11CNTRL, 3 nodos antes y 3 despues, nombre `dev-1` reutilizado en
 
 import importlib.util
 import sys
+import json
 import tempfile
 from pathlib import Path
 
@@ -49,20 +50,77 @@ def main() -> int:
         print(f"  {'ok   ' if ok else 'FALLO'} {nombre}{'  -> ' + detalle if detalle else ''}")
 
     # --- el gancho es DATO, no codigo -------------------------------------
+    # ⚠ Hasta el 2026-09-12 este caso miraba `claude-web`, que era el unico que
+    # declaraba el gancho (lo usaba para dar de baja el nodo de Tailscale). Con
+    # «cero tailscale» esa app ya no tiene nada que recoger al destruir, y un test
+    # que exige un gancho a un servicio que no lo necesita obliga a inventarse uno.
+    # Se prueba el MECANISMO con un descriptor propio, que es lo que de verdad no
+    # puede romperse: el gancho es DATO, y se lee de donde se declara.
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = Path(tmp)
+        (carpeta / "conGancho.json").write_text(json.dumps(
+            {"repo": "x/y", "install": "true", "start": "true",
+             "pre_destroy": "node scripts/recoger.mjs --si"}), encoding="utf-8")
+        antes = mod.SERVICES_DIR
+        mod.SERVICES_DIR = carpeta
+        try:
+            svc = mod.load_service("conGancho")
+            caso("un descriptor que declara pre_destroy se lee tal cual",
+                 svc.get("pre_destroy") == "node scripts/recoger.mjs --si",
+                 svc.get("pre_destroy", ""))
+        finally:
+            mod.SERVICES_DIR = antes
+
     svc = mod.load_service("claude-web")
-    caso("claude-web declara pre_destroy", bool(svc.get("pre_destroy")), svc.get("pre_destroy", ""))
+    caso("claude-web YA NO declara pre_destroy (cero tailscale, 2026-09-12)",
+         svc.get("pre_destroy", "") == "",
+         "no tiene nada que recoger: no se une a ninguna tailnet")
 
     otro = mod.load_service("telegram-coordinator")
     caso("un servicio que no lo declara se queda a cero",
          otro.get("pre_destroy") == "",
          "el campo existe con defecto vacio, asi que nadie tiene que declararlo")
 
-    guion = mod.pre_destroy_script()
-    caso("el guion no cablea Tailscale en el lanzador",
-         "tailscale" not in guion.lower().replace("tailscale-desunir", ""),
-         "solo aparece dentro del comando que declara el SERVICIO")
+    # ⚠ El guion se comprueba contra un descriptor PROPIO desde el 2026-09-12.
+    # Antes se apoyaba en que `claude-web` declarara un gancho, y al quitarselo
+    # (cero tailscale) este mecanismo se quedo SIN NINGUN USUARIO en el repo: el
+    # test pasaba a medir un guion vacio sin decirlo. Un mecanismo generico se
+    # prueba con su propio caso, no con quien casualmente lo use hoy.
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = Path(tmp)
+        (carpeta / "conGancho.json").write_text(json.dumps(
+            {"repo": "x/y", "dir": "y", "install": "true", "start": "true",
+             "pre_destroy": "node scripts/recoger.mjs --si"}), encoding="utf-8")
+        (carpeta / "sinGancho.json").write_text(json.dumps(
+            {"repo": "a/b", "dir": "b", "install": "true", "start": "true"}), encoding="utf-8")
+        antes = mod.SERVICES_DIR
+        mod.SERVICES_DIR = carpeta
+        try:
+            guion = mod.pre_destroy_script()
+        finally:
+            mod.SERVICES_DIR = antes
+
+    caso("el guion no cablea ningun proyecto en el lanzador",
+         "recoger.mjs" in guion and "tailscale" not in guion.lower(),
+         "solo aparece lo que declara el SERVICIO, nunca un nombre propio aqui")
     caso("el guion se salta el servicio que no esta instalado",
          "nada que recoger" in guion)
+
+    # Y con CERO ganchos declarados no se inventa trabajo: es el estado real del
+    # repo desde hoy, y tiene que ser un guion que no haga nada, no uno roto.
+    with tempfile.TemporaryDirectory() as tmp:
+        carpeta = Path(tmp)
+        (carpeta / "sinGancho.json").write_text(json.dumps(
+            {"repo": "a/b", "dir": "b", "install": "true", "start": "true"}), encoding="utf-8")
+        antes = mod.SERVICES_DIR
+        mod.SERVICES_DIR = carpeta
+        try:
+            vacio = mod.pre_destroy_script()
+        finally:
+            mod.SERVICES_DIR = antes
+    caso("sin ningun gancho declarado el guion no rompe",
+         isinstance(vacio, str),
+         f"{len(vacio)} caracteres")
 
     # --- R2: pase lo que pase, el droplet se destruye ----------------------
     # Cada rama de fallo se fuerza y se comprueba que la funcion VUELVE (no
