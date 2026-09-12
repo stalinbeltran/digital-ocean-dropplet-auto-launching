@@ -78,6 +78,21 @@
       "porque": "la clave privada del certificado de arriba, base64 en una linea. Sin ella el certificado no sirve (tailscaled exige los DOS ficheros). Viaja como ya viajan la clave SSH de la flota y la authkey: solo sirve para suplantar a dev.<tailnet>.ts.net, que solo existe dentro de la tailnet."
     },
     {
+      "nombre": "CWEB_ACCESO",
+      "obligatoria": false,
+      "porque": "por donde se llega a la web movil: tailscale (lo que habia, marcado VALIDO el 2026-09-12) o cloudflare (la prueba, decision P14 de la app). Vacio: cloudflare si hay CWEB_CF_TUNNEL_TOKEN, tailscale si no. Es un dato para que la vuelta atras sea cambiar una variable y no codigo."
+    },
+    {
+      "nombre": "CWEB_CF_TUNNEL_TOKEN",
+      "obligatoria": false,
+      "porque": "el token del tunel de Cloudflare (Zero Trust -> Networks -> Tunnels). NO caduca, al reves que la authkey. Llega a la app como CF_TUNNEL_TOKEN y acaba en /etc/cloudflared/claude-web.env (root, 0600): nunca se imprime ni pasa por la linea de ordenes. Un dev nuevo levanta el MISMO tunel con el: no hay nombre que recuperar."
+    },
+    {
+      "nombre": "CWEB_CF_HOSTNAME",
+      "obligatoria": false,
+      "porque": "el public hostname del tunel (claude.<tu-dominio>), que es la direccion de la PWA. Llega a la app como CF_HOSTNAME. No es secreto, pero viaja aqui porque sin el la app no sabe que direccion anunciar ni probar."
+    },
+    {
       "nombre": "FVW_WEB_TOKEN",
       "obligatoria": false,
       "porque": "token de la web app de foveal-vision. Si no viaja desde aqui, se regenera en cada dev y la direccion vieja deja de valer."

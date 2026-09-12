@@ -24,6 +24,30 @@
       "porque": "la clave privada del certificado de arriba. Los dos o ninguno: tailscaled exige el par."
     },
     {
+      "nombre": "CWEB_ACCESO",
+      "desde": "CWEB_ACCESO",
+      "obligatoria": false,
+      "porque": "tailscale o cloudflare. Vacio: lo decide el dato (hay token de tunel -> cloudflare)."
+    },
+    {
+      "nombre": "CF_TUNNEL_TOKEN",
+      "desde": "CWEB_CF_TUNNEL_TOKEN",
+      "obligatoria": false,
+      "porque": "el token del tunel de Cloudflare. Con el, el install levanta el tunel en vez de unirse a la tailnet."
+    },
+    {
+      "nombre": "CF_HOSTNAME",
+      "desde": "CWEB_CF_HOSTNAME",
+      "obligatoria": false,
+      "porque": "el public hostname del tunel: la direccion de la PWA por Cloudflare."
+    },
+    {
+      "nombre": "CWEB_TS_ESQUEMA",
+      "desde": "CWEB_TS_ESQUEMA",
+      "obligatoria": false,
+      "porque": "http o https con Tailscale. Vacio: https si el llavero trae certificado, http si no. https explicito es lo que pide el PRIMER certificado a Let's Encrypt."
+    },
+    {
       "nombre": "CWEB_PORT",
       "desde": "CWEB_PORT",
       "obligatoria": false,

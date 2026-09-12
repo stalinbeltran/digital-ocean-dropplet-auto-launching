@@ -889,6 +889,17 @@ detalle está en el README de esa app, § «Y cómo se recupera».
 en el móvil. Para pedir el primero: `CWEB_TS_ESQUEMA=https` en el `.env`, una vez.
 Desde Telegram: ejecutor `entornos` (`recoger`, `aplicar …`, `list`).
 
+### El acceso a la web móvil: Tailscale o Cloudflare (desde el 2026-09-12)
+
+Tailscale quedó **marcado como válido** (tag `tailscale-valido-2026-09-11`) y se prueba
+**Cloudflare Tunnel + Access** como alternativa: sin puerto abierto, sin app en el móvil,
+sin certificado que pedir, y un nombre tuyo. Se elige con **`CWEB_ACCESO`** en el llavero
+(`cloudflare` o `tailscale`); vacío, decide el dato: hay `CWEB_CF_TUNNEL_TOKEN` →
+cloudflare. La vuelta atrás es la misma variable. Lo que tienes que crear tú (dominio,
+túnel, policy de Access) y cómo se comprueba está en el README de la app, § «Acceso por
+Cloudflare». ⚠ Access es la única barrera: si `cweb url` dice que la sonda recibió 200 sin
+login, la web está abierta al mundo.
+
 ## Recuperar los tokens desde cero
 
 Si se pierden **todos**, el manual paso a paso está en el repo central:

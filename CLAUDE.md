@@ -334,6 +334,28 @@ ciclo asíncrono y polling, `user_data`/cloud-init, claves SSH, destrucción, re
   2026-09-12 a las 20:03 UTC. Los pasos y lo que se espera en cada uno están en
   `claude-code-webapp-mobile/docs/pendiente-verificar.md`. Lo probado: 22 tests allí y
   `tests/test_entornos_recoger.py` aquí.
+- **El acceso a la web móvil es un DATO, y hay DOS caminos desde el 2026-09-12.** Decisión
+  del dueño (P14 de la app): «marquemos este punto como válido Tailscale, pero vamos a
+  probar otra alternativa; la única restricción es que la app sea instalable». Tailscale
+  quedó marcado con el tag `tailscale-valido-2026-09-11` en los dos repos. La prueba es
+  **Cloudflare Tunnel + Access**: `cloudflared` sale del droplet hacia Cloudflare (sin
+  puerto abierto), el TLS lo pone Cloudflare (no hay Let's Encrypt ni certificado que
+  viajar), el nombre es un dominio del dueño (no hay nodo que recuperar su nombre), el
+  token no caduca y en el móvil no hace falta app: Access pide login. Lo que cuesta: un
+  dominio, que el tráfico pasa en claro por el borde de Cloudflare, y que **Access es la
+  única barrera** (la sonda de `cweb url` grita si `/api/salud` contesta 200 sin login).
+  Comprobado en vivo el 2026-09-12 00:37 UTC con un túnel rápido desde el dev: HTTPS
+  válido en 0,38 s.
+  Se elige con `CWEB_ACCESO` en el llavero (`cloudflare`|`tailscale`); vacío, decide el
+  dato: hay `CWEB_CF_TUNNEL_TOKEN` → cloudflare. `services/claude-web.json` pasa por
+  `scripts/acceso.mjs`, que levanta el túnel o delega en los scripts de Tailscale. **La
+  vuelta atrás es cambiar esa variable**, no código. El token va a
+  `/etc/cloudflared/claude-web.env` (root, 0600) y la unidad lo lee con
+  `EnvironmentFile=`: la receta oficial (`cloudflared service install <token>`) lo
+  dejaría en el `ps` y en el journal, la misma trampa de la authkey del 2026-09-10.
+  ⚠ Lo que un proxy de por medio exige a la PWA, y ya está puesto en la app: el manifest
+  con `crossorigin="use-credentials"`, la sesión caducada explicada (Access devuelve un
+  200 con HTML, no un error), y un latido cada 30 s en el flujo de eventos.
 - **`do_droplet.py` lee el llavero del DISCO, no sólo de la foto del entorno.** Desde el
   2026-09-11 `load_env()` carga también `~/.config/dev-secrets.env` (rellena lo que
   falte; el entorno real manda). Antes, una variable escrita en el llavero **después**
@@ -1012,8 +1034,21 @@ aprendió se anota donde corresponda.
   clave antes, así que un único reinicio al final tiene que seguir cubriendo ese caso.
   Va con su prueba, y la prueba tiene que fallar con el orden de hoy (R17).
 
+- **⏳ DEL USUARIO: el dominio, el túnel y la policy de Access, para probar el acceso por
+  Cloudflare.** Anotado el **2026-09-12**. Nada de esto lo puede hacer un script: (1) un
+  dominio en Cloudflare; (2) Zero Trust → Networks → Tunnels → túnel `claude-web`, public
+  hostname `claude.<dominio>` → HTTP `127.0.0.1:8020`, y copiar el token; (3) Zero Trust →
+  Access → Applications → self-hosted sobre ese nombre, policy Allow con su correo, sesión
+  de un mes; (4) `CWEB_ACCESO=cloudflare`, `CWEB_CF_TUNNEL_TOKEN` y `CWEB_CF_HOSTNAME` en el
+  `.env` de la laptop, `llavero enviar dev` y `mini`, y en el dev `entornos aplicar` +
+  `install-service --service claude-web` (o `/use cweb` → `acceso`). Los seis pasos de
+  verificación, con lo esperado en cada uno, en
+  `claude-code-webapp-mobile/docs/pendiente-verificar.md`. **Si la sonda dice 200, la web
+  está abierta al mundo**: parar el túnel y poner la policy. Mientras no se haga, el
+  acceso sigue por Tailscale sin que cambie nada.
 - **⏳ DEL USUARIO: pedir el PRIMER certificado de la web móvil y guardarlo, a partir del
-  2026-09-12 a las 20:03 UTC.** Anotado el **2026-09-11**. Hasta esa hora Let's Encrypt
+  2026-09-12 a las 20:03 UTC.** ⚠ Sólo hace falta si se sigue (o se vuelve) a Tailscale;
+  con Cloudflare no hay certificado que pedir. Anotado el **2026-09-11**. Hasta esa hora Let's Encrypt
   contesta `429 rateLimited` para `dev.tail376e31.ts.net` (5 emisiones en 168 h), y no
   hay forma de probar en vivo lo construido ese día (el certificado que viaja con la
   flota; ver «Lo mínimo»). Los cuatro pasos, con lo que se espera ver en cada uno, están
