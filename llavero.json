@@ -1,6 +1,6 @@
 {
   "descripcion": "Lo que lleva CUALQUIER maquina de la flota, sea mini o dev. Dato, no codigo: anadir un secreto es anadir una linea aqui, nunca tocar do_droplet.py.",
-  "notas": "La regla que justifica este fichero: si una variable hace falta para CREAR una maquina de la flota, va en el llavero. Sale de que hasta el 2026-09-10 lo que una maquina llevaba era la union de tres cosas que no se miraban juntas en ningun sitio -- lo que build_provision_script escribe a pelo, el push_env del tipo, y el barrido por prefijo de env_prefix -- y la tercera no declara nombres: barre el entorno, y si no hay nada suelta un AVISO entre cien lineas y sigue. Resultado medido ese dia en el mini: llevaba TG_* y no TGL_*, o sea que sabia parir un dev y no sabia parir un mini, y de sus 19 variables types/mini.json declaraba UNA. Un tipo pide este llavero con \"llavero\": true; lo hacen mini y dev y NADIE mas, porque un secreto no viaja a donde no hace falta (objetivo 5) y una maquina de medir no crea nada.",
+  "notas": "La regla que justifica este fichero: si una variable hace falta para CREAR una maquina de la flota, va en el llavero. Sale de que hasta el 2026-09-10 lo que una maquina llevaba era la union de tres cosas que no se miraban juntas en ningun sitio -- lo que build_provision_script escribe a pelo, el push_env del tipo, y el barrido por prefijo de env_prefix -- y la tercera no declara nombres: barre el entorno, y si no hay nada suelta un AVISO entre cien lineas y sigue. Resultado medido ese dia en el mini: llevaba TG_* y no TGL_*, o sea que sabia parir un dev y no sabia parir un mini, y de sus 19 variables types/mini.json declaraba UNA. Un tipo pide este llavero con \"llavero\": true; lo hacen mini y dev y NADIE mas, porque un secreto no viaja a donde no hace falta (objetivo 5) y una maquina de medir no crea nada. ⚠⚠ CWEB_TOKEN SALIO DE AQUI EL 2026-09-15, y es una decision del dueno, no una limpieza: «el token se crea nuevo siempre». Estaba como opcional para que el enlace de la web movil sobreviviera a rehacer el dev; el precio era un secreto de larga vida guardado en el llavero y repartido a cada maquina que nace. Se eligio lo contrario: lo crea el servidor de la app al arrancar, vive solo en esa maquina (~/.config/cweb.env, modo 600) y muere con ella. La URL se pide con `/use cweb` -> `url` despues de cada dev nuevo. Volver atras es volver a anadir la linea aqui y en entornos/claude-code-webapp-mobile.json: no hay codigo que tocar.",
   "variables": [
     {
       "nombre": "DO_TOKEN",
@@ -81,11 +81,6 @@
       "nombre": "DO_SSH_USER",
       "obligatoria": false,
       "porque": "NO es un secreto, y va aqui igual porque es lo unico del viejo mini que se perdio al rehacerlo con efecto real. Medido el 2026-09-10 comparando el mini original con el renacido: de las 24 variables que tenia, 9 no viajaban, 8 las aporta ahora el tipo (repos, size, image, region, tag, servicios) y esta no. Sin ella, `do_droplet.py ssh <maquina>` desde la flota entra como root en vez de como el usuario de desarrollo, y en el home de root no esta dev-secrets.env: el sintoma es un 'falta el token' en una maquina donde el token si esta, que es la trampa mejor documentada de este repo."
-    },
-    {
-      "nombre": "CWEB_TOKEN",
-      "obligatoria": false,
-      "porque": "el token de la puerta de la web movil (claude-web). El prefijo CWEB_ ES el mecanismo: services/claude-web.json declara env_prefix CWEB_. Opcional porque `cweb instalar` lo genera si falta -- pero entonces cambia en cada dev rehecho y hay que volver a pedir el enlace desde Telegram. Declararlo aqui es lo unico que hace que el enlace del movil siga valiendo tras rehacer la maquina. ⚠ Es una LLAVE: quien tenga la URL entra a una maquina donde claude corre con bypassPermissions. Viaja en claro por HTTP (no hay TLS), igual que el de foveal-vision-web. Se rota con `cweb instalar --token-nuevo`."
     }
   ]
 }

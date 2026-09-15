@@ -167,29 +167,15 @@ def test_load_env_lee_dev_secrets_del_disco_y_el_entorno_manda():
         assert "VACIA" not in os.environ
 
 
-def test_lo_declarado():
-    """El certificado esta declarado en los DOS sitios, y el entorno sabe recogerlo."""
-    llavero = json.loads((ROOT / "llavero.json").read_text(encoding="utf-8"))
-    nombres = {v["nombre"]: v for v in llavero["variables"]}
-    for n in ("CWEB_TS_CERT_B64", "CWEB_TS_KEY_B64"):
-        assert n in nombres, f"{n} no esta en llavero.json: no viajaria"
-        assert nombres[n]["obligatoria"] is False, f"{n} obligatoria dejaria sin lanzar a quien aun no lo tenga"
-
-    mod = cargar()
-    ent = mod.load_entorno("claude-code-webapp-mobile")
-    mapa = {v["nombre"]: v["desde"] for v in ent["variables"]}
-    assert mapa.get("TS_CERT_B64") == "CWEB_TS_CERT_B64", mapa
-    assert mapa.get("TS_KEY_B64") == "CWEB_TS_KEY_B64", mapa
-    assert "cert exportar" in ent["recoger"], ent["recoger"]
-
-    ex = json.loads((ROOT / "telegram" / "executors" / "entornos.json").read_text(encoding="utf-8"))
-    assert "recoger" in ex["ejemplos"], "recoger no se puede pedir desde Telegram"
-    assert "entornos {{input}}" in ex["command"]
-
-    fuente = (ROOT / "scripts" / "do_droplet.py").read_text(encoding="utf-8")
-    assert '"recoger"]' in fuente or '"recoger"' in fuente.split("add_parser(\n        \"entornos\"")[1][:600], \
-        "recoger no esta en las choices del subcomando entornos"
-
+# ⚠ AQUI VIVIA `test_lo_declarado`, BORRADO EL 2026-09-15. Fijaba que el
+# certificado de Tailscale (CWEB_TS_CERT_B64/KEY_B64) estuviera declarado en el
+# llavero y en el entorno, y que el entorno supiera recogerlo. Nada de eso existe
+# desde «cero tailscale» (2026-09-12): el entorno perdio su `recoger` ese dia y el
+# llavero sus dos variables, asi que el test llevaba TRES DIAS FALLANDO en rojo
+# contra un mecanismo borrado -- comprobado con `git stash` antes de tocarlo.
+#
+# Un test que falla por algo que se quito a proposito no protege nada: ensena a
+# leer el rojo como normal, que es como se deja de ver el rojo que si importa.
 
 if __name__ == "__main__":
     pruebas = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
