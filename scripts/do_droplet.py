@@ -1159,6 +1159,89 @@ def material_de_la_flota_registrado(keys: list[dict]) -> bool:
     return any(k["public_key"].split()[1] == trozos[1] for k in keys)
 
 
+def estado_lanzador(timeout: int = 20) -> tuple[str, str]:
+    """¿Corre este script la ÚLTIMA versión del lanzador, o una vieja?
+
+    Devuelve (estado, detalle) con los mismos tres estados que
+    `github_token_estado`: "ok", "duda" (no se pudo preguntar) y "viejo".
+
+    Por qué existe, medido el 2026-09-15: el `mini` parió un `dev` con su copia
+    de este repo SEIS commits atrás, o sea con la receta de servicios de la era
+    de Tailscale. `services/claude-web.json` decía todavía
+    `install: node scripts/acceso.mjs unir`, y ese script se había borrado tres
+    días antes: el `install` murió con un MODULE_NOT_FOUND, su AVISO se fue con
+    el log del aprovisionamiento —que no sobrevive— y `provision` salió con 0.
+    La máquina nació con la web móvil atada al puerto público y ese puerto
+    CERRADO en ufw, porque el paso que lo abre vive en el `instalar` que nunca
+    corrió. Desde el móvil se vio como «la URL no carga», indistinguible de un
+    token malo, y se depuró la app —que estaba bien— en vez del lanzador.
+
+    O sea: **el arreglo llevaba tres días en `main` y la máquina nació rota
+    igual.** Es el fallo que ninguna comprobación hecha en la máquina nueva
+    puede ver, porque el dato que falta no está en ella: está en quien la parió.
+    """
+    def git(*a):
+        return subprocess.run(["git", "-C", str(ROOT), *a],
+                              capture_output=True, text=True, timeout=timeout)
+    try:
+        r = git("rev-parse", "--abbrev-ref", "HEAD")
+        if r.returncode != 0:
+            return "duda", "no parece un repo git"
+        rama = r.stdout.strip()
+        r = git("fetch", "-q", "origin", rama)
+        if r.returncode != 0:
+            fallo = r.stderr.strip().splitlines()
+            return "duda", fallo[-1] if fallo else "el fetch falló"
+        r = git("rev-list", "--count", f"HEAD..origin/{rama}")
+        if r.returncode != 0:
+            return "duda", f"no hay rama remota origin/{rama}"
+        detras = int(r.stdout.strip() or 0)
+    except (OSError, ValueError, subprocess.SubprocessError) as e:
+        return "duda", str(e) or e.__class__.__name__
+    return ("ok", rama) if detras == 0 else ("viejo", f"{detras}|{rama}")
+
+
+def comprobar_lanzador_al_dia(sin_version: bool = False) -> None:
+    """Muere si esta copia del lanzador está por detrás de su remoto.
+
+    BLOQUEA, y la asimetría es deliberada: actualizar cuesta un comando y medio
+    minuto, y lanzar con la receta vieja cuesta una máquina que nace rota,
+    factura lo mismo que una buena y no lo dice. Es la misma cuenta que ya hace
+    `comprobar_github_token`.
+
+    La DUDA no bloquea —sin red no se podría lanzar nunca, y eso es estorbar en
+    vez de proteger— pero se dice en voz alta, que es la diferencia entre las
+    dos cosas.
+    """
+    if sin_version:
+        log("  --sin-version: no compruebo si el lanzador está al día.")
+        return
+    estado, detalle = estado_lanzador()
+    if estado == "ok":
+        log(f"  Lanzador: al día con origin/{detalle}.")
+        return
+    if estado == "duda":
+        log(f"  AVISO: no he podido comprobar si el lanzador está al día "
+            f"({detalle}). Sigo igual.")
+        return
+    detras, rama = detalle.split("|")
+    die(
+        f"Esta copia del lanzador está {detras} commit(s) por detrás de "
+        f"origin/{rama}.\n"
+        "  No se ha creado nada; parar aquí es lo barato. Lo que nace sale de\n"
+        "  ESTA copia —`types/` y `services/` se leen de aquí, no del remoto—,\n"
+        "  así que con la receta vieja la máquina nace con los servicios de otra\n"
+        "  época y el fallo aparece horas después, en la máquina equivocada.\n"
+        "  Pasó el 2026-09-15: el dev nació con la web móvil inalcanzable porque\n"
+        "  su `install` llamaba a un script borrado tres días antes, y el arreglo\n"
+        "  llevaba todo ese tiempo en `main`.\n"
+        "  Arréglalo (30 s):\n"
+        f"    cd {ROOT} && git pull --ff-only\n"
+        "  o desde Telegram, en el Lanzador:  /use actualizar\n"
+        "  Si de verdad quieres lanzar con esta copia:  --sin-version"
+    )
+
+
 def comprobar_clave_de_entrada(keys: list[dict]) -> None:
     """Que la clave con la que se ENTRARÁ esté entre las que el droplet llevará.
 
@@ -1267,7 +1350,12 @@ def cmd_launch(args: argparse.Namespace) -> None:
     # máquina que nace sin sus repos privados factura igual que una buena y no
     # lo dice. Con --dry-run no hace falta, que no crea nada.
     if not args.dry_run and not args.no_provision:
-        # Primero ésta, que es local e instantánea: si no vamos a poder entrar,
+        # La primera de todas: si esta copia del lanzador está vieja, lo que se
+        # va a construir es una máquina de otra época, y ninguna de las
+        # comprobaciones de abajo puede verlo -miran esta máquina, y el dato
+        # que falta está en la receta-.
+        comprobar_lanzador_al_dia(args.sin_version)
+        # Ésta después, que es local e instantánea: si no vamos a poder entrar,
         # no hace falta ni preguntarle a GitHub.
         comprobar_clave_de_entrada(keys)
         comprobar_github_token(args.sin_github)
@@ -4989,6 +5077,13 @@ def main() -> None:
         help="no enviar ningún token de GitHub, y no comprobarlo. La salida de "
         "emergencia cuando el token está caducado y aun así hace falta la "
         "máquina: nacerá sin los repos privados",
+    )
+    p.add_argument(
+        "--sin-version",
+        action="store_true",
+        help="lanzar aunque esta copia del lanzador esté por detrás de su "
+        "remoto. La salida de emergencia cuando no se puede actualizar y aun "
+        "así hace falta la máquina: nacerá con la receta de servicios vieja",
     )
     p.add_argument(
         "--llavero",
