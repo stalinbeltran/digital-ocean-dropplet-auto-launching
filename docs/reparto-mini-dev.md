@@ -21,6 +21,7 @@ permisos.
 | Claude Code | **no** — en 512 MB lo mata el kernel | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
 | repos de trabajo | **sólo `foveal-vision-data`** (2026-09-11) | los cuatro |
+| apps web que aloja | **`sispla-demo`** (:8080, desde el 2026-09-15: la demo que se quiere disponible siempre) | `foveal-vision-web` (:8010), `claude-web` (:8020) |
 | **llavero, clave de flota, crear y destruir** | **iguales** | **iguales** |
 
 Las **cuatro** diferencias que quedan, y el motivo de cada una:
