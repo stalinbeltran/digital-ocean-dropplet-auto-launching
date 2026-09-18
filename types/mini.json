@@ -1,5 +1,5 @@
 {
-  "descripcion": "La maquina de control de 512 MB. Siempre hay UNA encendida, pero no siempre la misma: se rehace desde el dev cuando hay que cambiarle el codigo, asi que lo que solo este aqui y no en el llavero o en git se pierde. Mismos privilegios que dev: mismo llavero, misma clave de flota y misma capacidad de crear, reparar y destruir a la otra. NO los mismos repos: desde el 2026-09-11 aqui solo se clona foveal-vision-data, porque la simetria es de CAPACIDADES y no de carga. Lo unico que NO lleva es Claude Code, que en 512 MB lo mata el kernel. Desde el 2026-09-15 aloja tambien la demo de SisPla (services/sispla-demo.json, :8080), que el dueno quiere disponible siempre: por eso va en la maquina que no se apaga.",
+  "descripcion": "La maquina de control de 512 MB. Siempre hay UNA encendida, pero no siempre la misma: se rehace desde el dev cuando hay que cambiarle el codigo, asi que lo que solo este aqui y no en el llavero o en git se pierde. Mismos privilegios que dev: mismo llavero, misma clave de flota y misma capacidad de crear, reparar y destruir a la otra. NO los mismos repos: desde el 2026-09-11 aqui solo se clona foveal-vision-data, porque la simetria es de CAPACIDADES y no de carga. Lo unico que NO lleva es Claude Code, que en 512 MB lo mata el kernel. Desde el 2026-09-15 aloja tambien la demo de SisPla (services/sispla-demo.json, :8080), que el dueno quiere disponible siempre: por eso va en la maquina que no se apaga. Desde el 2026-09-18 aloja tambien gauss-p (services/gauss-p.json, :8030), el visor para elegir el sigma de la gaussiana de banco-k: misma excepcion declarada que sispla-demo -un servicio que se quiere disponible sin dev-, y el repo lo clona el SERVICIO. Su `install` instala python3-venv, que cloud-init.mini.yaml deja fuera a proposito; el motivo y lo medido, en el descriptor.",
   "size": "s-1vcpu-512mb-10gb",
   "image": "ubuntu-24-04-x64",
   "cloud_init": "cloud-init.mini.yaml",
@@ -10,7 +10,8 @@
   ],
   "services": [
     "telegram-launcher",
-    "sispla-demo"
+    "sispla-demo",
+    "gauss-p"
   ],
   "make_launcher": true,
   "post": [

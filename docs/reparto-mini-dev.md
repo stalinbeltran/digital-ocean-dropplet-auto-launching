@@ -21,7 +21,7 @@ permisos.
 | Claude Code | **no** — en 512 MB lo mata el kernel | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
 | repos de trabajo | **sólo `foveal-vision-data`** (2026-09-11) | los cuatro |
-| apps web que aloja | **`sispla-demo`** (:8080, desde el 2026-09-15: la demo que se quiere disponible siempre) | `foveal-vision-web` (:8010), `claude-web` (:8020) |
+| apps web que aloja | **`sispla-demo`** (:8080, desde el 2026-09-15: la demo que se quiere disponible siempre), **`gauss-p`** (:8030, desde el 2026-09-18) | `foveal-vision-web` (:8010), `claude-web` (:8020), `gauss-p` (:8030) |
 | **llavero, clave de flota, crear y destruir** | **iguales** | **iguales** |
 
 Las **cuatro** diferencias que quedan, y el motivo de cada una:
@@ -212,7 +212,17 @@ bash: line 1: .venv/bin/python: No such file or directory
 ```
 
 `cloud-init.mini.yaml` no instala `python3-venv` —y hace bien, aquí no se desarrolla
-nunca—, así que no hay ni habrá `.venv`. `/executors` pasa de **40 a 22**, y los 22 que
+nunca—, así que no hay ni habrá `.venv`.
+
+⚠ **Eso dejó de ser literal el 2026-09-18, y por una excepción declarada:** el servicio
+`gauss-p` (:8030) **sí** instala `python3-venv` y crea un `.venv` en `experimentos-cnn`,
+porque su app es Python y sin venv no hay app. Lo que sigue siendo cierto es el motivo de
+la regla —**aquí no se desarrolla**—: el venv lo pone `install` del descriptor, no una
+persona, y se reconstruye solo al rehacer el mini. Coste medido ese día en el mini vivo:
+133 MB de repo + venv, y el libre pasó de 4,5 a 4,0 G de 8,7. Lo que **no** cambia es la
+conclusión de esta sección: los 18 ejecutores de `foveal-vision` siguen fuera, porque su
+`.venv` no lo pone nadie. **Un venv que pone un `install` commiteado no es lo mismo que un
+venv que hay que acordarse de crear.** `/executors` pasa de **40 a 22**, y los 22 que
 quedan funcionan.
 
 ⚠ **Y los tres se quitan en un orden que importa**: `image-text-sample-generator` sale
