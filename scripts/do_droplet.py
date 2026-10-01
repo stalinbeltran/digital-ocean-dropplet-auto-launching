@@ -1368,7 +1368,14 @@ def cmd_launch(args: argparse.Namespace) -> None:
     # El volumen se comprueba antes de crear el droplet: si la región no cuadra
     # o el nombre está mal escrito, el fallo tiene que salir gratis y no
     # dejarte una máquina facturando sin el disco que ibas a usar.
-    vol_name = args.volume or tipo.get("volume") or cfg("DO_VOLUME")
+    # `--sin-volumen` existe para el procedimiento de staging de flota-simetrica §5: un
+    # `mini2` mientras el mini viejo sigue con el volumen puesto. Sin él, el volumen del
+    # tipo mataría el launch en la comprobación de abajo (un volumen va en UNA máquina).
+    if getattr(args, "sin_volumen", False):
+        log("  --sin-volumen: esta máquina nace SIN el volumen del tipo; el almacén se le "
+            "conecta después con `volume attach` + `almacen instalar`.")
+    vol_name = "" if getattr(args, "sin_volumen", False) else (
+        args.volume or tipo.get("volume") or cfg("DO_VOLUME"))
     vol = None
     if vol_name:
         vol = find_volume(vol_name)
@@ -1850,6 +1857,482 @@ def build_mount_script(vol_name: str, dev_user: str) -> str:
     ) + "\n"
 
 
+# ------------------------------------------------------------------ el almacén
+#
+# Pedido por el dueño el 2026-10-01: «un volumen de 1 GB en DigitalOcean, conectado al
+# mini, para guardar ahí la data que deba mantenerse en disco, accesible desde todos los
+# servers; nadie borra nada (sólo nosotros); y el volumen sobrevive a destruir y rehacer
+# el mini, que lo tiene que enlazar solo».
+#
+# CÓMO. El volumen `datos` se declara en types/mini.json (`volume`), así que `launch mini`
+# lo conecta al crear el droplet y lo monta en /mnt/datos con `nofail` (eso ya existía
+# para bench-data). Lo nuevo es lo que vive DENTRO: repos git DESNUDOS en
+# /mnt/datos/git/<repo>.git, servidos por SSH desde un usuario `datos` sin shell
+# (git-shell) al que entra la clave de FLOTA —la que ya llevan todas las máquinas— con
+# `restrict`. Cada máquina apunta el `origin` de su clon de foveal-vision-data al mini a
+# través del alias `almacen` de ~/.ssh/config, y todo lo que ya hacía `git push`
+# —conversaciones, estudios, datasets, errores— va al volumen sin cambiar una línea.
+# GitHub se queda como remoto `github`: una copia congelada, no un destino.
+#
+# NADIE BORRA, y es la razón de que sea git y no un servicio web: un repo desnudo con
+# `receive.denyDeletes` + `receive.denyNonFastForwards` + el hook pre-receive de abajo no
+# admite borrar ramas ni reescribir historia, así que un `rm` en un commit sigue siendo
+# recuperable, y el usuario `datos` no puede ejecutar nada que no sea git. «Nosotros» es
+# root en el mini, que es quien puede tocar /mnt/datos/git a mano.
+#
+# ⚠ El volumen va en UNA máquina a la vez, y es el mini porque es la única siempre
+# encendida. Si el mini está apagado, los push FALLAN RUIDOSAMENTE (lo commiteado se queda
+# y se reintenta), que es lo contrario de perderlos en silencio.
+#
+# ⚠ «Sobrevive» lleva complemento: el VOLUMEN sobrevive a destruir el mini, porque es de
+# la cuenta y no del droplet. Lo que NO sobrevive es la IP del mini, y por eso `conectar`
+# la vuelve a resolver por la API y reescribe el alias en cada máquina: va en el `post` de
+# los dos tipos y en el ejecutor `almacen` del bot.
+
+ALMACEN_TIPO = "mini"          # el tipo (= nombre del droplet) que lleva el volumen
+ALMACEN_USUARIO = "datos"      # el usuario sin shell que sirve los repos
+ALMACEN_HOST = "almacen"       # el alias de ~/.ssh/config en cada máquina
+ALMACEN_MARCA_INI = "# >>> almacen (do_droplet.py almacen conectar) >>>"
+ALMACEN_MARCA_FIN = "# <<< almacen <<<"
+
+# La configuración de cada repo desnudo. Las tres primeras SON la regla «nadie borra»;
+# las de gc impiden que git tire objetos que un push dejó sin referencia.
+CONFIG_ALMACEN = [
+    ("receive.denyDeletes", "true"),
+    ("receive.denyNonFastForwards", "true"),
+    ("receive.denyDeleteCurrent", "refuse"),
+    ("core.logAllRefUpdates", "true"),
+    ("gc.pruneExpire", "never"),
+    ("gc.reflogExpire", "never"),
+    ("gc.reflogExpireUnreachable", "never"),
+    # El mini tiene 512 MB: servir un clon de ~350 MB con los valores por defecto puede
+    # matar a pack-objects. Reutiliza el pack que ya hay y acota lo que carga en memoria.
+    ("pack.threads", "1"),
+    ("pack.windowMemory", "32m"),
+    ("pack.deltaCacheSize", "16m"),
+    ("core.packedGitWindowSize", "16m"),
+    ("core.packedGitLimit", "64m"),
+]
+
+
+def hook_pre_receive(log: str) -> str:
+    """El hook que hace cumplir «nadie borra» y apunta cada push SEGÚN OCURRE (R12).
+
+    Rechaza un borrado de rama (sha nuevo a cero) y un no-fast-forward (el sha viejo no es
+    antepasado del nuevo). La config de arriba ya niega las dos cosas; el hook existe para
+    que el mensaje diga QUÉ se negó y POR QUÉ, y para dejar la línea en el log antes de que
+    el push se dé por bueno.
+    """
+    return (
+        "#!/bin/sh\n"
+        "# Lo instala `do_droplet.py almacen instalar`. Nadie borra: solo root en el mini.\n"
+        "zero=0000000000000000000000000000000000000000\n"
+        f"log={shq(log)}\n"
+        "rc=0\n"
+        "while read old new ref; do\n"
+        '  if [ "$new" = "$zero" ]; then\n'
+        "    echo \"almacen: NO se puede borrar '$ref'. Nadie borra; solo root en el mini.\" >&2\n"
+        "    rc=1; continue\n"
+        "  fi\n"
+        '  if [ "$old" != "$zero" ] && ! git merge-base --is-ancestor "$old" "$new"; then\n'
+        "    echo \"almacen: '$ref' NO es fast-forward. Reescribir historia no esta permitido.\" >&2\n"
+        "    rc=1; continue\n"
+        "  fi\n"
+        "  printf '%s\\t%s\\t%s\\t%s\\t%s\\n' \"$(date -u +%FT%TZ)\" \"${SSH_CLIENT%% *}\" "
+        '"$ref" "$old" "$new" >> "$log" 2>/dev/null || true\n'
+        "done\n"
+        "exit $rc\n"
+    )
+
+
+def preparar_repo_desnudo(ruta: Path, log: Path) -> None:
+    """Deja un repo desnudo con la regla «nadie borra»: config + hook. Idempotente.
+
+    Es la MISMA función que aplica `instalar` en el mini (vía el script de abajo) y la que
+    el test aplica a un repo local: lo que se prueba es lo que se instala.
+    """
+    for clave, valor in CONFIG_ALMACEN:
+        subprocess.run(["git", "-C", str(ruta), "config", clave, valor], check=True)
+    hook = ruta / "hooks" / "pre-receive"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(hook_pre_receive(str(log)), encoding="utf-8")
+    hook.chmod(0o755)
+
+
+def almacen_declarado() -> dict:
+    """Lo que el tipo del mini declara sobre el almacén: volumen, repos y apps. Es DATO."""
+    tipo = load_type(ALMACEN_TIPO)
+    vol = tipo.get("volume")
+    alm = tipo.get("almacen") or {}
+    if not vol or not alm.get("repos"):
+        die(
+            f"types/{ALMACEN_TIPO}.json no declara `volume` y `almacen.repos`: sin eso no "
+            "hay almacén que instalar ni al que conectarse."
+        )
+    return {
+        "volumen": vol,
+        "monte": volume_mount_point(vol),
+        "repos": list(alm["repos"]),
+        "apps": dict(alm.get("apps") or {}),
+        "github": alm.get("github") or "stalinbeltran",
+    }
+
+
+def bloque_alias_ssh(ip: str, clave: Path) -> str:
+    return "\n".join(
+        [
+            ALMACEN_MARCA_INI,
+            f"Host {ALMACEN_HOST}",
+            f"  HostName {ip}",
+            f"  User {ALMACEN_USUARIO}",
+            f"  IdentityFile {clave}",
+            "  IdentitiesOnly yes",
+            # La clave de host se recuerda bajo el ALIAS y no bajo la IP: la IP del mini
+            # cambia cada vez que se rehace, y así known_hosts sigue hablando de lo mismo.
+            f"  HostKeyAlias {ALMACEN_HOST}",
+            "  StrictHostKeyChecking accept-new",
+            ALMACEN_MARCA_FIN,
+        ]
+    ) + "\n"
+
+
+def escribir_alias_ssh(ip: str, config: "Path | None" = None, clave: "Path | None" = None) -> Path:
+    """Escribe (o reemplaza) el bloque `Host almacen` de ~/.ssh/config. Idempotente.
+
+    El resto del fichero no se toca: sólo lo que hay entre las dos marcas.
+    """
+    config = config or Path.home() / ".ssh" / "config"
+    clave = clave or ruta_clave_flota()
+    config.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    texto = config.read_text(encoding="utf-8") if config.exists() else ""
+    bloque = bloque_alias_ssh(ip, clave)
+    if ALMACEN_MARCA_INI in texto and ALMACEN_MARCA_FIN in texto:
+        ini = texto.index(ALMACEN_MARCA_INI)
+        fin = texto.index(ALMACEN_MARCA_FIN) + len(ALMACEN_MARCA_FIN)
+        if texto[fin:fin + 1] == "\n":
+            fin += 1
+        texto = texto[:ini] + bloque + texto[fin:]
+    else:
+        texto = (texto.rstrip("\n") + "\n\n" if texto.strip() else "") + bloque
+    config.write_text(texto, encoding="utf-8")
+    config.chmod(0o600)
+    return config
+
+
+def _git(cwd: Path, *argv: str) -> tuple[int, str, str]:
+    proc = subprocess.run(
+        ["git", "-C", str(cwd), *argv], capture_output=True, text=True, timeout=600
+    )
+    return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+
+
+def almacen_en_esta_maquina(alm: dict) -> bool:
+    """¿Estoy EN el mini? Lo decide el volumen montado con sus repos, no el hostname."""
+    return os.path.isdir(f"{alm['monte']}/git")
+
+
+def script_instalar_almacen(alm: dict, dev_user: str, pub: Path) -> str:
+    """El script (root) que deja el mini sirviendo los repos del volumen. Idempotente.
+
+    Se construye aquí y no se escribe a mano para que el hook y la config salgan de los
+    MISMOS objetos que prueba tests/test_almacen.py.
+    """
+    monte = alm["monte"]
+    git_dir, log_dir, apps_dir = f"{monte}/git", f"{monte}/log", f"{monte}/apps"
+    log_pushes = f"{log_dir}/pushes.log"
+    lineas = [
+        "set -eu",
+        f"U={shq(ALMACEN_USUARIO)}",
+        f"DEV={shq(dev_user)}",
+        'DEVH=$(getent passwd "$DEV" | cut -d: -f6)',
+        f"GITD={shq(git_dir)}",
+        f"LOGD={shq(log_dir)}",
+        f"APPS={shq(apps_dir)}",
+        f"PUB={shq(str(pub))}",
+        # el usuario sin shell: git-shell deja pasar git-upload-pack/receive-pack y nada más
+        'if ! id "$U" >/dev/null 2>&1; then',
+        '  adduser --system --group --home "/home/$U" --shell /usr/bin/git-shell "$U"',
+        '  echo "  usuario $U creado (git-shell)"',
+        "else",
+        '  echo "  usuario $U ya existe"',
+        "fi",
+        "grep -qx /usr/bin/git-shell /etc/shells || echo /usr/bin/git-shell >> /etc/shells",
+        # la clave de flota, restringida: sin pty, sin reenvíos, sólo git
+        '[ -f "$PUB" ] || { echo "no existe la clave publica de flota $PUB" >&2; exit 1; }',
+        'install -d -m 750 -o "$U" -g "$U" "/home/$U"',
+        'install -d -m 700 -o "$U" -g "$U" "/home/$U/.ssh"',
+        'printf "restrict %s\\n" "$(cat "$PUB")" > "/home/$U/.ssh/authorized_keys"',
+        'chown "$U:$U" "/home/$U/.ssh/authorized_keys"',
+        'chmod 600 "/home/$U/.ssh/authorized_keys"',
+        # los directorios del volumen
+        'install -d -m 755 -o "$U" -g "$U" "$GITD"',
+        'install -d -m 750 -o "$U" -g "$U" "$LOGD"',
+        'install -d -m 755 -o "$DEV" -g "$DEV" "$APPS"',
+    ]
+    for repo in alm["repos"]:
+        bare = f"{git_dir}/{repo}.git"
+        url = f"https://github.com/{alm['github']}/{repo}.git"
+        lineas += [
+            f"R={shq(bare)}",
+            'if [ ! -d "$R" ]; then',
+            f'  echo "  espejando {repo} desde GitHub (una vez en la vida)..."',
+            # Con las credenciales del usuario de desarrollo (el repo es privado), pero
+            # como root: así el destino queda donde debe sin abrirle permisos a nadie.
+            f'  git -c credential.helper="store --file=$DEVH/.git-credentials" '
+            f'clone -q --mirror {shq(url)} "$R"',
+            # Sin remoto: el espejo es el ORIGEN ahora, no un seguidor de GitHub.
+            '  git -C "$R" remote remove origin',
+            "else",
+            f'  echo "  {repo}.git ya existe en el volumen: no se toca su contenido"',
+            "fi",
+        ]
+        for clave, valor in CONFIG_ALMACEN:
+            lineas.append(f'git -C "$R" config {shq(clave)} {shq(valor)}')
+        lineas += [
+            'mkdir -p "$R/hooks"',
+            'cat > "$R/hooks/pre-receive" <<\'HOOK\'\n' + hook_pre_receive(log_pushes) + "HOOK",
+            'chmod 755 "$R/hooks/pre-receive"',
+            'chown -R "$U:$U" "$R"',
+            f'echo "  {repo}.git listo: $(git -C "$R" rev-list --all --count 2>/dev/null '
+            f'|| echo ?) commits, $(du -sh "$R" | cut -f1)"',
+        ]
+    # Lo que una app guarda en disco y tiene que sobrevivir a rehacer el mini: su carpeta
+    # pasa a vivir en el volumen y en su sitio queda un enlace. Si el volumen YA trae datos
+    # (mini rehecho), ganan los del volumen; lo recién instalado se descarta.
+    for app, sub in alm["apps"].items():
+        lineas += [
+            f'APP="$DEVH/src/{app}/{sub}"',
+            f'DEST="$APPS/{app}"',
+            f"SVC={shq(app)}",
+            'if [ -L "$APP" ]; then',
+            '  echo "  $SVC: $APP ya apunta al volumen"',
+            "else",
+            '  install -d -m 755 -o "$DEV" -g "$DEV" "$DEST"',
+            "  activo=0",
+            '  systemctl is-active --quiet "$SVC" 2>/dev/null && activo=1 || true',
+            '  [ "$activo" = 1 ] && systemctl stop "$SVC" || true',
+            '  if [ -d "$APP" ] && [ -n "$(ls -A "$APP")" ] && [ -z "$(ls -A "$DEST")" ]; then',
+            '    cp -a "$APP"/. "$DEST"/',
+            '    echo "  $SVC: lo que habia en $APP pasa al volumen"',
+            "  fi",
+            '  rm -rf "$APP"',
+            '  ln -s "$DEST" "$APP"',
+            '  chown -h "$DEV:$DEV" "$APP"',
+            '  [ "$activo" = 1 ] && systemctl start "$SVC" || true',
+            '  echo "  $SVC: $APP -> $DEST"',
+            "fi",
+        ]
+    return "\n".join(lineas) + "\n"
+
+
+def almacen_instalar(alm: dict, seco: bool) -> None:
+    """Deja el mini sirviendo los repos del volumen. Corre DENTRO del mini, como el usuario
+    de desarrollo (que tiene sudo): es el `post` de su tipo, y también se puede repetir.
+
+    Se niega si el volumen no está montado (R2): instalar los repos en el disco del droplet
+    sería guardarlos justo donde se pierden.
+    """
+    dev_user = cfg("DO_DEV_USER")
+    pub = ruta_publica(ruta_clave_flota())
+    script = script_instalar_almacen(alm, dev_user, pub)
+    if seco:
+        log("SECO: esto es lo que se ejecutaría como root en el mini, y no se ejecuta:\n")
+        log(script)
+        return
+    dentro_del_droplet("almacen instalar")
+    if not os.path.ismount(alm["monte"]):
+        die(
+            f"{alm['monte']} no está montado: no instalo nada en el disco del droplet.\n"
+            f"  Desde fuera:  python scripts/do_droplet.py volume attach {alm['volumen']} "
+            f"--droplet {ALMACEN_TIPO}"
+        )
+    log(f"Instalando el almacén en {alm['monte']} (como root, vía sudo):")
+    proc = subprocess.run(["sudo", "-n", "bash", "-s"], input=script.encode("utf-8"))
+    if proc.returncode != 0:
+        die("la instalación del almacén falló; la salida está arriba.")
+    log("\nAlmacén instalado. Comprueba:  python3 scripts/do_droplet.py almacen estado")
+
+
+def almacen_conectar(alm: dict, solo_repo: str, maquina: str) -> None:
+    """Apunta el `origin` de los repos de datos de ESTA máquina al almacén. Idempotente.
+
+    La IP del mini se resuelve por la API —cambia cada vez que se rehace— y se deja en el
+    alias `almacen` de ~/.ssh/config, así que los remotos de git no llevan ninguna IP y
+    rehacer el mini es volver a correr esto. En el propio mini el alias apunta a 127.0.0.1:
+    también él habla con sus repos por SSH y pasa por el mismo hook.
+    """
+    if almacen_en_esta_maquina(alm):
+        ip = "127.0.0.1"
+        log(f"Estoy en el mini: el alias `{ALMACEN_HOST}` apunta a {ip}.")
+    else:
+        _d, ip, _p = resolve_target(maquina or ALMACEN_TIPO)
+        log(f"El almacén está en '{maquina or ALMACEN_TIPO}' ({ip}).")
+    config = escribir_alias_ssh(ip)
+    log(f"  alias `{ALMACEN_HOST}` escrito en {config}")
+
+    base = Path.home() / "src"
+    repos = [solo_repo] if solo_repo else alm["repos"]
+    problemas = 0
+    for repo in repos:
+        clon = base / repo
+        if not (clon / ".git").is_dir():
+            log(f"  {repo}: no está clonado en {base}; nada que conectar.")
+            continue
+        url = f"{ALMACEN_HOST}:{alm['monte']}/git/{repo}.git"
+        _c, actual, _e = _git(clon, "remote", "get-url", "origin")
+        _c, github, _e = _git(clon, "remote", "get-url", "github")
+        if actual and "github.com" in actual and not github:
+            _git(clon, "remote", "add", "github", actual)
+            log(f"  {repo}: GitHub se queda como remoto `github` (copia congelada)")
+        if actual:
+            _git(clon, "remote", "set-url", "origin", url)
+        else:
+            _git(clon, "remote", "add", "origin", url)
+        log(f"  {repo}: origin -> {url}")
+
+        code, _o, err = _git(clon, "fetch", "origin")
+        if code != 0 and ("HOST IDENTIFICATION HAS CHANGED" in err or "Host key verification failed" in err):
+            # El mini se rehizo con la misma IP y otra clave de host: se olvida la vieja y
+            # se vuelve a aceptar la nueva (accept-new). Se dice, porque es lo que haría un
+            # ataque también, y aquí la IP es de nuestra cuenta.
+            log(f"  {repo}: la clave de host del almacén cambió (mini rehecho): se olvida la vieja\n"
+                f"         y se acepta la nueva. La IP {ip} la acaba de dar la API de NUESTRA cuenta.")
+            for h in (ALMACEN_HOST, ip):
+                subprocess.run(["ssh-keygen", "-R", h], capture_output=True)
+            code, _o, err = _git(clon, "fetch", "origin")
+        if code != 0:
+            problemas += 1
+            log(f"  AVISO {repo}: no pude hablar con el almacén: {err.splitlines()[-1] if err else '?'}\n"
+                f"         origin queda apuntando al almacén igualmente; los push fallarán\n"
+                f"         hasta que el mini conteste (ruidoso, no silencioso).")
+            continue
+        _c, rama, _e = _git(clon, "rev-parse", "--abbrev-ref", "HEAD")
+        _c, sucio, _e = _git(clon, "status", "--porcelain")
+        if rama == "main" and not sucio:
+            code, out, err = _git(clon, "pull", "--ff-only", "origin", "main")
+            log(f"  {repo}: {'al día con el almacén' if code == 0 else 'AVISO: no avanza en fast-forward: ' + err.splitlines()[-1]}")
+        else:
+            log(f"  {repo}: fetch hecho; no hago pull (rama {rama}{', cambios sin commitear' if sucio else ''})")
+    if problemas:
+        die(f"{problemas} repo(s) no pudieron hablar con el almacén. La causa está arriba.")
+
+
+def script_estado_almacen(alm: dict) -> str:
+    monte, vol = alm["monte"], alm["volumen"]
+    return "\n".join(
+        [
+            "set -u",
+            f"M={shq(monte)}",
+            f"U={shq(ALMACEN_USUARIO)}",
+            "ok=1",
+            'if mountpoint -q "$M"; then',
+            '  echo "montado   $M"',
+            '  df -h "$M" | tail -1 | awk \'{print "disco     " $3 " usados de " $2 " (" $5 ")"}\'',
+            "else",
+            '  echo "NO MONTADO $M"; ok=0',
+            "fi",
+            f'grep -q "DO_Volume_{vol} " /etc/fstab && echo "fstab     si (nofail)" || {{ echo "fstab     NO"; ok=0; }}',
+            'if id "$U" >/dev/null 2>&1; then echo "usuario   $U, shell $(getent passwd "$U" | cut -d: -f7)"; else echo "usuario   $U NO existe"; ok=0; fi',
+            'for r in "$M"/git/*.git; do',
+            '  [ -d "$r" ] || continue',
+            '  n=$(git -C "$r" rev-list --all --count 2>/dev/null || echo ?)',
+            '  u=$(git -C "$r" log -1 --format=%cI --all 2>/dev/null || echo ?)',
+            '  echo "repo      $(basename "$r")  $(du -sh "$r" | cut -f1)  $n commits  ultimo $u"',
+            '  if [ "$(git -C "$r" config receive.denyDeletes)" = true ] && [ -x "$r/hooks/pre-receive" ]; then',
+            '    echo "          nadie borra: si (denyDeletes + hook)"',
+            "  else",
+            '    echo "          nadie borra: NO"; ok=0',
+            "  fi",
+            "done",
+            'echo "pushes    $(wc -l < "$M/log/pushes.log" 2>/dev/null || echo 0) registrados"',
+            'tail -3 "$M/log/pushes.log" 2>/dev/null | sed "s/^/          /"',
+            'for a in "$M"/apps/*; do [ -d "$a" ] && echo "app       $(basename "$a"): $(du -sh "$a" | cut -f1)"; done',
+            '[ "$ok" = 1 ]',
+        ]
+    ) + "\n"
+
+
+def almacen_estado(alm: dict, maquina: str) -> None:
+    """Qué hay en el almacén y si está entero: montaje, fstab, usuario, repos con su regla,
+    pushes registrados y apps. Desde cualquier máquina; sale != 0 si falta algo."""
+    vol = find_volume(alm["volumen"])
+    if not vol:
+        die(f"No existe el volumen '{alm['volumen']}' en la cuenta.")
+    duenos = vol.get("droplet_ids") or []
+    log(f"volumen   {vol['name']}: {vol['size_gigabytes']} GB en {vol['region']['slug']}, "
+        f"{'conectado al droplet ' + str(duenos[0]) if duenos else 'SIN CONECTAR'}")
+    script = script_estado_almacen(alm)
+    if almacen_en_esta_maquina(alm):
+        proc = subprocess.run(["sudo", "-n", "bash", "-s"], input=script.encode("utf-8"))
+        code = proc.returncode
+    else:
+        _d, ip, port = resolve_target(maquina or ALMACEN_TIPO)
+        code, out, err = run_remote_split(ip, port, script)
+        log(out.rstrip())
+        if err.strip():
+            log(err.rstrip())
+    if code != 0 or not duenos:
+        die("Al almacén le falta algo (arriba está qué).")
+
+
+def almacen_probar(alm: dict, solo_repo: str, maquina: str) -> None:
+    """La prueba de aceptación, desde cualquier máquina: un push normal entra, un borrado
+    NO, un no-fast-forward NO, y la rama de prueba la quita root en el mini (que es la
+    forma de demostrar que «sólo nosotros» borra). Sale != 0 si algo no cuadra."""
+    repo = solo_repo or alm["repos"][0]
+    clon = Path.home() / "src" / repo
+    if not (clon / ".git").is_dir():
+        die(f"No está clonado {clon}. Primero: almacen conectar")
+    _c, url, _e = _git(clon, "remote", "get-url", "origin")
+    if not url.startswith(f"{ALMACEN_HOST}:"):
+        die(f"origin de {repo} no apunta al almacén ({url}). Primero: almacen conectar")
+    rama = f"prueba-almacen-{int(time.time())}"
+    fallos = 0
+
+    def caso(nombre: str, ok: bool, detalle: str = "") -> None:
+        nonlocal fallos
+        fallos += not ok
+        log(f"  {'ok   ' if ok else 'FALLO'} {nombre}{'  -> ' + detalle if detalle else ''}")
+
+    code, _o, err = _git(clon, "ls-remote", "origin", "HEAD")
+    caso("el almacén contesta (ls-remote)", code == 0, "" if code == 0 else err)
+    code, _o, err = _git(clon, "push", "origin", f"HEAD:refs/heads/{rama}")
+    caso("un push normal entra", code == 0, "" if code == 0 else err)
+    code, _o, err = _git(clon, "push", "origin", "--delete", rama)
+    caso("borrar una rama se RECHAZA", code != 0 and "NO se puede borrar" in err,
+         "" if code != 0 else "¡se borró!")
+    code2, padre, _e = _git(clon, "rev-parse", "--verify", "-q", "HEAD~1")
+    if code2 == 0:
+        code, _o, err = _git(clon, "push", "--force", "origin", f"{padre}:refs/heads/{rama}")
+        caso("reescribir historia se RECHAZA", code != 0, "" if code != 0 else "¡entró un no-fast-forward!")
+    # Sólo root en el mini quita la rama de prueba: es la mitad «sólo nosotros» de la regla.
+    limpieza = f'git -C {shq(alm["monte"] + "/git/" + repo + ".git")} update-ref -d refs/heads/{rama}\n'
+    if almacen_en_esta_maquina(alm):
+        code = subprocess.run(["sudo", "-n", "bash", "-c", limpieza]).returncode
+    else:
+        _d, ip, port = resolve_target(maquina or ALMACEN_TIPO)
+        code = run_remote_script(ip, port, "set -e\n" + limpieza)
+    caso("root en el mini SÍ puede quitar la rama de prueba", code == 0)
+    if fallos:
+        die(f"{fallos} caso(s) fallaron: el almacén NO cumple la regla.")
+    log("\nEl almacén cumple: entra lo nuevo, no se borra nada, y sólo root limpia.")
+
+
+def cmd_almacen(args: argparse.Namespace) -> None:
+    alm = almacen_declarado()
+    accion = args.action
+    if accion == "instalar":
+        almacen_instalar(alm, args.seco)
+    elif accion == "conectar":
+        almacen_conectar(alm, args.repo or "", args.maquina or "")
+    elif accion == "estado":
+        almacen_estado(alm, args.maquina or "")
+    elif accion == "probar":
+        almacen_probar(alm, args.repo or "", args.maquina or "")
+    else:  # el último caso se niega, nunca es una acción por defecto
+        die(f"acción desconocida: {accion}")
+
+
 def cmd_volume(args: argparse.Namespace) -> None:
     accion = args.action
 
@@ -1967,6 +2450,37 @@ def cmd_volume(args: argparse.Namespace) -> None:
         )["action"]
         wait_for_action(accion_api["id"])
         log("Desconectado.")
+        return
+
+    if accion == "resize":
+        # DigitalOcean sólo CRECE un volumen, nunca lo encoge; y el sistema de ficheros
+        # no crece solo: hay que hacer resize2fs en la máquina que lo tiene, que con ext4
+        # se puede en caliente. Existe porque el almacén nace en 1 GB (dueño, 2026-10-01)
+        # y «nadie borra», así que lo único que puede pasar con el disco es llenarse.
+        actual = int(vol["size_gigabytes"])
+        size = args.size_gb or 0
+        if size <= actual:
+            die(f"'{name}' tiene {actual} GB; dime un tamaño MAYOR con --size-gb "
+                "(DigitalOcean no encoge volúmenes).")
+        log(f"Creciendo '{name}' de {actual} a {size} GB ({size * 0.10:,.2f} $/mes)…")
+        accion_api = api(
+            "POST",
+            f"/v2/volumes/{vol['id']}/actions",
+            {"type": "resize", "size_gigabytes": size, "region": vol["region"]["slug"]},
+        )["action"]
+        wait_for_action(accion_api["id"])
+        if vol.get("droplet_ids"):
+            droplet = api("GET", f"/v2/droplets/{vol['droplet_ids'][0]}")["droplet"]
+            ip = public_ip(droplet)
+            port = wait_for_ssh(ip) if ip else 0
+            if port and run_remote_script(
+                ip, port, f"set -e\nresize2fs {shq(volume_device(name))}\n"
+                f"df -h {shq(volume_mount_point(name))} | tail -1\n") == 0:
+                log("Sistema de ficheros crecido en caliente.")
+            else:
+                log("AVISO: el volumen creció pero no pude hacer resize2fs por SSH; "
+                    f"hazlo en '{droplet.get('name', '?')}':  sudo resize2fs {volume_device(name)}")
+        log(f"Listo: '{name}' tiene ahora {size} GB.")
         return
 
     if accion == "destroy":
@@ -5060,6 +5574,12 @@ def main() -> None:
         "existir ya (volume create) y estar en la misma región",
     )
     p.add_argument(
+        "--sin-volumen",
+        action="store_true",
+        help="ignora el volumen que declare el tipo (p. ej. un mini2 de staging mientras "
+        "el mini viejo sigue con el volumen puesto)",
+    )
+    p.add_argument(
         "--make-launcher",
         action="store_true",
         help="deja la máquina en condiciones de lanzar y usar otros droplets: "
@@ -5468,13 +5988,13 @@ def main() -> None:
         help="volúmenes de bloques: el almacenamiento que sobrevive al droplet",
     )
     p.add_argument(
-        "action", choices=["list", "create", "attach", "detach", "destroy"]
+        "action", choices=["list", "create", "attach", "detach", "resize", "destroy"]
     )
     p.add_argument("name", nargs="?", help="nombre del volumen (o DO_VOLUME de .env)")
     p.add_argument("--droplet", help="droplet al que conectarlo (por defecto DO_DROPLET_NAME)")
     p.add_argument("--port", type=int)
     p.add_argument("--region", help="sólo en create; por defecto DO_REGION")
-    p.add_argument("--size-gb", type=int, help="sólo en create; por defecto DO_VOLUME_SIZE_GB")
+    p.add_argument("--size-gb", type=int, help="en create (por defecto DO_VOLUME_SIZE_GB) y en resize (sólo crece)")
     p.add_argument("--description", help="sólo en create")
     p.add_argument(
         "--no-mount",
@@ -5483,6 +6003,19 @@ def main() -> None:
     )
     p.add_argument("--yes", action="store_true", help="en destroy: no preguntar")
     p.set_defaults(func=cmd_volume)
+
+    p = sub.add_parser(
+        "almacen",
+        help="el volumen del mini como remoto git de los datos: entra todo, nadie borra",
+    )
+    p.add_argument("action", choices=["instalar", "conectar", "estado", "probar"])
+    p.add_argument("--repo", help="sólo ese repo (por defecto, los que declara types/mini.json)")
+    p.add_argument("--maquina", help="droplet que lleva el volumen (por defecto: mini)")
+    p.add_argument(
+        "--seco", action="store_true",
+        help="en instalar: enseña el script que correría como root y no toca nada",
+    )
+    p.set_defaults(func=cmd_almacen)
 
     p = sub.add_parser("destroy", help="destruye el droplet")
     p.add_argument("name", nargs="?")

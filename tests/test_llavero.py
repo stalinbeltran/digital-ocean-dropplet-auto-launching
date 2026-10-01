@@ -214,8 +214,12 @@ def test_paridad_de_tipos(mod):
     mini, dev = mod.load_type("mini"), mod.load_type("dev")
     # Talla, plantilla de arranque, tag y bot. Todo lo demas tiene que ser igual:
     # esa es la propiedad entera de la flota simetrica.
+    # `volume` y `almacen` son del mini SOLO (2026-10-01): un volumen va en UNA maquina
+    # a la vez y el almacen vive en la siempre encendida. No es un privilegio: el dev
+    # habla con el almacen por SSH igual que cualquiera (su `post` hace `almacen
+    # conectar`), asi que la CAPACIDAD -guardar y leer datos- la tienen las dos.
     permitidas = {"size", "cloud_init", "tag", "services", "descripcion", "notas",
-                  "name", "post", "image", "repos"}
+                  "name", "post", "image", "repos", "volume", "almacen"}
     fallos = []
     for campo in set(mini) | set(dev):
         if campo in permitidas:

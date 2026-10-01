@@ -1,0 +1,15 @@
+{
+  "name": "almacen",
+  "descripcion": "El volumen `datos` del mini como remoto git de los datos (desde 2026-10-01): entra todo, nadie borra, sobrevive a rehacer el mini. `estado` dice si esta entero (montaje, fstab, usuario, repos con su regla, pushes, apps); `conectar` apunta el origin del repo de datos de ESTA maquina al mini (hay que correrlo en cada dev tras rehacer el mini); `probar` hace la prueba de aceptacion (push entra, borrar NO, forzar NO, root limpia); `instalar` solo tiene sentido EN el mini.",
+  "ejemplos": [
+    "estado",
+    "conectar",
+    "probar",
+    "instalar --seco"
+  ],
+  "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; python3 scripts/do_droplet.py almacen {{input}}",
+  "encargados": [
+    "echo"
+  ],
+  "timeoutMs": 0
+}
