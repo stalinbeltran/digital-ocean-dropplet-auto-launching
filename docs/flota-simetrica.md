@@ -153,8 +153,8 @@ una máquina de la flota tiene que llevar. Dato, no código, como `types/` y `se
     {"nombre": "GIT_USER_EMAIL",           "obligatoria": true, "porque": "idem"},
     {"nombre": "FVW_WEB_TOKEN",            "obligatoria": false,
      "porque": "token de la web app; sobrevive a rehacer el dev"},
-    {"nombre": "TGL2_BOT_TOKEN",           "obligatoria": false,
-     "porque": "bot de staging, para rehacer el mini estando el mini vivo (paso 5)"}
+    (las dos TGL2_ del bot de staging estuvieron aquí hasta el 2026-10-01, cuando el dueño
+     descartó ese bot)
   ]
 }
 ```
@@ -365,9 +365,11 @@ minis vivos con el mismo `TGL_BOT_TOKEN` y uno de los dos se queda sin mando.
 Salidas, de mejor a peor (esto ya estaba estudiado en `reparto-mini-dev.md`; aquí sólo se
 fija cuál se elige):
 
-1. **Bot de staging `TGL2_`.** Va en el llavero como opcional. `mini2` nace con
-   `TGL2_BOT_TOKEN`, las dos máquinas vivas, dos chats, se comprueba y se destruye la
-   vieja. **Es la elegida.**
+1. ~~**Bot de staging `TGL2_`.**~~ **DESCARTADA el 2026-10-01 por el dueño**: *«No
+   necesito el bot de staging»*. Era la elegida —`mini2` nacía con `TGL2_BOT_TOKEN`, las
+   dos vivas, dos chats— y nunca llegó a existir el bot. Las dos `TGL2_` se quitaron del
+   llavero ese día (`llavero.json`, y `llavero olvidar` en las dos máquinas), así que ya
+   no salen como «faltan». **La vía es la 2.**
    ⚠ **Desde el 2026-10-01 el tipo `mini` declara el volumen `datos`, y un volumen va en
    UNA máquina a la vez: `launch mini2 --type mini` con el viejo vivo muere antes de crear
    nada.** Para este procedimiento `mini2` se lanza con `--sin-volumen`, y cuando el viejo
@@ -416,7 +418,9 @@ salgan, y en este orden:
 ```
 1.  desde el mini:  launch dev  --type dev        →  dev con su bot, sus repos y su llavero
 2.  desde el dev:   remoto mini update            →  el mini se actualiza solo
-3.  desde el dev:   launch mini2 --type mini      →  un mini nuevo con bot TGL2_
+3.  desde el dev:   launch mini2 --type mini --service '' --sin-volumen
+                                                  →  un mini nuevo SIN bot (el 409); se le pasa el
+                                                     servicio y el volumen al morir el viejo
 4.  desde mini2:    launch dev2 --type dev        →  la flota se reproduce sin la laptop
     y por el camino:  flota  →  0, sin huecos
 ```

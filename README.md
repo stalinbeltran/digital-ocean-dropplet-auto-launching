@@ -796,8 +796,8 @@ python scripts/do_droplet.py flota
 ```
 ```
 === mini  (67.205.158.85)
-  llavero      12/16
-    faltan opcionales:   FVW_WEB_TOKEN, TGL2_ALLOWED_USER_IDS, TGL2_BOT_TOKEN, TGL_CLAUDE_PERMISSION_MODE
+  llavero      12/14
+    faltan opcionales:   FVW_WEB_TOKEN, TGL_CLAUDE_PERMISSION_MODE
   clave flota  si
   servicios    telegram-launcher
 

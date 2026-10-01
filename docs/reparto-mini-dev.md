@@ -153,6 +153,8 @@ Tres salidas, de mejor a peor:
 
 1. **Un bot de staging** (`TGL2_BOT_TOKEN`, otro `/newbot`). Las dos vivas, dos
    chats, compruebas y destruyes la vieja. Es lo que recomendaría.
+   ⚠ **Descartado por el dueño el 2026-10-01** («No necesito el bot de staging»): la vía
+   es la 2. Ver [`flota-simetrica.md`](flota-simetrica.md) §5.
 2. **Nacer sin servicio** (`--service ''`) y verificar desde `post`, avisando con
    `notify.mjs`. Detalle útil: **el 409 es del `getUpdates`, no del
    `sendMessage`** —`notify.mjs` ya envía con el mismo token mientras el bot
