@@ -167,8 +167,8 @@ Lo que hay que respetar al tocar esto:
   `make_launcher`, `volume` y `post`. Las listas se **suman** a lo que venga por línea de
   comandos en vez de pisarse: un `--repo` suelto quiere decir "y además éste", no "olvida
   los del tipo", y pisarlos dejaría la máquina sin la mitad del trabajo sin avisar.
-- **Si hay un tipo que se llama como el droplet, se usa.** `launch bench-control` aplica
-  `types/bench-control.json`. Es por el móvil: la versión larga
+- **Si hay un tipo que se llama como el droplet, se usa.** `launch dev` aplica
+  `types/dev.json`. Es por el móvil: la versión larga
   (`--make-launcher --push-env … --repo …`) se teclea mal, y un error de dedo ahí crea
   una máquina que factura y no sirve. No es magia silenciosa — `launch` dice qué tipo cogió
   antes de crear nada — y `--type otro` lo pisa.

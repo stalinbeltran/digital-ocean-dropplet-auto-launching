@@ -171,7 +171,7 @@ una máquina de la flota tiene que llevar. Dato, no código, como `types/` y `se
 1. `cargar_llavero() -> list[dict]` junto a `load_type()` / `load_service()`, mismo
    estilo: lee el JSON, valida los campos, muere con un mensaje útil si está mal.
 2. `types/*.json` acepta `"llavero": true`. Lo ponen `mini.json` y `dev.json`. **No** lo
-   ponen `gpu-*`, `cpu`, `big` ni `bench-control`: el objetivo 5 dice que un secreto no
+   ponen `gpu-*`, `cpu` ni `big` (ni `bench-control`, retirado el 2026-10-01): el objetivo 5 dice que un secreto no
    viaja a donde no hace falta, y una máquina de medir no crea nada.
 3. `comprobar_llavero(sin_llavero: bool) -> dict[str, str]`, hermano de
    `comprobar_github_token()` ([do_droplet.py:1962](../scripts/do_droplet.py#L1962)) y con

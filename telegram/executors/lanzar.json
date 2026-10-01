@@ -4,10 +4,10 @@
   "ejemplos": [
     "list",
     "list --tag ephemeral",
-    "launch bench-control",
+    "launch dev",
     "types",
-    "destroy bench-control --yes",
-    "ssh bench-control --cmd 'uptime'"
+    "destroy prueba --yes",
+    "ssh mini --cmd 'uptime'"
   ],
   "command": "set -a; [ -f \"$HOME/.config/dev-secrets.env\" ] && . \"$HOME/.config/dev-secrets.env\"; set +a; set -- {{input}}; if [ $# -eq 1 ] && [ \"$1\" = list ]; then exec python3 scripts/estado_nubes.py --exit0; fi; exec python3 scripts/do_droplet.py \"$@\"",
   "encargados": [

@@ -1584,40 +1584,40 @@ El objetivo es responder a *cuánto acelera mi entrenamiento si le doy más CPU*
 con números medidos y no con intuiciones. El montaje son dos piezas y cada una
 está donde tiene sentido:
 
-- **La máquina de control es un droplet de DigitalOcean.** Ahí corre Claude, ahí
-  vive el dataset y desde ahí se dispara el barrido. Es de larga vida.
+- **La máquina de control es el `dev`**, el droplet de trabajo de siempre. Ahí corre
+  Claude, ahí vive el dataset y desde ahí se dispara el barrido. Se rehace sin aviso
+  (`lanzar launch dev` desde el mini), así que lo medido se commitea al terminar.
 - **Las máquinas de medir se alquilan en Vast.ai**, viven los minutos que dura la
   medida y se destruyen solas. Salen entre 0,05 y 0,10 $/h, así que un barrido de
   cinco niveles cuesta **céntimos**.
 
-### Paso 1 — el droplet de control
+⚠ Hasta el 2026-10-01 había un tipo aparte para la máquina de control,
+`bench-control`. **Se retiró ese día**: `dev` hacía su papel desde el 2026-08-23
+—lleva `make_launcher`, el token de Vast en el llavero y el `register-key` en su
+`post`—, nadie lo lanzaba, y clonaba el repo de datos sin conectarse al almacén, así
+que habría empujado a la copia congelada de GitHub sin avisar.
 
-```powershell
-python scripts/do_droplet.py launch bench-control `
-  --make-launcher `
-  --push-env VAST_AI_API_TOKEN `
-  --repo stalinbeltran/foveal-vision
-```
+### Paso 1 — la máquina de control ya está
 
-`--push-env VAST_AI_API_TOKEN` es lo que hace que el droplet pueda alquilar en
-Vast; sin él, `vast_instance.py` allí dentro dirá que falta el token. Los repos
-quedan en `~/src`.
+No hay nada que lanzar: el `dev` nace con los repos, el token de Vast y su clave
+registrada en Vast (desde el 2026-10-01, la **de flota**, la misma para todas las
+máquinas). El dataset **no hay que subirlo**: viaja en este repo y lo resuelve el
+registro de [datasets/](datasets/). Ése era el paso manual que fallaba siempre.
 
-El dataset **no hay que subirlo**: viaja en este repo y lo resuelve el registro
-de [datasets/](datasets/). Ése era el paso manual que fallaba siempre.
-
-### Paso 2 — dentro del droplet, darle una clave en Vast
+### Paso 2 — la clave en Vast (sólo fuera de la flota)
 
 **El token deja alquilar, pero no entrar.** Es la misma trampa que con
-`--make-launcher` en DigitalOcean: sin una clave propia registrada *antes*, la
-máquina se alquila, factura y no te deja pasar. Un comando, dentro del droplet:
+`--make-launcher` en DigitalOcean: sin una clave registrada *antes*, la máquina se
+alquila, factura y no te deja pasar. En la flota ya está hecho. En una laptop, un
+comando:
 
 ```bash
 cd ~/src/digital-ocean-dropplet-auto-launching
 python3 scripts/vast_instance.py register-key
 ```
 
-Genera el par si no lo hay y sube la pública. Es idempotente.
+Genera el par si no lo hay y sube la pública. Es idempotente, y `alquilar()` lo
+comprueba solo antes de gastar.
 
 ### Paso 3 — el barrido
 
@@ -1661,17 +1661,18 @@ entera es **un** mensaje:
 actualizar
 ```
 
-Y luego, para montar la máquina donde Claude va a medir:
+Y luego, para rehacer la máquina donde Claude mide —desde el bot del mini—:
 
 ```
-lanzar   launch bench-control
+lanzar   launch dev
 estado
 ```
 
 Sí, eso es todo. **Un tipo que se llama igual que el droplet se aplica solo**, y
-[types/bench-control.json](types/bench-control.json) ya trae dentro el repo que
-clonar, el token que llevarse, `--make-launcher` y el `register-key` de Vast.
-`launch` dice qué tipo cogió antes de crear nada, y `--type otro` lo pisa.
+[types/dev.json](types/dev.json) ya trae dentro los repos que clonar, los servicios,
+`--make-launcher`, el llavero y los pasos finales (el `register-key` de Vast y la
+conexión al almacén). `launch` dice qué tipo cogió antes de crear nada, y `--type
+otro` lo pisa.
 
 Escribir la versión larga desde el móvil es exactamente la clase de cosa que se
 teclea mal, y un error de dedo ahí crea una máquina que factura y no sirve.

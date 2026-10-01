@@ -311,8 +311,61 @@ def test_la_comprobacion_va_antes_de_crear(mod):
     return []
 
 
+# ------------------------------------------------- `clave-de-entrada` (2026-10-01)
+#
+# Lo que preguntan `foveal-vision/scripts/bench_fleet.py` y el preflight del
+# coordinador en vez de cablear `~/.ssh/do_droplet`, que en la flota no existe.
+
+
+def _clave_de_entrada(mod):
+    """Corre el subcomando y devuelve la ÚLTIMA línea de stdout (o None si muere)."""
+    import argparse
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            mod.cmd_clave_de_entrada(argparse.Namespace())
+    except Muerte:
+        return None
+    lineas = [l for l in buf.getvalue().splitlines() if l.strip()]
+    return lineas[-1] if lineas else ""
+
+
+def test_clave_de_entrada_imprime_la_elegida(mod):
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        conf = par(d, "do_droplet", MAT_OTRA)
+        entorno(mod, conf, par(d, "do_flota", MAT_FLOTA))
+        dicha = _clave_de_entrada(mod)
+    return [] if dicha == str(conf) else [f"imprimio {dicha!r}, esperaba {conf}"]
+
+
+def test_clave_de_entrada_cae_a_la_flota(mod):
+    """El caso de la flota: la de DO por defecto no existe, la de flota sí."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        flo = par(d, "do_flota", MAT_FLOTA)
+        entorno(mod, d / "do_droplet", flo)
+        dicha = _clave_de_entrada(mod)
+    return [] if dicha == str(flo) else [f"imprimio {dicha!r}, esperaba la de flota {flo}"]
+
+
+def test_clave_de_entrada_sin_ninguna_se_niega(mod):
+    """Imprimir una ruta que no existe sería dar un fichero que no autentica."""
+    with tempfile.TemporaryDirectory() as d:
+        d = Path(d)
+        entorno(mod, d / "do_droplet", d / "do_flota")
+        dicha = _clave_de_entrada(mod)
+    return [] if dicha is None else [f"sin ninguna clave imprimio {dicha!r} en vez de negarse"]
+
+
 def main():
     pruebas = [
+        ("clave-de-entrada imprime la elegida", test_clave_de_entrada_imprime_la_elegida),
+        ("clave-de-entrada cae a la de flota", test_clave_de_entrada_cae_a_la_flota),
+        ("clave-de-entrada sin ninguna se niega", test_clave_de_entrada_sin_ninguna_se_niega),
         ("la configurada manda si existe", test_usa_la_configurada_si_existe),
         ("cae a la flota si la configurada no existe",
          test_cae_a_la_flota_si_la_configurada_no_existe),

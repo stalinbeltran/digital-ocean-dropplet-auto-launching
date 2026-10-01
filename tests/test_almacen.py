@@ -149,6 +149,18 @@ def main() -> int:
     i_con = next((i for i, c in enumerate(post) if "almacen conectar" in c), -1)
     caso("el post del mini instala y DESPUÉS conecta", 0 <= i_inst < i_con)
     caso("el post del dev conecta", any("almacen conectar" in c for c in (dev.get("post") or [])))
+    # El invariante que dejó al descubierto `bench-control` (retirado el 2026-10-01):
+    # clonaba el repo de datos sin `almacen conectar`, así que habría empujado a la
+    # copia congelada de GitHub sin avisar. Estaba escrito como nota en el CLAUDE.md
+    # del coordinador; una nota no es un freno, y esto sí.
+    sin_conectar = []
+    for t in sorted((ROOT / "types").glob("*.json")):
+        d = json.loads(t.read_text(encoding="utf-8"))
+        clona = any("foveal-vision-data" in r for r in (d.get("repos") or []))
+        if clona and not any("almacen conectar" in c for c in (d.get("post") or [])):
+            sin_conectar.append(t.stem)
+    caso("todo tipo que clona el repo de datos se conecta al almacén",
+         not sin_conectar, ", ".join(sin_conectar))
     alm = mod.almacen_declarado()
     caso("almacen_declarado() lee el tipo", alm["monte"] == "/mnt/datos" and alm["repos"])
 

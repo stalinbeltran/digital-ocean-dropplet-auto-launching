@@ -330,7 +330,7 @@ de arriba— entró en **0,98 s** (`d69f7a3d..f7fefc06`).
 
 | | |
 |---|---|
-| 1 | ⏳ **revisado, no arreglado**: `bench-control` está abandonado de hecho desde el 2026-08-23 (`dev` asumió alquilar y apagar en Vast) y cinco documentos lo siguen dando por vigente. Lo decide el dueño: retirarlo, o conectarlo con el test del invariante |
+| 1 | ✅ **retirado ese mismo día, a petición del dueño**: `bench-control` estaba abandonado de hecho desde el 2026-08-23 (`dev` asumió alquilar y apagar en Vast). Se borró el tipo y se corrigieron los sitios que lo daban por vigente (README, ejemplos de `lanzar`, CLAUDE.md, `flota-simetrica.md`). Ya no queda ningún tipo que clone el repo de datos sin conectarse: sólo `dev` y `mini`, y los dos se conectan |
 | 2 | ✅ el freno cuenta los droplets sueltos: `list --json` aquí, el tag `atendida` que pone `launch`, y el detalle en el CLAUDE.md del coordinador |
 | 3 | ✅ **15/16 en las dos máquinas**: falta sólo `TGL2_BOT_TOKEN`, que es un bot nuevo de @BotFather y sólo puede darlo el dueño |
 | 4 | ✅ la flota usa la **clave de flota** también para Vast: **de 19 claves a 1** (CLAUDE.md de este repo) |

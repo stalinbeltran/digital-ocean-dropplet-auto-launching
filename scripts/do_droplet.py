@@ -416,6 +416,37 @@ def fichero_clave_ssh() -> Path:
     return flota
 
 
+def cmd_clave_de_entrada(args: argparse.Namespace) -> None:
+    """Imprime la clave con la que este lanzador ENTRA en los droplets.
+
+    Para los programas que entran por su cuenta -`foveal-vision/scripts/
+    bench_fleet.py` y el preflight del coordinador-: que PREGUNTEN aquí en vez
+    de cablear una ruta. Hasta el 2026-10-01 los dos decían `~/.ssh/do_droplet`,
+    que en una máquina de la flota NO existe (la flota entra con la clave de
+    flota desde el 2026-09-11): el benchmark de vCPU moría al empezar, y el
+    `--fix` del preflight GENERABA y registraba una clave nueva por máquina, el
+    mismo goteo que la de flota existe para cortar.
+
+    Es la elección de `fichero_clave_ssh()`, la misma con la que entran `ssh` y
+    `launch`. La ruta va en la ÚLTIMA línea: antes puede salir el aviso de que
+    se cayó a la clave de flota, que es información y no hay que perderla.
+    Sin ninguna clave, muere: imprimir una ruta que no existe sería darle a
+    quien pregunta un fichero que no autentica.
+    """
+    clave = fichero_clave_ssh()
+    if not clave.exists():
+        die(
+            f"No hay clave con la que entrar en los droplets: ni {clave}\n"
+            f"  ni la de la flota ({ruta_clave_flota()}).\n"
+            "  Si esta máquina es de la flota, que otra que la tenga se la REENVÍE\n"
+            "  (no `clave-flota`, que crearía una distinta):\n"
+            "    python3 scripts/do_droplet.py autorizar-flota <esta-maquina>\n"
+            "  Si no lo es:  python3 scripts/do_droplet.py keygen"
+            " && python3 scripts/do_droplet.py register-key"
+        )
+    print(clave, flush=True)
+
+
 def cmd_keys(args: argparse.Namespace) -> None:
     claves = account_keys()
     if getattr(args, "prune", ""):
@@ -1008,9 +1039,9 @@ def tipo_por_nombre(nombre_droplet: str) -> str:
     """Si hay un tipo que se llama igual que el droplet, ése es el que toca.
 
     Existe para que el comando quepa en un mensaje de Telegram. Escribir
-    `launch bench-control --make-launcher --push-env VAST_AI_API_TOKEN --repo
-    …` desde el móvil es exactamente la clase de cosa que se escribe mal, y un
-    error de dedo ahí crea una máquina que factura y no sirve.
+    `launch dev --make-launcher --service telegram-coordinator --repo …` desde
+    el móvil es exactamente la clase de cosa que se escribe mal, y un error de
+    dedo ahí crea una máquina que factura y no sirve.
 
     No es magia silenciosa: cuando pasa, `launch` lo dice antes de crear nada.
     Y se puede desactivar para un lanzamiento suelto con `--type otro`.
@@ -1029,8 +1060,8 @@ def resolver_maquina(args: argparse.Namespace) -> dict:
     suelto.
 
     Si no se pide tipo, se busca uno que se llame como el droplet antes de caer
-    en DO_TYPE: es lo que permite que `launch bench-control` traiga consigo sus
-    repos, sus variables y su clave de Vast sin escribirlos.
+    en DO_TYPE: es lo que permite que `launch dev` traiga consigo sus repos, sus
+    servicios y su clave de Vast sin escribirlos.
     """
     nombre = args.type or tipo_por_nombre(getattr(args, "name", "") or "") or cfg("DO_TYPE")
     tipo = load_type(nombre) if nombre else {}
@@ -5962,6 +5993,14 @@ def main() -> None:
         "eso el acceso entre maquinas deja de depender de cual nacio primero",
     )
     p.set_defaults(func=cmd_clave_flota)
+
+    p = sub.add_parser(
+        "clave-de-entrada",
+        help="imprime (en la ultima linea) la clave con la que este lanzador "
+        "entra en los droplets. Para quien entra por su cuenta (bench_fleet, el "
+        "preflight): que pregunte aqui en vez de cablear una ruta",
+    )
+    p.set_defaults(func=cmd_clave_de_entrada)
 
     p = sub.add_parser(
         "autorizar-flota",
