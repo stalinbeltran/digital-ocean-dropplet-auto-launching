@@ -376,6 +376,10 @@ fija cuál se elige):
 2. Nacer sin servicio (`--service ''`) y avisar por `notify.mjs` — el `409` es del
    `getUpdates`, no del `sendMessage`, así que la máquina nueva puede escribirte al chat
    de siempre sin robarte el bot.
+   ✅ **`--service ''` medido el 2026-10-01** con `--type dev`: `launch` lo acepta y la
+   máquina nace con sus tres unidades `inactive` ([`almacen.md`](almacen.md) §5.2). Con
+   `--type mini` se corrió el 2026-09-10, levantó el bot igual y de ahí salió el arreglo de
+   `lista_unida`; después del arreglo no se ha vuelto a correr con ese tipo.
 3. Parar el bot viejo antes de arrancar el nuevo. **No**: si el nuevo falla te quedas sin
    ninguno, que es justo lo que el mini evita.
 

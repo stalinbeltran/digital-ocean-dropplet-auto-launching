@@ -203,7 +203,8 @@ dev → flota
 
 **Lo que este ciclo NO midió:** un **dev** nuevo naciendo con `almacen conectar` en su
 `post` (está cableado en `types/dev.json`), que un dev pueda parir máquinas conectadas, y el
-staging de un `mini2` con `--sin-volumen` (escrito, no corrido).
+staging de un `mini2` con `--sin-volumen` (escrito, no corrido). → Las dos primeras quedaron
+medidas en §5.2; el staging sigue sin correr.
 
 ### 5.2 El dev, destruido a propósito el 2026-10-01 para medir las dos primeras
 
@@ -211,7 +212,119 @@ El dueño destruyó el dev ese mismo día (*«nos ha pasado que algo falta»*). 
 dev nuevo tiene que correr nada más nacer está en `telegram-coordinator/CLAUDE.md` § «LO
 PRIMERO SI ACABAS DE NACER», punto 0; el resultado se pega **aquí**:
 
-PENDIENTE_DEV_NUEVO
+✅ **Las dos mitades en verde, medido el 2026-10-01 desde el dev nuevo** (droplet 605307430,
+nacido hacia las 15:58 UTC). Salidas pegadas; lo recortado va con `…`. El guion de la mitad 2
+y su log entero están en el almacén: `foveal-vision-data/temporal/dev/2026-10-01/`
+(`f7fefc06`).
+
+**Mitad 1 — este dev nació conectado** (16:10 UTC, a los 12 min de nacer):
+
+```
+dev → git -C ~/src/foveal-vision-data remote -v
+    ← github  https://github.com/stalinbeltran/foveal-vision-data.git (fetch/push)
+      origin  almacen:/mnt/datos/git/foveal-vision-data.git (fetch/push)
+dev → grep -A6 "Host almacen" ~/.ssh/config
+    ← Host almacen · HostName 142.93.255.224 · User datos · IdentityFile ~/.ssh/do_flota
+      IdentitiesOnly yes · HostKeyAlias almacen · StrictHostKeyChecking accept-new
+dev → almacen estado                                    (3,4 s)
+    ← volumen   datos: 1 GB en nyc1, conectado al droplet 605270224
+      montado   /mnt/datos · disco 360M usados de 868M (45%) · fstab si (nofail)
+      usuario   datos, shell /usr/bin/git-shell
+      repo      foveal-vision-data.git  360M  766 commits  ultimo 2026-10-01T15:42:18+00:00
+                nadie borra: si (denyDeletes + hook)
+      pushes    7 registrados
+      app       sispla-demo: /home/deploy/src/sispla-demo/datos -> volumen (312K)
+dev → almacen probar                                    (3,9 s)
+    ← ok ×5 · El almacén cumple: entra lo nuevo, no se borra nada, y sólo root limpia.
+```
+
+Que el `post` corrió `conectar` —y no sólo que el alias está— lo prueba el dato: `main` del
+clon está en `d69f7a3d`, el HEAD del almacén, **5 commits por delante de `github/main`**
+(`15e683b`). Esos 5 sólo existen en el almacén, así que sólo pudieron llegar de ahí.
+⚠ `estado` dice 766 commits y `git rev-list --count HEAD`, 762: el almacén cuenta `--all`
+(con `dataTests` y `datos-fechados`). No es un fallo.
+
+**Mitad 2 — un dev pare una máquina conectada** (16:16:52 → 16:23:28 UTC, **6 min 36 s**;
+≈ **0,004 $**, *derivado* de 0,0357 $/h, no leído de la factura):
+
+Se lanzó como **unidad** (`desacoplar-persistente.sh prueba-almacen-hijo sh <guion>`) y no
+desde el turno, porque la sesión era un `claude -p` de Telegram: si moría a mitad, el
+`destroy` tenía que llegar igual. El guion lanza, mira desde dentro, corre `probar` desde
+dentro, destruye **sin condiciones**, lista, y sale siempre con 0 (la unidad es
+`Restart=on-failure`).
+
+```
+dev → launch prueba-almacen --type dev --service ''
+    ← Lanzador: al día con origin/main.
+      GitHub: el token sirve (usuario stalinbeltran).
+      Llavero: 12/16 variables listas para viajar.           ← pendiente 3
+      Aceptado (202). Droplet id 605312358. … Activo. IP pública: 104.248.224.99
+      … clonando foveal-vision · image-text-sample-generator · foveal-vision-data ·
+        estudios-redes-neuronales · digital-ocean-dropplet-auto-launching
+      'prueba-almacen' usa la clave de la flota: … No se registra ninguna clave nueva.
+      Pasos finales del tipo (3):
+        register-key --comment dev → Clave registrada en Vast.ai.      ← pendiente 4
+        entornos aplicar …         → no existe …/claude-code-webapp-mobile, me lo salto
+                                     no existe …/telegram-coordinator, me lo salto
+        almacen conectar           → El almacén está en 'mini' (142.93.255.224).
+                                     alias `almacen` escrito en /home/deploy/.ssh/config
+                                     foveal-vision-data: GitHub se queda como remoto `github`
+                                     foveal-vision-data: origin -> almacen:/mnt/datos/git/…
+                                     foveal-vision-data: al día con el almacén
+dev → ssh prueba-almacen --cmd '…'                      (dentro del hijo)
+    ← origin almacen:/mnt/datos/git/foveal-vision-data.git (fetch/push) · github → GitHub
+      Host almacen · HostName 142.93.255.224 · User datos · … · HostKeyAlias almacen
+      HEAD local: d69f7a3d 2026-10-01 15:42:18 conversaciones: archivo automático
+      telegram-coordinator: inactive · foveal-vision-web: inactive · claude-web: inactive
+      almacen:/mnt/datos/git/foveal-vision-data.git
+      d69f7a3d829084bf07656f3f0c19613d328c2983	HEAD       ← el guion del CLAUDE.md, rc 0
+dev → ssh prueba-almacen --cmd 'almacen probar'          (la ESCRITURA, que el guion no mira)
+    ← ok ×5 · El almacén cumple: entra lo nuevo, no se borra nada, y sólo root limpia.
+dev → destroy prueba-almacen --yes
+    ← Destruido prueba-almacen.
+dev → list
+    ← mini (605270224) · dev (605307430). Nada más.
+```
+
+Y después, desde el dev: `git ls-remote origin 'refs/heads/prueba-almacen-*'` sale **vacío**
+(el `probar` del hijo no dejó rama), y el primer push real de este dev —el del guion y el log
+de arriba— entró en **0,98 s** (`d69f7a3d..f7fefc06`).
+
+| lo que queda medido | |
+|---|---|
+| un dev **nuevo** nace conectado (el `post` de `types/dev.json`) | ✅ |
+| un dev **pare** una máquina conectada, con su llavero y su clave de flota, sin pasar por el mini | ✅ lee **y escribe** (`probar` desde el hijo) |
+| `launch --service ''` | ✅ lo acepta, y el hijo nace con las tres unidades `inactive`: **sin bot, sin 409** |
+
+⚠ **El alcance es «un dev pare un dev»**, no «cualquier máquina»: ver el pendiente 1.
+
+**Lo que quedó pendiente** (nada de esto lo rompió la prueba, y nada está arreglado):
+
+1. **`bench-control` clona `foveal-vision-data` y NO se conecta al almacén.** Su `post` no
+   lleva `almacen conectar` (`dev` y `mini` sí; los demás tipos no clonan el repo de datos),
+   así que una máquina de ese tipo empujaría a **GitHub**, la copia congelada, **en
+   silencio**: justo lo que el almacén existe para no hacer. El arreglo es añadirle el paso y
+   un test que fije el invariante «todo tipo que clone el repo de datos se conecta» (R17).
+   No se ha hecho: lo decide el dueño, y depende de si `bench-control` sigue en uso.
+2. **El freno no ve los droplets de DO.** Con el hijo vivo y facturando (~16:22 UTC),
+   `cerrable.mjs --breve` decía **«🟢 CERRABLE — nada alquilado, nada corriendo»**: sólo mira
+   Vast, y su lista `TRABAJOS` no reconoce `do_droplet.py`. Si este dev se hubiera destruido en ese
+   momento, el hijo habría seguido vivo, con el llavero entero, hasta un `apagar-do`. Anotado en el
+   CLAUDE.md del coordinador § «¿Se puede apagar este server?».
+3. **Al llavero de este dev le faltan 4 de 16, las cuatro opcionales**:
+   `TGL_CLAUDE_PERMISSION_MODE`, `FVW_WEB_TOKEN`, `TGL2_BOT_TOKEN` y `TGL2_ALLOWED_USER_IDS`.
+   Ninguna toca el almacén. Las dos `TGL2_` son las del bot de staging, la salida **elegida**
+   en [`flota-simetrica.md`](flota-simetrica.md) §5 para rehacer el mini con el viejo vivo:
+   desde este dev, hoy, ese camino no está disponible.
+4. **Cada máquina que nace deja una clave más en Vast**, que queda huérfana al destruirla:
+   `register-key` genera un par **por máquina**. Es deuda ya conocida (`CLAUDE.md` de este
+   repo, «El goteo de claves muertas también pasa en Vast»): se podaron el 2026-09-11, de 44,
+   y hoy vuelven a ser **19**, una de ellas la del hijo. `vast_instance.py keys --prune` lo
+   hace, pero hay que pasarle `--keep <id>` con las de las otras máquinas vivas, y desde aquí
+   no se pueden adivinar: lo decide el dueño.
+5. **`probar` deja una referencia de seguimiento huérfana en el clon desde el que corre**
+   (`origin/prueba-almacen-<ts>`): empuja desde el clon real, y root borra la rama en el
+   servidor pero no la referencia local. Es cosmético: `git fetch --prune` la quita.
 
 ## 6. La regla para quien escriba datos (está en `telegram-coordinator/CLAUDE.md`)
 
