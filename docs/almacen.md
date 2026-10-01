@@ -202,8 +202,16 @@ dev → flota
 | clave de host | — | cambió; `conectar` lo dijo y la aceptó |
 
 **Lo que este ciclo NO midió:** un **dev** nuevo naciendo con `almacen conectar` en su
-`post` (está cableado en `types/dev.json`; se verá en el próximo `launch dev`), y el
+`post` (está cableado en `types/dev.json`), que un dev pueda parir máquinas conectadas, y el
 staging de un `mini2` con `--sin-volumen` (escrito, no corrido).
+
+### 5.2 El dev, destruido a propósito el 2026-10-01 para medir las dos primeras
+
+El dueño destruyó el dev ese mismo día (*«nos ha pasado que algo falta»*). El guion que el
+dev nuevo tiene que correr nada más nacer está en `telegram-coordinator/CLAUDE.md` § «LO
+PRIMERO SI ACABAS DE NACER», punto 0; el resultado se pega **aquí**:
+
+PENDIENTE_DEV_NUEVO
 
 ## 6. La regla para quien escriba datos (está en `telegram-coordinator/CLAUDE.md`)
 
