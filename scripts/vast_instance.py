@@ -2237,6 +2237,13 @@ def cmd_trabajo(args: argparse.Namespace) -> None:
                                        int(m.get("max_cpus", 0)), float(m.get("min_ram", 8)),
                                        tope, cpu=m.get("cpu", "") or "")
     for t, o in zip(trabajos, ofertas):
+        viejo = libro_dir / f"{t['id']}.json"
+        if viejo.exists():
+            # Un relanzamiento (el anterior ya es terminal: lo comprobo el guardia de
+            # arriba) NO se escribe encima: se aparta, y su coste se sigue sumando.
+            destino = libro_dir / "anteriores" / f"{t['id']}-{time.strftime('%Y%m%dT%H%M%S')}.json"
+            destino.parent.mkdir(parents=True, exist_ok=True)
+            viejo.replace(destino)
         Libro(libro_dir / f"{t['id']}.json").paso(
             "pendiente", id=t["id"], etiqueta=etiqueta_de(args.prefijo, t["id"]),
             experimento=desc["experimento"], descriptor=desc["_ruta"],
@@ -2318,9 +2325,11 @@ def correr_un_trabajo(desc: dict, t: dict, prefijo: str, libro_dir: Path, horas:
         estado = (info.get("actual_status") or info.get("cur_state") or "?").lower()
         if estado != "running":
             raise RuntimeError(f"la instancia acabo en '{estado}', no arranco")
-        host, port = ssh_destino(info)
+        host, port = destino_propio(iid)
         if not esperar_ssh(host, port):
             raise RuntimeError(f"sshd no contesto en {host}:{port}")
+        nonce = f"{etiqueta}-{iid}-{os.urandom(4).hex()}"
+        libro.paso("sellada", intentos_clave=sellar(host, port, nonce))
         subir_trabajo(host, port, tar, huella)
         libro.paso("subida", payload_mb=round(tar.stat().st_size / 1e6, 2), sha256=huella[:16])
         entorno = "".join(f"export {k}={json.dumps(str(v))}\n"
@@ -2329,6 +2338,7 @@ def correr_un_trabajo(desc: dict, t: dict, prefijo: str, libro_dir: Path, horas:
                       timeout=1800) != 0:
             raise RuntimeError("fallo la instalacion")
         libro.paso("instalada")
+        comprobar_sello(host, port, nonce)
         base = f"{REMOTO}/{desc.get('base_remota') or ''}".rstrip("/")
         rc = correr_remoto(host, port, f"{entorno}cd {json.dumps(base)}\n{t['run']}",
                            limite - MARGEN_TRAER_S, libro)
@@ -2349,6 +2359,76 @@ def correr_un_trabajo(desc: dict, t: dict, prefijo: str, libro_dir: Path, horas:
         avisar(f"{'✅' if rc == 0 else '⚠️'} {etiqueta}: {d.get('estado')}, rc={rc}, "
                f"{d.get('minutos', '?')} min, {d.get('coste_usd', '?')} $"
                + (f" · error: {d['error'][:200]}" if d.get("error") else ""))
+
+
+SELLO_TRABAJO = "/root/.duenno-trabajo"
+
+
+def destino_propio(iid: int, intentos: int = 15, espera_s: float = 20.0) -> tuple[str, int]:
+    """(host, port) de ESTA instancia, comprobado contra el CENSO entero.
+
+    ⚠ La lección es de `foveal-vision/scripts/estudio_flota.py` (`resolver_destino`),
+    medida el 2026-08-24: en el primer segundo tras alquilar, la API puede publicar el
+    puerto del proxy DESFASADO EN UNO -- el de otra instancia --, y el que pregunta
+    primero se lleva un destino que no es suyo. Se exige: que la instancia salga en el
+    censo, que su `host:port` no lo publique NINGUNA otra, y que se repita en dos
+    lecturas seguidas (un dato que se asienta cambia; uno asentado, no). Se ESPERA en
+    vez de destruir: alli, rendirse a los 60 s se comio 8 maquinas del pozo."""
+    anterior, ultimo = None, "sin datos todavia"
+    for intento in range(1, intentos + 1):
+        lista = instancias()
+        mio = next((i for i in lista if str(i.get("id")) == str(iid)), None)
+        if mio is None:
+            ultimo = f"la instancia {iid} no sale en el censo todavia"
+        else:
+            host, port = ssh_destino(mio)
+            if not host or not port:
+                ultimo = "la API aun no publica destino SSH"
+            elif any(str(i.get("id")) != str(iid)
+                     and (i.get("ssh_host"), int(i.get("ssh_port") or 0)) == (host, port)
+                     for i in lista):
+                ultimo = f"{host}:{port} lo publica tambien otra instancia"
+            elif anterior != (host, port):
+                anterior, ultimo = (host, port), f"{host}:{port} es nuevo; espero a verlo dos veces"
+            else:
+                return host, port
+        if intento < intentos:
+            time.sleep(espera_s)
+    raise RuntimeError(f"sin destino SSH propio y estable: {ultimo}")
+
+
+def sellar(host: str, port: int, nonce: str, intentos: int = 12, espera_s: float = 20.0) -> int:
+    """Escribe un sello en la maquina y lo relee. REINTENTA el transporte.
+
+    ⚠ La otra leccion de `estudio_flota.py` (`sellar`), medida el 2026-08-24 y otra vez
+    el 2026-10-01 aqui mismo: **el banner de sshd llega antes que la clave**, y el primer
+    comando que necesita autenticarse sale con `Permission denied (publickey)` a traves
+    del proxy. `esperar_ssh` mira el banner, que NO es lo mismo que «SSH funciona».
+      - rc != 0 es TRANSPORTE: todavia no acepta la clave. Se reintenta.
+      - un sello que se lee y NO coincide es otra maquina: eso no mejora esperando.
+    Devuelve el intento en que entro (para el libro)."""
+    ultimo = ""
+    for intento in range(1, intentos + 1):
+        code, salida = ssh_capture(
+            host, port, f"set -eu\nprintf '%s' '{nonce}' > {SELLO_TRABAJO}\ncat {SELLO_TRABAJO}\n",
+            timeout=180)
+        leido = salida.strip().splitlines()[-1].strip() if salida.strip() else ""
+        if code == 0:
+            if leido != nonce:
+                raise RuntimeError(f"el sello de {host}:{port} no es el mio: es otra maquina")
+            return intento
+        ultimo = f"rc={code}"
+        if intento < intentos:
+            time.sleep(espera_s)
+    raise RuntimeError(f"SSH no acepto la clave en {host}:{port} tras {intentos} intentos ({ultimo})")
+
+
+def comprobar_sello(host: str, port: int, nonce: str) -> None:
+    """Justo antes de correr: es el momento en que equivocarse deja de ser ruidoso."""
+    code, salida = ssh_capture(host, port, f"cat {SELLO_TRABAJO} 2>/dev/null || true\n", timeout=120)
+    leido = salida.strip().splitlines()[-1].strip() if salida.strip() else ""
+    if code != 0 or leido != nonce:
+        raise RuntimeError("el sello ya no es mio antes de correr: no corro nada")
 
 
 def subir_trabajo(host: str, port: int, tar: Path, huella: str) -> None:
@@ -2455,7 +2535,14 @@ def estado_trabajos(libro_dir: Path) -> None:
             f"iid {d.get('iid', '-')!s:<10} rc {d.get('rc', '-')!s:<4} "
             f"{d.get('coste_usd', '-')!s:>7} $  {unidad}  {viva}"
             + (f"\n           error: {d['error'][:160]}" if d.get("error") else ""))
-    log(f"\ncoste anotado: {total:.4f} $ (lo de las maquinas ya destruidas)")
+    previos = 0.0
+    for f in sorted((libro_dir / "anteriores").glob("*.json")):
+        try:
+            previos += float(json.loads(f.read_text(encoding="utf-8")).get("coste_usd") or 0)
+        except (OSError, json.JSONDecodeError, ValueError):
+            pass
+    log(f"\ncoste anotado: {total + previos:.4f} $ (lo de las maquinas ya destruidas"
+        + (f"; {previos:.4f} $ de intentos anteriores, en anteriores/" if previos else "") + ")")
 
 
 def apagar_trabajos(prefijo: str) -> None:

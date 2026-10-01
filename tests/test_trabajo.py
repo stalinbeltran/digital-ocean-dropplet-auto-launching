@@ -92,6 +92,9 @@ def maquina_de_mentira(mod, *, falla_run=False, falla_traer=False):
     mod.destruir = lambda iid: hecho["destruidas"].append(iid)
     mod.esperar_estado = lambda iid, t: {"actual_status": "running", "ssh_host": "h", "ssh_port": 1}
     mod.esperar_ssh = lambda h, p: True
+    mod.destino_propio = lambda iid: ("h", 1)
+    mod.sellar = lambda h, p, nonce: 1
+    mod.comprobar_sello = lambda h, p, nonce: None
     mod.subir_trabajo = lambda h, p, tar, huella: None
     mod.ssh_script = lambda h, p, s, timeout: 0
 
@@ -313,6 +316,45 @@ def test_run_y_trae_son_relativos_al_descriptor():
     return fallos
 
 
+def test_sellar_reintenta_la_clave_y_para_si_es_otra_maquina():
+    """El 2026-10-01 la fase 1 murio con `Permission denied (publickey)`: el banner de
+    sshd llega antes que la clave. `sellar` reintenta el transporte; un sello ajeno no."""
+    mod = cargar()
+    mod.time.sleep = lambda s: None
+    fallos = []
+    respuestas = iter([(255, "Permission denied (publickey)"), (255, ""), (0, "N1")])
+    mod.ssh_capture = lambda h, p, s, timeout: next(respuestas)
+    try:
+        if mod.sellar("h", 1, "N1") != 3:
+            fallos.append("no conto bien los intentos")
+    except RuntimeError as e:
+        fallos.append(f"no reintento el transporte: {e}")
+    mod.ssh_capture = lambda h, p, s, timeout: (0, "OTRO")
+    try:
+        mod.sellar("h", 1, "N1")
+        fallos.append("un sello AJENO no paro nada")
+    except RuntimeError:
+        pass
+    return fallos
+
+
+def test_destino_propio_espera_a_un_puerto_que_no_comparta_nadie():
+    """La API publica a veces el puerto desfasado en uno (estudio_flota, 2026-08-24)."""
+    mod = cargar()
+    mod.time.sleep = lambda s: None
+    lecturas = iter([
+        [{"id": 7, "ssh_host": "s", "ssh_port": 22188}, {"id": 8, "ssh_host": "s", "ssh_port": 22188}],
+        [{"id": 7, "ssh_host": "s", "ssh_port": 22187}, {"id": 8, "ssh_host": "s", "ssh_port": 22188}],
+        [{"id": 7, "ssh_host": "s", "ssh_port": 22187}, {"id": 8, "ssh_host": "s", "ssh_port": 22188}],
+    ])
+    mod.instancias = lambda: next(lecturas)
+    try:
+        hp = mod.destino_propio(7)
+    except (RuntimeError, StopIteration) as e:
+        return [f"no llego a un destino: {e}"]
+    return [] if hp == ("s", 22187) else [f"devolvio {hp}"]
+
+
 def main():
     pruebas = [
         ("se destruye aunque falle el trabajo o la recogida", test_destruye_aunque_falle_el_trabajo),
@@ -325,6 +367,10 @@ def main():
         ("el payload no lleva .git/.venv/datos/.env", test_el_payload_no_lleva_lo_que_no_debe),
         ("lo traido no pisa lo local", test_lo_traido_no_pisa_lo_local),
         ("run y trae son relativos al descriptor", test_run_y_trae_son_relativos_al_descriptor),
+        ("sellar reintenta la clave; un sello ajeno para",
+         test_sellar_reintenta_la_clave_y_para_si_es_otra_maquina),
+        ("destino propio: espera a un puerto que no comparta nadie",
+         test_destino_propio_espera_a_un_puerto_que_no_comparta_nadie),
     ]
     total = 0
     for nombre, prueba in pruebas:
