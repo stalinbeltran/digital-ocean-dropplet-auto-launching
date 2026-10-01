@@ -2093,8 +2093,10 @@ def script_instalar_almacen(alm: dict, dev_user: str, pub: Path) -> str:
             'cat > "$R/hooks/pre-receive" <<\'HOOK\'\n' + hook_pre_receive(log_pushes) + "HOOK",
             'chmod 755 "$R/hooks/pre-receive"',
             'chown -R "$U:$U" "$R"',
-            f'echo "  {repo}.git listo: $(git -C "$R" rev-list --all --count 2>/dev/null '
-            f'|| echo ?) commits, $(du -sh "$R" | cut -f1)"',
+            # Como $U, no como root: git se niega a leer un repo de otro dueño
+            # («dubious ownership»), y el «?» que salía parecía un repo vacío.
+            f'echo "  {repo}.git listo: $(sudo -u "$U" -H git -C "$R" rev-list --all --count '
+            f'2>/dev/null || echo ?) commits, $(du -sh "$R" | cut -f1)"',
         ]
     # Lo que una app guarda en disco y tiene que sobrevivir a rehacer el mini: su carpeta
     # pasa a vivir en el volumen y en su sitio queda un enlace. Si el volumen YA trae datos
@@ -2235,17 +2237,22 @@ def script_estado_almacen(alm: dict) -> str:
             'if id "$U" >/dev/null 2>&1; then echo "usuario   $U, shell $(getent passwd "$U" | cut -d: -f7)"; else echo "usuario   $U NO existe"; ok=0; fi',
             'for r in "$M"/git/*.git; do',
             '  [ -d "$r" ] || continue',
-            '  n=$(git -C "$r" rev-list --all --count 2>/dev/null || echo ?)',
-            '  u=$(git -C "$r" log -1 --format=%cI --all 2>/dev/null || echo ?)',
+            # Las consultas al repo van como $U: root ve «dubious ownership» y todo sale «?».
+            '  n=$(sudo -u "$U" -H git -C "$r" rev-list --all --count 2>/dev/null || echo ?)',
+            '  u=$(sudo -u "$U" -H git -C "$r" log -1 --format=%cI --all 2>/dev/null || echo ?)',
             '  echo "repo      $(basename "$r")  $(du -sh "$r" | cut -f1)  $n commits  ultimo $u"',
-            '  if [ "$(git -C "$r" config receive.denyDeletes)" = true ] && [ -x "$r/hooks/pre-receive" ]; then',
+            '  if [ "$(sudo -u "$U" -H git -C "$r" config receive.denyDeletes)" = true ] && [ -x "$r/hooks/pre-receive" ]; then',
             '    echo "          nadie borra: si (denyDeletes + hook)"',
             "  else",
             '    echo "          nadie borra: NO"; ok=0',
             "  fi",
             "done",
-            'echo "pushes    $(wc -l < "$M/log/pushes.log" 2>/dev/null || echo 0) registrados"',
-            'tail -3 "$M/log/pushes.log" 2>/dev/null | sed "s/^/          /"',
+            'if [ -f "$M/log/pushes.log" ]; then',
+            '  echo "pushes    $(wc -l < "$M/log/pushes.log") registrados; los ultimos:"',
+            '  tail -3 "$M/log/pushes.log" | sed "s/^/          /"',
+            "else",
+            '  echo "pushes    0 registrados (todavia ninguno)"',
+            "fi",
             'for a in "$M"/apps/*; do [ -d "$a" ] && echo "app       $(basename "$a"): $(du -sh "$a" | cut -f1)"; done',
             '[ "$ok" = 1 ]',
         ]
@@ -2306,7 +2313,8 @@ def almacen_probar(alm: dict, solo_repo: str, maquina: str) -> None:
         code, _o, err = _git(clon, "push", "--force", "origin", f"{padre}:refs/heads/{rama}")
         caso("reescribir historia se RECHAZA", code != 0, "" if code != 0 else "¡entró un no-fast-forward!")
     # Sólo root en el mini quita la rama de prueba: es la mitad «sólo nosotros» de la regla.
-    limpieza = f'git -C {shq(alm["monte"] + "/git/" + repo + ".git")} update-ref -d refs/heads/{rama}\n'
+    limpieza = (f'sudo -u {ALMACEN_USUARIO} -H git -C {shq(alm["monte"] + "/git/" + repo + ".git")} '
+                f'update-ref -d refs/heads/{rama}\n')
     if almacen_en_esta_maquina(alm):
         code = subprocess.run(["sudo", "-n", "bash", "-c", limpieza]).returncode
     else:
