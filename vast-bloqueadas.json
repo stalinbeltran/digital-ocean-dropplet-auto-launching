@@ -880,6 +880,16 @@
         "RuntimeError: sshd no contesto en ssh5.vast.ai:25270"
       ],
       "visto_en": "estudio-c3"
+    },
+    {
+      "machine_id": 152600,
+      "primer_fallo": "2026-10-01T22:42:52+00:00",
+      "ultimo_fallo": "2026-10-01T22:42:52+00:00",
+      "fallos": 1,
+      "motivos": [
+        "2026-10-01: dos alquileres seguidos (53765324, 53765580), sshd contesta pero NUNCA acepta la clave de la cuenta (12 x 20 s de reintentos). Sin probar todavia otro host con la misma clave"
+      ],
+      "visto_en": "expc-bancok-f1-identidad-s3"
     }
   ]
 }
