@@ -1257,6 +1257,11 @@ python scripts/do_droplet.py ssh mini --cmd "uptime"
 
 ## Volúmenes: lo único que sobrevive al droplet
 
+> **Desde el 2026-10-01 el volumen `datos` del mini es además el ALMACÉN de datos de la
+> flota**: repos git desnudos servidos por SSH, con «nadie borra» puesto en el remoto.
+> Cómo se usa y cómo se probó, en [`docs/almacen.md`](docs/almacen.md). Y `volume resize`
+> existe desde ese día, porque un disco donde nadie borra sólo puede llenarse.
+
 Un droplet se rehace sin aviso y su disco se va con él. Un **volumen de bloques**
 no: existe aparte, se conecta a la máquina que lo necesite y sigue ahí cuando esa
 máquina ya no está. Por eso es donde va lo que cuesta caro reconstruir —en este

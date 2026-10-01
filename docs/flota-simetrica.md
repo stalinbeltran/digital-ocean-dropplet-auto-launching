@@ -368,6 +368,11 @@ fija cuál se elige):
 1. **Bot de staging `TGL2_`.** Va en el llavero como opcional. `mini2` nace con
    `TGL2_BOT_TOKEN`, las dos máquinas vivas, dos chats, se comprueba y se destruye la
    vieja. **Es la elegida.**
+   ⚠ **Desde el 2026-10-01 el tipo `mini` declara el volumen `datos`, y un volumen va en
+   UNA máquina a la vez: `launch mini2 --type mini` con el viejo vivo muere antes de crear
+   nada.** Para este procedimiento `mini2` se lanza con `--sin-volumen`, y cuando el viejo
+   muere: `volume attach datos --droplet mini2` + `remoto mini2 almacen instalar`. Detalle en
+   [`almacen.md`](almacen.md).
 2. Nacer sin servicio (`--service ''`) y avisar por `notify.mjs` — el `409` es del
    `getUpdates`, no del `sendMessage`, así que la máquina nueva puede escribirte al chat
    de siempre sin robarte el bot.

@@ -973,6 +973,25 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
   ~50 MB, publícalo y usa `url`, o el repositorio engorda para siempre. Un volumen de
   bloques de DigitalOcean **no** es una opción aquí: no se conecta a Vast.ai.
 
+## El almacén: el volumen `datos` del mini (desde el 2026-10-01)
+
+El repo de datos de la flota ya no vive en GitHub: vive en un volumen de 1 GB conectado al
+mini, como repos git desnudos servidos por SSH desde el usuario `datos` (git-shell, clave
+de flota con `restrict`), con la regla «nadie borra» puesta en el remoto
+(`receive.denyDeletes` + `denyNonFastForwards` + hook). `types/mini.json` declara el volumen
+—`launch mini` lo reconecta y monta solo— y el bloque `almacen` (qué repos se espejan, qué
+carpetas de apps pasan al volumen); `do_droplet.py almacen instalar|conectar|estado|probar`
+hace el resto, y el ejecutor `almacen` lo expone en Telegram. Diseño, lo que salió de la
+revisión previa y la prueba de destruir y rehacer el mini, en
+[`docs/almacen.md`](docs/almacen.md).
+
+⚠ Con el volumen en el tipo, **`launch mini2 --type mini` con el mini viejo vivo MUERE**
+antes de crear nada (un volumen va en UNA máquina a la vez): para el staging de
+`flota-simetrica.md` §5 se lanza con `--sin-volumen` y se le conecta después
+(`volume attach` + `remoto mini2 almacen instalar`).
+
+⚠ **`volume destroy datos` no se corre nunca.** Es la única copia del dato de la flota.
+
 ## Convenciones
 
 - **Commitea cada cambio, en el momento.** Un cambio lógico, un commit, sin esperar a que el

@@ -73,7 +73,74 @@ puesto** porque el dueño pidió «en vez de» GitHub. Es una decisión suya, no
 
 ## 5. La sesión, de principio a fin (ejecutada el 2026-10-01)
 
-PENDIENTE_SESION
+*Todo lo de abajo está pegado de la salida real, salvo donde se marca.*
+
+```
+dev → python3 scripts/do_droplet.py volume create datos --size-gb 1 --region nyc1
+    ← Creando volumen 'datos': 1 GB en nyc1, ext4.
+      Coste: $0.10/mes mientras exista, esté conectado o no.
+      Creado (id d5527d33-…).
+
+dev → python3 scripts/do_droplet.py volume attach datos --droplet mini
+    ← Conectando 'datos' a 'mini'…
+        volumen ya formateado (ext4), no se toca
+        montado en /mnt/datos (801M libres)
+
+dev → python3 scripts/do_droplet.py remoto mini almacen instalar
+    ← Instalando el almacén en /mnt/datos (como root, vía sudo):
+        usuario datos creado (git-shell)
+        espejando foveal-vision-data desde GitHub (una vez en la vida)...
+        foveal-vision-data.git listo: 761 commits, 355M
+        sispla-demo: lo que habia en /home/deploy/src/sispla-demo/datos pasa al volumen
+        sispla-demo: /home/deploy/src/sispla-demo/datos -> /mnt/datos/apps/sispla-demo
+
+dev → python3 scripts/do_droplet.py remoto mini almacen conectar
+    ← Estoy en el mini: el alias `almacen` apunta a 127.0.0.1.
+        foveal-vision-data: origin -> almacen:/mnt/datos/git/foveal-vision-data.git
+        foveal-vision-data: al día con el almacén
+
+dev → python3 scripts/do_droplet.py almacen conectar          (en el propio dev)
+    ← El almacén está en 'mini' (157.230.221.59).
+        foveal-vision-data: GitHub se queda como remoto `github` (copia congelada)
+        foveal-vision-data: origin -> almacen:/mnt/datos/git/foveal-vision-data.git
+        foveal-vision-data: al día con el almacén
+
+dev → python3 scripts/do_droplet.py almacen estado
+    ← volumen   datos: 1 GB en nyc1, conectado al droplet 600796768
+      montado   /mnt/datos
+      disco     356M usados de 868M (45%)
+      fstab     si (nofail)
+      usuario   datos, shell /usr/bin/git-shell
+      repo      foveal-vision-data.git  355M  761 commits  ultimo 2026-10-01T13:08:21+00:00
+                nadie borra: si (denyDeletes + hook)
+      pushes    0 registrados (todavia ninguno)
+      app       sispla-demo: 312K
+
+dev → python3 scripts/do_droplet.py almacen probar
+    ←   ok    el almacén contesta (ls-remote)
+        ok    un push normal entra
+        ok    borrar una rama se RECHAZA
+        ok    reescribir historia se RECHAZA
+        ok    root en el mini SÍ puede quitar la rama de prueba
+      El almacén cumple: entra lo nuevo, no se borra nada, y sólo root limpia.
+```
+
+**Dos medidas que la revisión pedía antes de cambiar ningún `origin`:**
+
+| | medido 2026-10-01 |
+|---|---|
+| clon completo desde el mini al dev (`git clone almacen:…`) | **21,05 s**, 356 MB, 362 MB de RSS en el dev |
+| el mini durante ese clon (512 MB) | **0** eventos OOM en `dmesg`; 296 MB disponibles después |
+| el primer fallo real al instalar | `estado` decía «? commits» y «nadie borra: NO» con la regla puesta: `git` como root se niega a leer un repo de otro dueño («dubious ownership»). Arreglado en `f7b8c51`: las consultas van como `datos` |
+
+**Antes de tocar el `origin` del mini se rescató lo que sólo existía en su disco**, que es
+el hallazgo 1 de la revisión: una línea de `errores/` sin empujar (`15e683b`, a GitHub,
+**antes** de espejar, para que el espejo naciera con ella), y los 312 KB de la demo de
+SisPla, que ahora viven en el volumen.
+
+### 5.1 Destruir y rehacer el mini
+
+PENDIENTE_CICLO
 
 ## 6. La regla para quien escriba datos (está en `telegram-coordinator/CLAUDE.md`)
 
