@@ -2080,14 +2080,19 @@ def script_instalar_almacen(alm: dict, dev_user: str, pub: Path) -> str:
             # como root: así el destino queda donde debe sin abrirle permisos a nadie.
             f'  git -c credential.helper="store --file=$DEVH/.git-credentials" '
             f'clone -q --mirror {shq(url)} "$R"',
+            '  chown -R "$U:$U" "$R"',
             # Sin remoto: el espejo es el ORIGEN ahora, no un seguidor de GitHub.
-            '  git -C "$R" remote remove origin',
+            '  sudo -u "$U" -H git -C "$R" remote remove origin',
             "else",
             f'  echo "  {repo}.git ya existe en el volumen: no se toca su contenido"',
             "fi",
         ]
+        # ⚠ Como $U, nunca como root: en un mini REHECHO el repo ya es de `datos`, y git
+        # como root se niega («fatal: not in a git directory», que es «dubious ownership»
+        # con otro mensaje). Medido el 2026-10-01 al rehacer el mini de verdad: el script
+        # moría aquí y la demo no llegaba a enlazarse al volumen.
         for clave, valor in CONFIG_ALMACEN:
-            lineas.append(f'git -C "$R" config {shq(clave)} {shq(valor)}')
+            lineas.append(f'sudo -u "$U" -H git -C "$R" config {shq(clave)} {shq(valor)}')
         lineas += [
             'mkdir -p "$R/hooks"',
             'cat > "$R/hooks/pre-receive" <<\'HOOK\'\n' + hook_pre_receive(log_pushes) + "HOOK",
@@ -2221,11 +2226,22 @@ def almacen_conectar(alm: dict, solo_repo: str, maquina: str) -> None:
 
 def script_estado_almacen(alm: dict) -> str:
     monte, vol = alm["monte"], alm["volumen"]
+    apps = []
+    for app, sub in alm["apps"].items():
+        apps += [
+            f'A="$DEVH/src/{app}/{sub}"; D="{monte}/apps/{app}"',
+            'if [ "$(readlink "$A" 2>/dev/null)" = "$D" ]; then',
+            f'  echo "app       {app}: $A -> volumen ($(du -sh "$D" 2>/dev/null | cut -f1))"',
+            "else",
+            f'  echo "app       {app}: $A NO apunta al volumen (lo que guarde se pierde al rehacer)"; ok=0',
+            "fi",
+        ]
     return "\n".join(
         [
             "set -u",
             f"M={shq(monte)}",
             f"U={shq(ALMACEN_USUARIO)}",
+            f"DEVH=$(getent passwd {shq(cfg('DO_DEV_USER'))} | cut -d: -f6)",
             "ok=1",
             'if mountpoint -q "$M"; then',
             '  echo "montado   $M"',
@@ -2253,7 +2269,7 @@ def script_estado_almacen(alm: dict) -> str:
             "else",
             '  echo "pushes    0 registrados (todavia ninguno)"',
             "fi",
-            'for a in "$M"/apps/*; do [ -d "$a" ] && echo "app       $(basename "$a"): $(du -sh "$a" | cut -f1)"; done',
+            *apps,
             '[ "$ok" = 1 ]',
         ]
     ) + "\n"

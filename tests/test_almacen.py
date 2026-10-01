@@ -173,6 +173,14 @@ def main() -> int:
          "git-shell" in script and 'printf "restrict ' in script)
     caso("el script no vuelve a espejar si el repo ya está",
          'if [ ! -d "$R" ]' in script)
+    # Medido el 2026-10-01 al rehacer el mini: `git config` como root sobre un repo que ya
+    # era de `datos` moría con «not in a git directory» y la demo no se enlazaba al volumen.
+    caso("toda orden git sobre el repo va como `datos`, nunca como root",
+         'git -C "$R" config' not in script.replace('sudo -u "$U" -H git -C "$R" config', '')
+         and 'sudo -u "$U" -H git -C "$R" config' in script)
+    estado = mod.script_estado_almacen(alm)
+    caso("estado comprueba que cada app apunta al volumen",
+         "NO apunta al volumen" in estado and "sispla-demo" in estado)
 
     print(f"\n{'TODO OK' if not fallos else str(fallos) + ' FALLO(S)'}")
     return 1 if fallos else 0
