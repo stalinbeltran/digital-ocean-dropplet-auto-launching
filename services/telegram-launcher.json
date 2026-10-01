@@ -4,5 +4,6 @@
   "install": "npm ci",
   "start": "npm start",
   "env_prefix": "TGL_",
+  "atiende": true,
   "notas": "Los ejecutores de este repo YA NO viven aqui dentro: estan en telegram/executors/*.json, que el coordinador descubre solo (data/fuentes.json trae ~/src/*/telegram). Siguen viajando con los comandos que llaman -que era el motivo de tenerlos en este repo- pero ahora llegan con `git pull`: basta el ejecutor `actualizar`, sin paso de aplicacion y sin reiniciar nada."
 }

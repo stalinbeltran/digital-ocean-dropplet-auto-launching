@@ -22,6 +22,17 @@ flota" no lo arreglaba, porque el fichero SI existia.
 O sea que la coincidencia no se nota cuando se introduce, se nota meses despues
 y desde un chat de Telegram. De ahi el test: es la clase de linea que alguien
 vuelve a igualar por comodidad.
+
+⚠ Y la EXCEPCION, desde el 2026-10-01: en la FLOTA, Vast usa la clave de flota
+por variable de entorno (`VAST_SSH_KEY_FILE` en dev-secrets.env, que escribe
+`_mandar_clave_flota`), porque una clave por maquina goteaba en la cuenta de Vast
+(19 ese dia, tras podarlas a 3 el 2026-09-11). Los DEFECTOS siguen distintos -lo
+fijan los tres primeros tests-, y lo que hacia peligrosa la coincidencia, que
+`register-key` FABRICA el par si falta, queda cerrado para cualquier ruta que no
+sea el defecto: se niega. Los cinco ultimos tests son esa excepcion; medido el
+2026-10-01, TRES fallan con el codigo anterior (la negativa, el llavero leido de
+disco y la clave de flota para Vast) y los otros dos fijan lo que ya funcionaba
+(la laptop sigue generando su par; el lanzador se monta antes del `post`).
 """
 
 import importlib.util
@@ -164,6 +175,154 @@ def test_prune_pide_confirmacion():
     return [] if not borradas else ["borro sin confirmacion"]
 
 
+class _Entorno:
+    """Cambia variables de entorno y las DEJA COMO ESTABAN, pase lo que pase."""
+
+    def __init__(self, **cambios):
+        import os
+        self.os, self.cambios, self.antes = os, cambios, {}
+
+    def __enter__(self):
+        for k, v in self.cambios.items():
+            self.antes[k] = self.os.environ.get(k)
+            if v is None:
+                self.os.environ.pop(k, None)
+            else:
+                self.os.environ[k] = v
+        return self
+
+    def __exit__(self, *_exc):
+        for k, v in self.antes.items():
+            if v is None:
+                self.os.environ.pop(k, None)
+            else:
+                self.os.environ[k] = v
+
+
+def test_una_ruta_elegida_que_no_existe_se_niega():
+    """El cierre de la trampa: una ruta que NO es el defecto no se fabrica.
+
+    En la flota, `VAST_SSH_KEY_FILE` es la clave de flota. Si faltara y
+    `register-key` la fabricara, esa maquina tendria una `do_flota` falsa y
+    dejaria de entrar en el mini y en el almacen sin ningun error. Con el codigo
+    anterior al 2026-10-01 este test FALLA: generaba el par.
+    """
+    import tempfile
+
+    vast = cargar("vast_instance")
+    with tempfile.TemporaryDirectory() as d:
+        ruta = Path(d) / "do_flota"
+        with _Entorno(VAST_SSH_KEY_FILE=str(ruta)):
+            try:
+                vast.asegurar_clave_local(comentario="test")
+            except SystemExit:
+                pass
+            else:
+                return ["con una ruta elegida y sin par, siguio adelante"]
+        if ruta.exists() or Path(str(ruta) + ".pub").exists():
+            return [f"fabrico un par en {ruta}: eso suplanta la clave de flota"]
+    return []
+
+
+def test_la_ruta_por_defecto_si_se_genera():
+    """Y la laptop no cambia: en el DEFECTO, el par se sigue generando solo."""
+    import tempfile
+
+    vast = cargar("vast_instance")
+    with tempfile.TemporaryDirectory() as d:
+        ruta = Path(d) / ".ssh" / "vast"
+        vast.DEFAULTS["VAST_SSH_KEY_FILE"] = str(ruta)
+        with _Entorno(VAST_SSH_KEY_FILE=None):
+            pub = vast.asegurar_clave_local(comentario="test")
+        if not ruta.exists() or not pub.startswith("ssh-ed25519 "):
+            return ["en la ruta por defecto ya no se genera el par"]
+    return []
+
+
+def test_load_env_lee_el_llavero_de_disco():
+    """Lo que la flota pone en dev-secrets.env llega aunque nadie lo cargue.
+
+    Sin esto, un proceso que no viene de un shell de login (una unidad de
+    systemd) no veia `VAST_SSH_KEY_FILE`, caia al defecto y registraba una clave
+    NUEVA en Vast: el goteo otra vez. Y el `export ` se quita: si no, la variable
+    se llamaria «export NOMBRE», sin error y sin efecto.
+    """
+    import tempfile
+
+    vast = cargar("vast_instance")
+    with tempfile.TemporaryDirectory() as d:
+        vast.ROOT = Path(d)  # sin el .env del repo: sólo cuenta el llavero
+        (Path(d) / ".config").mkdir()
+        (Path(d) / ".config" / "dev-secrets.env").write_text(
+            "export VAST_SSH_KEY_FILE='/home/x/.ssh/do_flota'\n"
+            "export PRUEBA_COMILLAS='a'\"'\"'b'\n"
+            "export PRUEBA_YA_ESTABA='del fichero'\n",
+            encoding="utf-8",
+        )
+        with _Entorno(HOME=d, VAST_SSH_KEY_FILE=None, PRUEBA_COMILLAS=None,
+                      PRUEBA_YA_ESTABA="del entorno"):
+            vast.load_env()
+            import os
+            fallos = []
+            if os.environ.get("VAST_SSH_KEY_FILE") != "/home/x/.ssh/do_flota":
+                fallos.append(f"no leyo el llavero: {os.environ.get('VAST_SSH_KEY_FILE')!r}")
+            if os.environ.get("PRUEBA_COMILLAS") != "a'b":
+                fallos.append(f"no deshizo las comillas: {os.environ.get('PRUEBA_COMILLAS')!r}")
+            if os.environ.get("PRUEBA_YA_ESTABA") != "del entorno":
+                fallos.append("el fichero piso una variable del entorno: manda el entorno")
+            if any(k.startswith("export ") for k in os.environ):
+                fallos.append("dejo una variable llamada «export …»")
+    return fallos
+
+
+def test_la_flota_usa_su_clave_tambien_en_vast():
+    """`_mandar_clave_flota` deja `VAST_SSH_KEY_FILE` apuntando a la de flota.
+
+    Y DESPUES de escribir la clave: si la variable apuntara a un fichero que
+    todavia no esta, el `register-key` del `post` se negaria (ver arriba).
+    """
+    import tempfile
+
+    do = cargar("do_droplet")
+    guiones = []
+    do.run_remote_script = lambda _ip, _port, script, **_k: guiones.append(script) or 0
+    with tempfile.TemporaryDirectory() as d:
+        priv = Path(d) / "do_flota"
+        priv.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nx\n", encoding="utf-8")
+        Path(str(priv) + ".pub").write_text("ssh-ed25519 AAAAflota flota\n", encoding="utf-8")
+        do._mandar_clave_flota("maquina", "203.0.113.7", 22, "deploy", priv)
+    if len(guiones) != 1:
+        return [f"esperaba un guion remoto, hubo {len(guiones)}"]
+    guion = guiones[0]
+    destino = do.FICHERO_CLAVE_FLOTA.replace("~/", "")
+    linea = f'echo "export VAST_SSH_KEY_FILE=$H/{destino}" >> "$F"'
+    fallos = []
+    if linea not in guion:
+        fallos.append("no apunta VAST_SSH_KEY_FILE a la clave de flota")
+    elif guion.index(linea) < guion.index('cat > "$KEY"'):
+        fallos.append("apunta la variable ANTES de escribir la clave")
+    if 'grep -v "^export VAST_SSH_KEY_FILE="' not in guion:
+        fallos.append("no quita la linea vieja: repetirlo la duplicaria")
+    return fallos
+
+
+def test_el_lanzador_se_hace_antes_del_post():
+    """El `register-key` del `post` usa la clave que deja `hacer_lanzador`."""
+    fuente = (ROOT / "scripts" / "do_droplet.py").read_text(encoding="utf-8")
+
+    def cuerpo(nombre):
+        corte = fuente.index(f"def {nombre}(")
+        return fuente[corte:fuente.index("\ndef ", corte + 1)]
+
+    launch, provision = cuerpo("cmd_launch"), cuerpo("cmd_provision")
+    fallos = []
+    if launch.index("cmd_provision(") > launch.index("ejecutar_post("):
+        fallos.append("launch corre el post ANTES de aprovisionar")
+    if "hacer_lanzador(" not in provision:
+        fallos.append("provision ya no llama a hacer_lanzador: nadie pone la clave de flota")
+    return fallos
+
+
 def main():
     pruebas = [
         ("las dos rutas por defecto son distintas", test_las_dos_rutas_son_distintas),
@@ -174,6 +333,12 @@ def main():
         ("prune nunca borra la de esta maquina",
          test_prune_nunca_borra_la_de_esta_maquina),
         ("prune pide confirmacion", test_prune_pide_confirmacion),
+        ("una ruta elegida que no existe se NIEGA",
+         test_una_ruta_elegida_que_no_existe_se_niega),
+        ("la ruta por defecto si se genera", test_la_ruta_por_defecto_si_se_genera),
+        ("load_env lee el llavero de disco", test_load_env_lee_el_llavero_de_disco),
+        ("la flota usa su clave tambien en Vast", test_la_flota_usa_su_clave_tambien_en_vast),
+        ("el lanzador se hace antes del post", test_el_lanzador_se_hace_antes_del_post),
     ]
     total = 0
     for nombre, prueba in pruebas:

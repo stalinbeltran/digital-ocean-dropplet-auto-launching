@@ -1410,7 +1410,7 @@ def cmd_launch(args: argparse.Namespace) -> None:
         "ssh_keys": [k["id"] for k in keys],
         # El tag decide qué se barre con `destroy --tag`. Una máquina de control
         # no puede llevar el de los efímeros: se la llevaría por delante.
-        "tags": [maquina["tag"]],
+        "tags": etiquetas_de_lanzamiento(maquina["tag"], selected_services(args.service)),
         "monitoring": True,
         "ipv6": True,
     }
@@ -1591,6 +1591,56 @@ def ejecutar_post(name: str, ip: str, port: int, comandos) -> None:
             )
 
 
+ETIQUETA_ATENDIDA = "atendida"
+
+
+def etiquetas_de_lanzamiento(tag: str, servicios: list[dict]) -> list[str]:
+    """Los tags del droplet: el suyo, y `atendida` si corre algo que da mando.
+
+    `atendida` es lo que el freno del coordinador (`cerrable.mjs`) usa para NO
+    contar una máquina como suelta: una que trae su propio bot se atiende sola
+    desde el móvil; una que no, sigue facturando si muere quien la lanzó. Medido
+    el 2026-10-01: con `prueba-almacen` vivo, el freno decía 🟢.
+
+    ⚠ Sale de los servicios que se INSTALAN DE VERDAD, no del tipo ni del nombre.
+    `prueba-almacen` se lanzó con `--type dev --service ''`: por tipo habría
+    salido atendida sin tener bot, que es el falso verde otra vez. Por eso este
+    tag no se puede deducir después mirando `types/`: lo pone quien sabe qué se
+    instaló.
+    """
+    etiquetas = [tag]
+    if any(svc.get("atiende") for svc in servicios):
+        etiquetas.append(ETIQUETA_ATENDIDA)
+    return etiquetas
+
+
+def datos_de_droplets(droplets: list[dict]) -> list[dict]:
+    """Lo que `list --json` imprime de cada droplet: hechos de la API, sin opinar.
+
+    Decidir cuáles cuentan es del que pregunta (`cerrable.mjs`); este formato es
+    el contrato entre los dos repos, y lo fija `tests/test_atendida.py` aquí y
+    `tests/cerrable-droplets.test.mjs` allí.
+
+    `price_hourly` es None si la API no lo da: un hueco leído como 0 es un
+    droplet gratis que no lo es. Y no se filtra por `status`: un droplet apagado
+    sigue facturando.
+    """
+    salida = []
+    for d in droplets:
+        precio = (d.get("size") or {}).get("price_hourly")
+        salida.append({
+            "id": d["id"],
+            "name": d["name"],
+            "status": d.get("status", ""),
+            "tags": list(d.get("tags") or []),
+            "size_slug": d.get("size_slug", ""),
+            "price_hourly": float(precio) if precio is not None else None,
+            "created_at": d.get("created_at", ""),
+            "ip": public_ip(d) if d.get("networks") else "",
+        })
+    return salida
+
+
 def cmd_list(args: argparse.Namespace) -> None:
     """Qué hay vivo y cuánto cuesta tenerlo así.
 
@@ -1599,6 +1649,14 @@ def cmd_list(args: argparse.Namespace) -> None:
     convierte 'tengo tres máquinas' en 'estoy gastando esto'.
     """
     droplets = find_droplets(tag=args.tag or "")
+    if getattr(args, "json", False):
+        # Para OTROS programas, no para leer: el freno del coordinador
+        # (`cerrable.mjs`) pregunta aquí qué droplets hay vivos. Hechos crudos y
+        # sin opinar -decidir cuáles cuentan es suyo-, y el precio sale del
+        # propio droplet, sin la segunda llamada a /v2/sizes. Si la API falla,
+        # `api()` muere con código != 0, y eso el freno lo lee como NO SÉ.
+        print(json.dumps(datos_de_droplets(droplets), ensure_ascii=False), flush=True)
+        return
     if not droplets:
         log("No hay droplets.")
         return
@@ -2634,6 +2692,14 @@ def _mandar_clave_flota(
     Sin la tercera, la maquina tendria la clave y seguiria intentando entrar con
     otra: el fichero existe, el acceso no funciona, y no hay ningun error que lo
     explique.
+
+    Y desde el 2026-10-01, `VAST_SSH_KEY_FILE` apuntando a la MISMA clave: con una
+    propia por maquina, la cuenta de Vast goteaba una por cada maquina nacida (19
+    ese dia, tras podarlas a 3 el 2026-09-11). Con la de flota, el `register-key`
+    del `post` dice «ya estaba registrada» y no crece nada. Va DESPUES de escribir
+    la clave, y `hacer_lanzador` corre antes que el `post`: el `register-key` de
+    ahi depende de ese orden. La excepcion a «un proveedor, una clave» esta
+    escrita donde vive la regla, en DEFAULTS de vast_instance.py.
     """
     texto_privada = privada.read_text(encoding="utf-8")
     texto_publica = ruta_publica(privada).read_text(encoding="utf-8").strip()
@@ -2666,9 +2732,11 @@ def _mandar_clave_flota(
             'touch "$F"',
             'grep -v "^export DO_FLEET_KEY_FILE=" "$F" > "$F.tmp" || true',
             'grep -v "^export DO_SSH_KEY_FILE=" "$F.tmp" > "$F.tmp2" || true',
-            'mv "$F.tmp2" "$F"; rm -f "$F.tmp"',
+            'grep -v "^export VAST_SSH_KEY_FILE=" "$F.tmp2" > "$F.tmp3" || true',
+            'mv "$F.tmp3" "$F"; rm -f "$F.tmp" "$F.tmp2"',
             f'echo "export DO_FLEET_KEY_FILE=$H/{destino}" >> "$F"',
             f'echo "export DO_SSH_KEY_FILE=$H/{destino}" >> "$F"',
+            f'echo "export VAST_SSH_KEY_FILE=$H/{destino}" >> "$F"',
             'chmod 600 "$F"',
             'chown "$DEV_USER:$DEV_USER" "$F"',
             'echo "  clave de la flota puesta en $KEY"',
@@ -2990,6 +3058,12 @@ def load_service(name: str) -> dict:
     svc.setdefault("url", "")
     svc.setdefault("env_prefix", "")
     svc.setdefault("env_file", ".env")
+    # ¿Da MANDO propio a la máquina que lo corre? Lo declaran los dos bots
+    # (`telegram-coordinator` y `telegram-launcher`): una máquina con uno de ellos
+    # se atiende sola desde el móvil. `launch` lo convierte en el tag `atendida`
+    # y el freno del coordinador (`cerrable.mjs`) no cuenta esas máquinas como
+    # sueltas. Por defecto NO: ante la duda, el freno cuenta la máquina.
+    svc.setdefault("atiende", False)
     # Ficheros que el servicio necesita y que no están en su repo. Sin esto hay
     # configuración que sólo vive dentro del droplet y se pierde al destruirlo,
     # que es justo lo contrario de poder tirar y rehacer una máquina.
@@ -5995,6 +6069,12 @@ def main() -> None:
 
     p = sub.add_parser("list", help="lista los droplets de la cuenta")
     p.add_argument("--tag")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        help="una lista JSON con los hechos de cada droplet, para otros "
+        "programas (el freno del coordinador)",
+    )
     p.set_defaults(func=cmd_list)
 
     p = sub.add_parser("ip", help="imprime la IP pública")

@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -110,6 +111,19 @@ DEFAULTS = {
     # lo conocia-, y por eso "si no existe, usa la de la flota" no arreglaba nada.
     # Una ruta por proveedor: los dos scripts no comparten codigo a proposito, y
     # tampoco deben compartir ficheros.
+    #
+    # ⚠ EXCEPCION, escrita aqui porque es aqui donde choca (2026-10-01): en las
+    # maquinas de la FLOTA, `_mandar_clave_flota` de do_droplet.py pone en
+    # dev-secrets.env `VAST_SSH_KEY_FILE` apuntando a la CLAVE DE FLOTA. El
+    # DEFECTO de aqui no cambia -la laptop sigue con su `~/.ssh/vast`-; lo que se
+    # comparte en la flota es el material, por variable de entorno. Motivo: con
+    # una clave por maquina la cuenta de Vast goteaba una por cada maquina que
+    # nacia -44 podadas a 3 el 2026-09-11, y 19 otra vez el 2026-10-01-, el mismo
+    # goteo que DigitalOcean resolvio con esa clave de flota.
+    # Y lo que hacia peligrosa la coincidencia -que `register-key` FABRICA el par
+    # si falta- queda cerrado en `asegurar_clave_local`: una ruta que NO es este
+    # defecto y no existe se NIEGA, nunca se fabrica. Una `do_flota` falsa dejaria
+    # a la maquina sin entrar en el mini ni en el almacen.
     "VAST_SSH_KEY_FILE": str(Path.home() / ".ssh" / "vast"),
     "VAST_SSH_USER": "root",
     # Cuánto se espera a que la instancia arranque. Vast tiene que descargar la
@@ -127,16 +141,52 @@ def load_env() -> None:
 
     Repetido a propósito desde do_droplet.py y vast_check.py: cada script tiene
     que poder ejecutarse suelto, sin que uno arrastre a los otros.
+
+    Y desde el 2026-10-01 lee también `~/.config/dev-secrets.env`, el llavero de
+    una máquina de la flota, con la misma regla: sólo rellena lo que falte. Es lo
+    que do_droplet.py hace desde el 2026-09-11, y aquí hacía falta por lo mismo:
+    `VAST_SSH_KEY_FILE` de la flota vive ahí, y un proceso que no arrancó de un
+    shell de login (una unidad de systemd) no lo veía, caía al defecto y
+    registraba una clave NUEVA en Vast: el goteo otra vez, por la puerta de atrás.
     """
     env_file = ROOT / ".env"
-    if not env_file.exists():
-        return
-    for raw in env_file.read_text(encoding="utf-8").splitlines():
+    if env_file.exists():
+        for raw in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    for nombre, valor in _leer_secretos_de_disco(Path.home() / ".config" / "dev-secrets.env").items():
+        os.environ.setdefault(nombre, valor)
+
+
+def _sin_comillas_sh(valor: str) -> str:
+    """Deshace el `shq()` con el que do_droplet.py escribe dev-secrets.env."""
+    valor = valor.strip()
+    if len(valor) >= 2 and valor[0] == valor[-1] == "'":
+        return valor[1:-1].replace("'\"'\"'", "'")
+    return valor.strip('"')
+
+
+def _leer_secretos_de_disco(path: Path) -> dict[str, str]:
+    """Los pares de un dev-secrets.env (`export NOMBRE='valor'`), o {} si no está.
+
+    ⚠ El `export ` se QUITA: sin eso la variable se llamaría «export NOMBRE», sin
+    error y sin efecto. Copia de `leer_secretos_de_disco` de do_droplet.py.
+    """
+    if not path.exists():
+        return {}
+    pares: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+        if not line.startswith("export ") or "=" not in line:
             continue
-        key, value = line.split("=", 1)
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+        nombre, valor = line[len("export "):].split("=", 1)
+        nombre = nombre.strip()
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", nombre) and _sin_comillas_sh(valor):
+            pares[nombre] = _sin_comillas_sh(valor)
+    return pares
 
 
 def cfg(key: str) -> str:
@@ -822,6 +872,21 @@ def asegurar_clave_local(comentario: str = "vast") -> str:
     máquina ya está alquilada y facturando sin dejarte entrar.
     """
     priv, pub = clave_privada(), clave_publica()
+    if not pub.exists() and priv != Path(DEFAULTS["VAST_SSH_KEY_FILE"]).expanduser():
+        # Una ruta que alguien ELIGIO -en la flota, la clave de flota- es de otro:
+        # fabricar un par ahi la suplantaria, y la maquina dejaria de entrar en el
+        # mini y en el almacen sin ningun error que lo explique. Se niega antes de
+        # gastar (R2). Ver la excepcion escrita en DEFAULTS.
+        die(
+            f"VAST_SSH_KEY_FILE apunta a {priv}, y ahi no hay par "
+            f"({pub.name} no existe).\n"
+            "  No genero uno: esa ruta la eligio alguien, y en la flota es la clave\n"
+            "  de flota -fabricarla dejaria a esta maquina sin entrar en las otras-.\n"
+            "  Si esta maquina es de la flota, que se la REENVIE otra que la tenga\n"
+            "  (no `clave-flota`, que crearia una distinta):\n"
+            "    python scripts/do_droplet.py autorizar-flota <esta-maquina>\n"
+            "  Si no es de la flota:  quita VAST_SSH_KEY_FILE y se usara ~/.ssh/vast"
+        )
     if not pub.exists():
         priv.parent.mkdir(parents=True, exist_ok=True)
         try:

@@ -3,5 +3,6 @@
   "repo": "stalinbeltran/telegram-coordinator",
   "install": "npm ci",
   "start": "npm start",
-  "env_prefix": "TG_"
+  "env_prefix": "TG_",
+  "atiende": true
 }

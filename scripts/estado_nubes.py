@@ -68,7 +68,20 @@ def main() -> int:
         help="salir siempre con 0 (para el bot: un código != 0 lo lee como fallo "
         "del ejecutor y entonces no llega nada a Telegram)",
     )
+    p.add_argument(
+        "--nubes",
+        action="store_true",
+        help="sólo los NOMBRES de las nubes, uno por línea, sin consultar nada",
+    )
     args = p.parse_args()
+
+    if args.nubes:
+        # Para el freno del coordinador (`cerrable.mjs`), que mira cada nube por
+        # su cuenta y dice NO SÉ ante una que no sabe mirar. Hasta el 2026-10-01
+        # sólo sabía de Vast, y con un droplet de DO facturando decía 🟢: una nube
+        # nueva aquí tiene que llegar allí como duda, no como silencio.
+        print("\n".join(nombre for nombre, _script, _sub in NUBES))
+        return 0
 
     bloques: list[str] = []
     todo_ok = True

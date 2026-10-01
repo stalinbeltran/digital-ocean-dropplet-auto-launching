@@ -947,6 +947,22 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
   `DELETE /api/v0/ssh/{id}/` devuelve `{"success": true}` y la cuenta baja de 44 a 43. Es la
   regla de esta API repetida otra vez: **valida contra la respuesta real**, y si la operación
   es destructiva, con un solo elemento primero.
+  ✅ **Y el goteo, cortado de raíz el 2026-10-01: la flota usa para Vast la CLAVE DE FLOTA.**
+  Podar curaba el síntoma: veinte días después volvían a ser **19** (medido ese día), una
+  por cada dev nacido —y una más por el hijo de prueba de ese día—. La causa era que cada
+  máquina se generaba su `~/.ssh/vast`. Ahora `_mandar_clave_flota` pone también
+  `VAST_SSH_KEY_FILE` → `~/.ssh/do_flota` en dev-secrets.env, `vast_instance.py` lo lee de
+  ahí aunque nadie haya cargado el fichero, y el `register-key` del `post` dice «ya estaba
+  registrada»: no crece nada. Las 19 se podaron ese día —en Vast no había ninguna instancia
+  viva, que es la condición: cada instancia fija sus claves al nacer— y la cuenta quedó con
+  **1**, la de flota. Los vivos se migraron con `autorizar-flota mini` y `autorizar-flota dev`.
+  ⚠ **Choca con «un proveedor, una clave»** (`tests/test_clave_vast.py`), y la excepción está
+  escrita donde vive esa regla, en DEFAULTS de `vast_instance.py`. Los defectos siguen
+  distintos —la laptop conserva su `~/.ssh/vast`—, y lo que hacía peligrosa la coincidencia
+  (que `register-key` **fabrica** el par si falta) queda cerrado: una ruta que **no** es el
+  defecto y no existe **se niega**, porque fabricar ahí una `do_flota` falsa dejaría a la
+  máquina sin entrar en el mini ni en el almacén. Cinco tests nuevos en
+  `tests/test_clave_vast.py`; tres fallan con el código anterior.
 - **A una máquina de Vast no se le da ningún secreto.** No es un droplet tuyo: es el
   ordenador de un desconocido alquilado por minutos, con acceso de root del host a todo lo
   que haya dentro del contenedor. Por eso el código y el dataset viajan como un tar por SSH

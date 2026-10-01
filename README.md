@@ -771,6 +771,12 @@ alquile **registra su clave sola antes de gastar**, así que una borrada de más
 el siguiente `launch`. Medido el 2026-09-11: la cuenta tenía **44 claves y 3 de máquinas
 vivas**, una por cada máquina que existió alguna vez.
 
+**Desde el 2026-10-01 la flota ya no gotea**: sus máquinas usan para Vast la **clave de
+flota** (`VAST_SSH_KEY_FILE`, que pone `_mandar_clave_flota` en dev-secrets.env), la misma
+para todas. Ese día la cuenta volvía a tener 19; se podaron y quedó **1**. Una laptop sigue
+con su `~/.ssh/vast` propia —y si la poda se la lleva, la vuelve a registrar sola en su
+siguiente `launch`—. El porqué y la excepción a «un proveedor, una clave», en `CLAUDE.md`.
+
 ### `remoto`: pedir desde fuera lo que sólo funciona dentro
 
 ```powershell

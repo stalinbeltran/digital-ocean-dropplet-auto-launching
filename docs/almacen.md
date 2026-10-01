@@ -326,6 +326,16 @@ de arriba— entró en **0,98 s** (`d69f7a3d..f7fefc06`).
    (`origin/prueba-almacen-<ts>`): empuja desde el clon real, y root borra la rama en el
    servidor pero no la referencia local. Es cosmético: `git fetch --prune` la quita.
 
+**Cómo quedó, ese mismo 2026-10-01** (la lista de arriba se deja como se escribió):
+
+| | |
+|---|---|
+| 1 | ⏳ **revisado, no arreglado**: `bench-control` está abandonado de hecho desde el 2026-08-23 (`dev` asumió alquilar y apagar en Vast) y cinco documentos lo siguen dando por vigente. Lo decide el dueño: retirarlo, o conectarlo con el test del invariante |
+| 2 | ✅ el freno cuenta los droplets sueltos: `list --json` aquí, el tag `atendida` que pone `launch`, y el detalle en el CLAUDE.md del coordinador |
+| 3 | ✅ **15/16 en las dos máquinas**: falta sólo `TGL2_BOT_TOKEN`, que es un bot nuevo de @BotFather y sólo puede darlo el dueño |
+| 4 | ✅ la flota usa la **clave de flota** también para Vast: **de 19 claves a 1** (CLAUDE.md de este repo) |
+| 5 | sin tocar: cosmético |
+
 ## 6. La regla para quien escriba datos (está en `telegram-coordinator/CLAUDE.md`)
 
 Desde el 2026-10-01, **todo dato se guarda en el almacén**: lo que ya iba al repo de datos
