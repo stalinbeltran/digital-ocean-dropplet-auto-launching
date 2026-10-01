@@ -140,7 +140,70 @@ SisPla, que ahora viven en el volumen.
 
 ### 5.1 Destruir y rehacer el mini
 
-PENDIENTE_CICLO
+*Corrido el 2026-10-01 desde el dev, de verdad. Salidas pegadas; los tiempos son de reloj.*
+
+```
+dev → volume detach datos
+    ← Desmontando en 'mini'… Desconectando 'datos' del droplet 600796768… Desconectado.
+dev → destroy mini --yes
+    ← Destruido mini.                       (el volumen queda suelto: `volume list` sin dueño)
+dev → launch mini                           13:14:09 → 13:18:48 UTC  (4 min 39 s)
+    ←   Lanzador: al día con origin/main.
+        Volumen: 'datos' (1 GB) se montará en /mnt/datos
+        Activo. IP pública: 142.93.255.224   (la IP cambió, como estaba escrito)
+        …provision: telegram-launcher, sispla-demo, gauss-p, graph-simulator…
+        Montando el volumen 'datos'…
+          volumen ya formateado (ext4), no se toca
+          montado en /mnt/datos (446M libres)   ← el dato estaba
+        Pasos finales del tipo (4):
+          almacen instalar:  usuario datos creado (git-shell)
+                             foveal-vision-data.git ya existe en el volumen: no se toca su contenido
+                             fatal: not in a git directory                  ← ❌ ver abajo
+          almacen conectar:  foveal-vision-data: al día con el almacén      ← el servicio git SÍ servía
+```
+
+**El fallo que destapó el ciclo, y que ninguna prueba en seco podía ver:** en un mini
+rehecho el repo del volumen ya pertenece a `datos`, y `git config` como root se niega
+(«fatal: not in a git directory», que es «dubious ownership» con otro mensaje). El script
+moría ahí, así que **la demo de SisPla no llegó a enlazarse al volumen**: el servicio git
+funcionaba (el hook y la config estaban en el volumen desde la primera instalación) y el
+`post` sólo dejó un `AVISO`. Arreglado en `f5ddf37` —toda orden git sobre el repo va como
+`datos`— y **`estado` comprueba ahora el enlace de cada app**, porque un enlace que falta no
+se veía por ningún lado.
+
+```
+dev → almacen conectar                      (en el dev, contra la IP nueva)
+    ← foveal-vision-data: la clave de host del almacén cambió (mini rehecho): se olvida la vieja
+      y se acepta la nueva. La IP 142.93.255.224 la acaba de dar la API de NUESTRA cuenta.
+      foveal-vision-data: al día con el almacén
+dev → remoto mini almacen instalar          (idempotente, ya con el arreglo)
+    ← usuario datos ya existe
+      foveal-vision-data.git ya existe en el volumen: no se toca su contenido
+      foveal-vision-data.git listo: 762 commits, 355M
+      sispla-demo: /home/deploy/src/sispla-demo/datos -> /mnt/datos/apps/sispla-demo
+dev → almacen estado
+    ← volumen   datos: 1 GB en nyc1, conectado al droplet 605270224   ← el droplet NUEVO
+      montado   /mnt/datos · fstab si (nofail) · usuario datos, shell /usr/bin/git-shell
+      repo      foveal-vision-data.git  355M  762 commits   nadie borra: si
+      pushes    2 registrados
+      app       sispla-demo: /home/deploy/src/sispla-demo/datos -> volumen (312K)
+dev → almacen probar
+    ← ok ×5. El almacén cumple: entra lo nuevo, no se borra nada, y sólo root limpia.
+dev → flota
+    ← Paridad correcta en 2 maquina(s).
+```
+
+| | antes de destruir | en el mini rehecho |
+|---|---|---|
+| commits en el almacén | 761 (+1 del README = 762) | **762** |
+| `estado.json` de la demo | 152.138 bytes | **152.138 bytes** |
+| volumen | conectado a 600796768 | conectado a **605270224**, montado por fstab |
+| IP del mini | 157.230.221.59 | **142.93.255.224** (cambia; `conectar` lo absorbe) |
+| clave de host | — | cambió; `conectar` lo dijo y la aceptó |
+
+**Lo que este ciclo NO midió:** un **dev** nuevo naciendo con `almacen conectar` en su
+`post` (está cableado en `types/dev.json`; se verá en el próximo `launch dev`), y el
+staging de un `mini2` con `--sin-volumen` (escrito, no corrido).
 
 ## 6. La regla para quien escriba datos (está en `telegram-coordinator/CLAUDE.md`)
 
