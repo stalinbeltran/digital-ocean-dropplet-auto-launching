@@ -1984,6 +1984,504 @@ def cmd_sweep(args: argparse.Namespace) -> None:
 # ------------------------------------------------------------------------ parser
 
 
+# -------------------------------------------------------------------- trabajos
+#
+# N trabajos ARBITRARIOS en paralelo, cada uno en su propia maquina: alquilar,
+# subir, instalar, correr, TRAER UN DIRECTORIO y destruir en `finally`. Lo pidio el
+# plan de experimentos-cnn del 2026-10-01 (`docs/plan-kernels-banco-2026-10-01.md`
+# §4 de aquel repo): `bench` sabe medir UNA maquina y traer un JSON, y
+# `estudio_flota.py` sabe repartir pero atado a los sweeps de fv. Esto es lo que
+# faltaba entre los dos.
+#
+# Lo que cambia de un uso a otro es DATO: un descriptor JSON que vive junto al
+# trabajo (`envia` / `install` / `trabajos[run, trae]`). Este codigo no sabe de
+# kernels ni de experimentos.
+#
+# LAS CINCO DECISIONES que hay que respetar si se toca:
+#  1. UNA UNIDAD DE SYSTEMD POR TRABAJO (`desacoplar-persistente.sh`, padre PID 1):
+#     el fin del turno de Claude es «muere su padre», y ahi un scope pierde. Y el
+#     corredor de un trabajo SALE SIEMPRE CON 0: la unidad es Restart=on-failure, y
+#     ahi un fallo al final no se reintenta: se vuelve a ALQUILAR (62 relanzamientos
+#     el 2026-09-04, CLAUDE.md del coordinador).
+#  2. LAS OFERTAS SE REPARTEN ANTES, en el padre (`elegir_ofertas_distintas`): N
+#     lanzamientos independientes cogerian todos la oferta mas barata y chocarian.
+#  3. EL LIBRO SE ESCRIBE EN DISCO EN CADA PASO (R12): `--estado` lee de ahi, nunca de
+#     un log. Y el esqueleto del libro existe ANTES de alquilar nada.
+#  4. LO TRAIDO NUNCA PISA LO LOCAL: si el destino ya existe, se queda en
+#     `<libro>/<id>/traido/` y se dice. Un resultado sobrescrito sin avisar es un
+#     dato perdido.
+#  5. EL TRABAJO CORRE DESACOPLADO EN LA MAQUINA REMOTA (setsid + fichero de fin), y
+#     se pregunta por el con conexiones cortas. Una sesion SSH de dos horas que se
+#     corta se lleva el trabajo con ella; asi solo se pierde la pregunta.
+
+CAMPOS_TRABAJO = ("experimento", "maquina", "envia", "install", "trabajos")
+REMOTO = "/root/trabajo"
+# Estados del libro que ya no facturan: con uno de estos, relanzar no es lanzar dos
+# veces. Cualquier otro (pendiente, alquilada, subida...) puede tener una maquina
+# viva detras, y relanzar encima es pagar dos veces el mismo trabajo.
+TERMINALES = ("destruida", "sin-alquilar")
+MARGEN_TRAER_S = 600     # lo que se reserva al final de --horas-max para traer y destruir
+SONDEO_S = 30
+
+
+def cargar_descriptor(path: str) -> dict:
+    """El descriptor, con cada `origen` resuelto. Se niega ANTES de alquilar (R2)."""
+    p = Path(path).expanduser().resolve()
+    if not p.is_file():
+        die(f"No existe el descriptor {p}")
+    try:
+        desc = json.loads(p.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        die(f"El descriptor {p} no es JSON: {exc}")
+    faltan = [c for c in CAMPOS_TRABAJO if c not in desc]
+    if faltan:
+        die(f"Al descriptor {p.name} le faltan: {', '.join(faltan)}")
+    ids = [t.get("id") for t in desc["trabajos"]]
+    if not ids or any(not i for i in ids) or len(set(ids)) != len(ids):
+        die(f"Los trabajos de {p.name} necesitan un `id` cada uno, y distinto: {ids}")
+    for t in desc["trabajos"]:
+        if not t.get("run"):
+            die(f"El trabajo '{t['id']}' no dice que correr (`run`)")
+    for e in desc["envia"]:
+        o = Path(os.path.expandvars(e["origen"])).expanduser()
+        e["_origen"] = str(o if o.is_absolute() else (p.parent / o).resolve())
+        if not Path(e["_origen"]).exists():
+            die(f"No encuentro {e['_origen']}, que el descriptor manda subir "
+                f"(origen '{e['origen']}').\n  Si lleva una $VARIABLE, quien lanza tiene "
+                "que exportarla: el descriptor dice QUE se sube, no donde esta en cada maquina.")
+    desc["_ruta"] = str(p)
+    # DONDE CAE EL DESCRIPTOR EN LA MAQUINA: `run` corre ahi y `trae` se lee desde ahi,
+    # igual que `origen` se lee desde aqui. Asi un descriptor nunca nombra la carpeta
+    # en la que vive, y moverla no lo rompe. El descriptor RESUELTO que reciben los
+    # hijos ya no esta en su sitio, y por eso la trae escrita.
+    if "base_remota" not in desc:
+        desc["base_remota"] = ""
+        for e in desc["envia"]:
+            try:
+                rel = p.parent.relative_to(Path(e["_origen"]))
+            except ValueError:
+                continue
+            desc["base_remota"] = os.path.normpath(str(Path(e["destino"]) / rel))
+            break
+    for t in desc["trabajos"]:
+        for r in t.get("trae") or []:
+            if remota(desc, r).startswith(".."):
+                die(f"`trae` de '{t['id']}' sale de {REMOTO}: {r}")
+    return desc
+
+
+def remota(desc: dict, ruta: str) -> str:
+    """Una ruta de `trae`, relativa a REMOTO (normalizada desde la base del descriptor)."""
+    return os.path.normpath(os.path.join(desc.get("base_remota") or "", ruta))
+
+
+def tar_de_trabajo(desc: dict) -> Path:
+    """El payload: `construir_tar` de `bench`, sin datasets del registro (aqui el dato
+    viaja como un `envia` mas, ya publicado)."""
+    envios = [{"origen": e["_origen"], "destino": e["destino"],
+               "excluye": e.get("excluye") or []} for e in desc["envia"]]
+    return construir_tar(envios, [])
+
+
+def sha256_fichero(p: Path) -> str:
+    import hashlib                                          # noqa: PLC0415
+    h = hashlib.sha256()
+    with p.open("rb") as fh:
+        for bloque in iter(lambda: fh.read(1 << 20), b""):
+            h.update(bloque)
+    return h.hexdigest()
+
+
+def destino_local(desc: dict, remoto: str) -> Path | None:
+    """Donde va en ESTA maquina algo traido de `REMOTO/<remoto>`: la inversa del envio."""
+    for e in desc["envia"]:
+        d = e["destino"].rstrip("/")
+        if remoto == d or remoto.startswith(d + "/"):
+            return Path(e["_origen"]) / remoto[len(d):].lstrip("/")
+    return None
+
+
+class Libro:
+    """El libro de UN trabajo: un JSON que se reescribe ENTERO en cada paso (tmp +
+    rename), asi que nunca queda a medias."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.d = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+
+    def paso(self, estado: str, **extra) -> None:
+        self.d["estado"] = estado
+        self.d.setdefault("pasos", []).append({"paso": estado, "hora": ahora_iso()})
+        self.d.update(extra)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.d, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp.replace(self.path)
+
+
+def etiqueta_de(prefijo: str, tid: str) -> str:
+    return f"{prefijo}{tid}"
+
+
+def lanzar_unidad(nombre: str, orden: list[str]) -> int:
+    """Una unidad de systemd por trabajo, con `desacoplar-persistente.sh` del
+    coordinador. Se DECLARA por `COORD_HOME` (R4): este repo no adivina donde esta
+    clonado aquel."""
+    casa = os.environ.get("COORD_HOME") or ""
+    script = Path(casa) / "scripts" / "desacoplar-persistente.sh"
+    if not casa or not script.is_file():
+        die("Hace falta COORD_HOME apuntando al telegram-coordinator: cada trabajo va en una "
+            "UNIDAD de systemd (padre PID 1) con su desacoplar-persistente.sh, porque un "
+            "proceso de este turno moriria con el y dejaria la maquina facturando.")
+    return subprocess.run([str(script), nombre, *orden], cwd=str(ROOT)).returncode
+
+
+def unidad_activa(nombre: str) -> bool:
+    return subprocess.run(["systemctl", "is-active", "--quiet", nombre]).returncode == 0
+
+
+def avisar(texto: str) -> None:
+    """notify.mjs del coordinador, si hay. NUNCA puede tumbar el trabajo (el `|| true`
+    del CLAUDE.md del coordinador, aqui como try)."""
+    casa = os.environ.get("COORD_HOME")
+    if not casa:
+        return
+    try:
+        subprocess.run(["node", str(Path(casa) / "scripts" / "notify.mjs"), texto],
+                       timeout=60, capture_output=True)
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
+def _plan_texto(desc: dict, trabajos: list[dict], prefijo: str, tar: Path, horas: float) -> str:
+    m = desc["maquina"]
+    lineas = [f"experimento: {desc['experimento']}  ·  descriptor: {desc['_ruta']}",
+              f"maquina: >= {m.get('cpus', 4)} vCPU"
+              + (f", < {m['max_cpus']}" if m.get("max_cpus") else "")
+              + f", >= {m.get('min_ram', 8)} GB, CPU '{m.get('cpu', '') or 'cualquiera'}'"
+              + f", <= {float(m.get('max_price') or limite_precio()):.2f} $/h, --horas-max {horas}",
+              f"payload: {tar.stat().st_size / 1e6:.1f} MB "
+              f"({', '.join(e['destino'] for e in desc['envia'])})", ""]
+    for t in trabajos:
+        lineas.append(f"  unidad/etiqueta {etiqueta_de(prefijo, t['id'])}   "
+                      f"(corre en {REMOTO}/{desc.get('base_remota') or ''})")
+        lineas += [f"      {x}" for x in t["run"].strip().splitlines()]
+        for r in t.get("trae") or []:
+            lineas.append(f"      trae {remota(desc, r)}")
+    return "\n".join(lineas)
+
+
+def cmd_trabajo(args: argparse.Namespace) -> None:
+    if args.estado:
+        return estado_trabajos(Path(args.libro or "."))
+    if args.apagar:
+        return apagar_trabajos(args.apagar)
+    if not args.descriptor:
+        die("Dime que correr: --descriptor <fichero.json> (o --estado / --apagar).")
+    if not args.prefijo:
+        die("Falta --prefijo. Es obligatorio en toda flota: es lo que hace que estas "
+            "maquinas se distingan de las de otra sesion, y que el freno las cuente.")
+    if not args.libro:
+        die("Falta --libro <directorio>: donde queda, paso a paso, que se alquilo.")
+    libro_dir = Path(args.libro).expanduser().resolve()
+    horas = float(args.horas_max)
+
+    if args.uno:
+        # El HIJO. Todo dentro del try, incluido leer el descriptor: cualquier salida
+        # distinta de 0 es, con Restart=on-failure, OTRO alquiler (decision 1).
+        try:
+            desc = cargar_descriptor(args.descriptor)
+            t = next((t for t in desc["trabajos"] if t["id"] == args.uno), None)
+            if t is None:
+                raise RuntimeError(f"no hay ningun trabajo '{args.uno}' en el descriptor")
+            correr_un_trabajo(desc, t, args.prefijo, libro_dir, horas)
+        except BaseException as exc:                        # noqa: BLE001
+            log(f"✗ {args.uno}: {type(exc).__name__}: {exc}")
+        raise SystemExit(0)
+
+    desc = cargar_descriptor(args.descriptor)
+    trabajos = [t for t in desc["trabajos"] if not args.solo or t["id"] in args.solo]
+    if args.solo and len(trabajos) != len(set(args.solo)):
+        die(f"--solo pide {args.solo} y el descriptor solo tiene "
+            f"{[t['id'] for t in desc['trabajos']]}")
+
+    for t in trabajos:
+        lb = libro_dir / f"{t['id']}.json"
+        if lb.exists():
+            estado = json.loads(lb.read_text(encoding="utf-8")).get("estado")
+            if estado not in TERMINALES:
+                die(f"El trabajo '{t['id']}' ya tiene libro en estado '{estado}': puede haber "
+                    f"una maquina viva detras. Mira `--estado --libro {libro_dir}` antes de "
+                    "relanzar; si de verdad termino, borra su libro a mano.")
+        if unidad_activa(etiqueta_de(args.prefijo, t["id"])):
+            die(f"Ya hay una unidad viva '{etiqueta_de(args.prefijo, t['id'])}': lanzar dos "
+                "veces el mismo trabajo es pagarlo dos veces.")
+
+    tar = tar_de_trabajo(desc)
+    log(_plan_texto(desc, trabajos, args.prefijo, tar, horas))
+    if args.seco:
+        # El seco va ANTES de tocar la API y ANTES de alquilar, y despues de los
+        # guardias de arriba solo en lo que no cuesta nada: ensayar no lanza nada.
+        log("\n🧪 SECO — no he llamado a la API ni he alquilado nada.")
+        return
+
+    token()
+    vivas = {(i.get("label") or "") for i in instancias()}
+    chocan = [etiqueta_de(args.prefijo, t["id"]) for t in trabajos
+              if etiqueta_de(args.prefijo, t["id"]) in vivas]
+    if chocan:
+        die(f"Ya hay instancias vivas con estas etiquetas: {chocan}. No relanzo encima.")
+    m = desc["maquina"]
+    tope = float(args.max_price or m.get("max_price") or limite_precio())
+    ofertas = elegir_ofertas_distintas(len(trabajos), int(m.get("cpus", 4)),
+                                       int(m.get("max_cpus", 0)), float(m.get("min_ram", 8)),
+                                       tope, cpu=m.get("cpu", "") or "")
+    for t, o in zip(trabajos, ofertas):
+        Libro(libro_dir / f"{t['id']}.json").paso(
+            "pendiente", id=t["id"], etiqueta=etiqueta_de(args.prefijo, t["id"]),
+            experimento=desc["experimento"], descriptor=desc["_ruta"],
+            oferta=o.get("id"), precio_hora=round(float(o.get("dph_total") or 0), 5),
+            maquina=resumen_maquina(o), horas_max=horas, tope_precio=tope)
+    # Los hijos corren en unidades de systemd, que NO heredan este entorno: un
+    # `$EXPCNN_DATOS` en un origen no se expandiria alli. Se les da el descriptor ya
+    # RESUELTO, con rutas absolutas, y queda en el libro como constancia de que se subio.
+    resuelto = libro_dir / "descriptor-resuelto.json"
+    copia = {k: v for k, v in desc.items() if not k.startswith("_")}
+    copia["envia"] = [{**{k: v for k, v in e.items() if not k.startswith("_")},
+                       "origen": e["_origen"]} for e in desc["envia"]]
+    copia["descriptor_original"] = desc["_ruta"]
+    copia["base_remota"] = desc.get("base_remota") or ""
+    resuelto.write_text(json.dumps(copia, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+    log(f"\nlibro (esqueleto) en {libro_dir}: {len(trabajos)} trabajo(s) antes de alquilar")
+    fallidos = []
+    for t in trabajos:
+        orden = ["python3", "-u", str(Path(__file__).resolve()), "trabajo",
+                 "--uno", t["id"], "--descriptor", str(resuelto), "--prefijo", args.prefijo,
+                 "--libro", str(libro_dir), "--horas-max", str(horas)]
+        if lanzar_unidad(etiqueta_de(args.prefijo, t["id"]), orden) != 0:
+            fallidos.append(t["id"])
+            Libro(libro_dir / f"{t['id']}.json").paso("sin-alquilar",
+                                                       error="no se pudo crear su unidad")
+    log(f"\n{len(trabajos) - len(fallidos)} unidad(es) lanzada(s)."
+        + (f" ✗ sin unidad: {fallidos}" if fallidos else ""))
+    log(f"  estado:  python3 scripts/vast_instance.py trabajo --estado --libro {libro_dir}")
+    log(f"  apagar:  python3 scripts/vast_instance.py trabajo --apagar {args.prefijo}")
+
+
+def _alquilar_con_repuesto(desc: dict, libro: Libro, etiqueta: str) -> tuple[int, float]:
+    """Alquila la oferta asignada; si se la llevo otro, la siguiente distinta que no
+    sea de ningun hermano (las del libro). Devuelve (iid, precio)."""
+    m = desc["maquina"]
+    image = m.get("image") or cfg("VAST_IMAGE")
+    disk = float(m.get("disk_gb") or cfg("VAST_DISK_GB"))
+    oferta = {"id": libro.d["oferta"], "dph_total": libro.d.get("precio_hora")}
+    try:
+        return alquilar(oferta, etiqueta, image, disk), float(oferta["dph_total"] or 0)
+    except ApiError as exc:
+        log(f"  la oferta {oferta['id']} fallo ({str(exc).splitlines()[0]}); busco otra")
+    hermanas = set()
+    for f in libro.path.parent.glob("*.json"):
+        try:
+            hermanas.add(str(json.loads(f.read_text(encoding="utf-8")).get("oferta")))
+        except (OSError, json.JSONDecodeError):
+            pass
+    nueva = elegir_ofertas_distintas(1, int(m.get("cpus", 4)), int(m.get("max_cpus", 0)),
+                                     float(m.get("min_ram", 8)), float(libro.d["tope_precio"]),
+                                     excluir_ofertas=hermanas, cpu=m.get("cpu", "") or "",
+                                     usar_cache=False)[0]
+    libro.paso("repuesto", oferta=nueva.get("id"),
+               precio_hora=round(float(nueva.get("dph_total") or 0), 5),
+               maquina=resumen_maquina(nueva))
+    return alquilar(nueva, etiqueta, image, disk), float(nueva.get("dph_total") or 0)
+
+
+def correr_un_trabajo(desc: dict, t: dict, prefijo: str, libro_dir: Path, horas: float) -> None:
+    """El hijo: UN trabajo en UNA maquina. La destruccion va en `finally`."""
+    libro = Libro(libro_dir / f"{t['id']}.json")
+    if not libro.d:
+        die(f"No hay esqueleto de libro para '{t['id']}': el padre reparte las ofertas.")
+    etiqueta = etiqueta_de(prefijo, t["id"])
+    tar = tar_de_trabajo(desc)
+    huella = sha256_fichero(tar)
+    try:
+        iid, precio = _alquilar_con_repuesto(desc, libro, etiqueta)
+    except BaseException as exc:                            # noqa: BLE001
+        libro.paso("sin-alquilar", error=f"{type(exc).__name__}: {exc}")
+        avisar(f"✗ {etiqueta}: no se pudo alquilar ({exc})")
+        return
+    t0 = time.time()
+    limite = t0 + horas * 3600
+    libro.paso("alquilada", iid=iid, precio_hora=round(precio, 5))
+    rc = None
+    try:
+        info = esperar_estado(iid, int(cfg("VAST_BOOT_TIMEOUT")))
+        estado = (info.get("actual_status") or info.get("cur_state") or "?").lower()
+        if estado != "running":
+            raise RuntimeError(f"la instancia acabo en '{estado}', no arranco")
+        host, port = ssh_destino(info)
+        if not esperar_ssh(host, port):
+            raise RuntimeError(f"sshd no contesto en {host}:{port}")
+        subir_trabajo(host, port, tar, huella)
+        libro.paso("subida", payload_mb=round(tar.stat().st_size / 1e6, 2), sha256=huella[:16])
+        entorno = "".join(f"export {k}={json.dumps(str(v))}\n"
+                          for k, v in (desc.get("entorno") or {}).items())
+        if ssh_script(host, port, f"set -eu\ncd {REMOTO}\n{entorno}{desc['install']}\n",
+                      timeout=1800) != 0:
+            raise RuntimeError("fallo la instalacion")
+        libro.paso("instalada")
+        base = f"{REMOTO}/{desc.get('base_remota') or ''}".rstrip("/")
+        rc = correr_remoto(host, port, f"{entorno}cd {json.dumps(base)}\n{t['run']}",
+                           limite - MARGEN_TRAER_S, libro)
+        traidos, apartados = traer(desc, t, host, port, libro_dir / t["id"])
+        libro.paso("traida", rc=rc, traido=traidos, apartado=apartados)
+    except BaseException as exc:                            # noqa: BLE001
+        libro.paso("fallo", error=f"{type(exc).__name__}: {exc}"[:500])
+    finally:
+        try:
+            destruir(iid)
+            vivida = time.time() - t0
+            libro.paso("destruida", minutos=round(vivida / 60, 1),
+                       coste_usd=round(precio * vivida / 3600, 4))
+        except BaseException as exc:                        # noqa: BLE001
+            libro.paso("NO-DESTRUIDA", error=f"{exc} — destruyela YA: "
+                       f"python3 scripts/vast_instance.py destroy {iid} --yes")
+        d = libro.d
+        avisar(f"{'✅' if rc == 0 else '⚠️'} {etiqueta}: {d.get('estado')}, rc={rc}, "
+               f"{d.get('minutos', '?')} min, {d.get('coste_usd', '?')} $"
+               + (f" · error: {d['error'][:200]}" if d.get("error") else ""))
+
+
+def subir_trabajo(host: str, port: int, tar: Path, huella: str) -> None:
+    """Sube el payload, comprueba que llego ENTERO (sha256) y lo desempaqueta en REMOTO."""
+    with tar.open("rb") as fh:
+        if subprocess.run(ssh_command(host, port) + ["cat > /root/payload.tar.gz"],
+                          stdin=fh, timeout=900).returncode != 0:
+            raise RuntimeError("no pude subir el payload")
+    script = (f"set -eu\nH=$(sha256sum /root/payload.tar.gz | cut -d' ' -f1)\n"
+              f"[ \"$H\" = \"{huella}\" ] || {{ echo \"payload corrupto: $H\"; exit 3; }}\n"
+              f"mkdir -p {REMOTO}\ntar -xzf /root/payload.tar.gz -C {REMOTO}\n"
+              f"rm -f /root/payload.tar.gz\n")
+    if ssh_script(host, port, script, timeout=600) != 0:
+        raise RuntimeError("el payload no llego entero o no se pudo desempaquetar")
+
+
+def correr_remoto(host: str, port: int, run: str, hasta: float, libro: Libro) -> int:
+    """Lanza `run` DESACOPLADO en la maquina remota y pregunta por el hasta que acaba
+    o hasta `hasta` (epoch). Devuelve su codigo; 124 si se agoto el tiempo."""
+    segundos = max(60, int(hasta - time.time()))
+    lanzar = (f"set -eu\ncd {REMOTO}\ncat > {REMOTO}/.run.sh <<'__RUN__'\n{run}\n__RUN__\n"
+              f"rm -f {REMOTO}/.fin\n"
+              f"setsid nohup bash -c 'timeout {segundos} bash {REMOTO}/.run.sh "
+              f"> {REMOTO}/run.log 2>&1; echo $? > {REMOTO}/.fin' >/dev/null 2>&1 < /dev/null &\n")
+    if ssh_script(host, port, lanzar, timeout=120) != 0:
+        raise RuntimeError("no pude lanzar el trabajo en la maquina")
+    libro.paso("corriendo", segundos_max=segundos)
+    fallos_seguidos = 0
+    while True:
+        time.sleep(SONDEO_S)
+        try:
+            code, salida = ssh_capture(host, port, f"cat {REMOTO}/.fin 2>/dev/null || true",
+                                       timeout=60)
+            fallos_seguidos = 0 if code == 0 else fallos_seguidos + 1
+        except subprocess.TimeoutExpired:
+            code, salida, fallos_seguidos = 1, "", fallos_seguidos + 1
+        if salida.strip():
+            return int(salida.strip().splitlines()[-1])
+        if fallos_seguidos >= 10:
+            raise RuntimeError("perdi el contacto con la maquina (10 sondeos seguidos)")
+        if time.time() > hasta + 120:
+            ssh_capture(host, port, "pkill -f .run.sh || true", timeout=60)
+            return 124
+
+
+def traer(desc: dict, t: dict, host: str, port: int, apartado: Path) -> tuple[list, list]:
+    """Trae `trae` (rutas relativas a REMOTO) y el `run.log`. Lo que no pisa nada va a
+    su sitio local; lo que pisaria algo se queda en `apartado` (decision 4)."""
+    rutas = [remota(desc, r) for r in (t.get("trae") or [])]
+    apartado.mkdir(parents=True, exist_ok=True)
+    existe = ssh_capture(host, port, "cd " + REMOTO + "\n" + "".join(
+        f"[ -e {json.dumps(r)} ] && echo {json.dumps(r)}\n" for r in rutas) + "true\n", timeout=60)[1]
+    presentes = [r for r in existe.splitlines() if r.strip()]
+    tgz = apartado / "traido.tar.gz"
+    with tgz.open("wb") as fh:
+        rc = subprocess.run(ssh_command(host, port) + [
+            f"tar -czf - -C {REMOTO} run.log " + " ".join(json.dumps(r) for r in presentes)],
+            stdout=fh, timeout=1800).returncode
+    if rc != 0:
+        raise RuntimeError("no pude traer los resultados")
+    staging = apartado / "traido"
+    with tarfile.open(tgz) as tar:
+        # `filter="data"` donde exista (3.12+): no deja salir del directorio ni crear
+        # enlaces raros. El tar lo genera la maquina alquilada, que es de un desconocido.
+        extra = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
+        tar.extractall(staging, **extra)                    # noqa: S202
+    tgz.unlink()
+    traidos, apartados = [], []
+    for r in presentes:
+        local = destino_local(desc, r)
+        if local is None or local.exists():
+            apartados.append(r)
+            continue
+        local.parent.mkdir(parents=True, exist_ok=True)
+        (staging / r).replace(local)
+        traidos.append(r)
+    faltan = sorted(set(rutas) - set(presentes))
+    if faltan:
+        log(f"  ⚠ no existian en la maquina: {faltan}")
+    return traidos, apartados
+
+
+def estado_trabajos(libro_dir: Path) -> None:
+    """Lee el DISCO (R12): un renglon por trabajo. Y cruza con systemd y con Vast,
+    porque `estado` en el libro dice lo que el trabajo ESCRIBIO, no si sigue vivo."""
+    libros = sorted(libro_dir.glob("*.json"))
+    if not libros:
+        log(f"No hay libro en {libro_dir}: no se ha lanzado nada desde ahi.")
+        return
+    try:
+        vivas = {(i.get("label") or ""): i for i in instancias()}
+    except (ApiError, SystemExit) as exc:
+        vivas = None
+        log(f"⚠ NO SE que hay vivo en Vast ({exc}): lo de abajo es solo el libro.")
+    total = 0.0
+    for f in libros:
+        d = json.loads(f.read_text(encoding="utf-8"))
+        et = d.get("etiqueta", "?")
+        total += float(d.get("coste_usd") or 0)
+        ult = (d.get("pasos") or [{}])[-1].get("hora", "?")
+        viva = "?" if vivas is None else ("VIVA en Vast" if et in vivas else "")
+        unidad = "unidad activa" if unidad_activa(et) else ""
+        log(f"  {d.get('id', f.stem):<8} {d.get('estado', '?'):<13} {ult:<20} "
+            f"iid {d.get('iid', '-')!s:<10} rc {d.get('rc', '-')!s:<4} "
+            f"{d.get('coste_usd', '-')!s:>7} $  {unidad}  {viva}"
+            + (f"\n           error: {d['error'][:160]}" if d.get("error") else ""))
+    log(f"\ncoste anotado: {total:.4f} $ (lo de las maquinas ya destruidas)")
+
+
+def apagar_trabajos(prefijo: str) -> None:
+    """El freno: para las unidades `<prefijo>*` y destruye las instancias `<prefijo>*`.
+    Primero las unidades, para que ninguna alquile un repuesto mientras se apaga."""
+    if len(prefijo) < 3:
+        die("Un prefijo de menos de 3 letras se llevaria por delante maquinas ajenas.")
+    salida = subprocess.run(["systemctl", "list-units", "--all", "--plain", "--no-legend",
+                             f"{prefijo}*"], capture_output=True, text=True).stdout
+    for linea in salida.splitlines():
+        unidad = linea.split()[0] if linea.split() else ""
+        if unidad.startswith(prefijo):
+            r = subprocess.run(["sudo", "-n", "systemctl", "stop", unidad])
+            log(f"  unidad {unidad}: {'parada' if r.returncode == 0 else '✗ NO se pudo parar'}")
+    objetivo = [i for i in instancias() if (i.get("label") or "").startswith(prefijo)]
+    if not objetivo:
+        log(f"Ninguna instancia viva con etiqueta '{prefijo}*'.")
+        return
+    for i in objetivo:
+        try:
+            destruir(int(i["id"]))
+            log(f"  destruida {i.get('label')} ({i['id']})")
+        except ApiError as exc:
+            log(f"  ✗ NO pude destruir {i['id']}: {exc}")
+
+
 def main() -> None:
     force_utf8_output()
     load_env()
@@ -2125,6 +2623,24 @@ def main() -> None:
     p.add_argument("--yes", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_sweep)
+
+    p = sub.add_parser(
+        "trabajo", help="N trabajos en N maquinas: subir, correr, TRAER un directorio, destruir"
+    )
+    p.add_argument("--descriptor", help="JSON del trabajo (envia/install/trabajos)")
+    p.add_argument("--prefijo", help="OBLIGATORIO para lanzar: prefijo de las etiquetas")
+    p.add_argument("--libro", help="directorio del libro: un JSON por trabajo, paso a paso")
+    p.add_argument("--solo", nargs="+", help="solo estos ids del descriptor")
+    p.add_argument("--horas-max", type=float, default=2.0,
+                   help="tope de vida de CADA maquina, desde que se alquila (defecto 2)")
+    p.add_argument("--max-price", type=float, default=None, metavar="USD_HORA")
+    p.add_argument("--seco", action="store_true",
+                   help="imprime unidades, etiquetas y ordenes SIN tocar la API")
+    p.add_argument("--estado", action="store_true", help="lee el libro de --libro")
+    p.add_argument("--apagar", metavar="PREFIJO",
+                   help="para las unidades y destruye las instancias con ese prefijo")
+    p.add_argument("--uno", help=argparse.SUPPRESS)
+    p.set_defaults(func=cmd_trabajo)
 
     args = parser.parse_args()
     try:

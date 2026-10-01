@@ -989,6 +989,47 @@ no lo sustituye. La comparativa razonada está en `gpu_training_services.md`.
   ~50 MB, publícalo y usa `url`, o el repositorio engorda para siempre. Un volumen de
   bloques de DigitalOcean **no** es una opción aquí: no se conecta a Vast.ai.
 
+### El modo `trabajo`: N trabajos arbitrarios, N máquinas, un directorio de vuelta (2026-10-01)
+
+Lo pidió el plan de kernels de `experimentos-cnn` (`docs/plan-kernels-banco-2026-10-01.md`
+§4 de aquel repo). `bench` sabe medir **una** máquina y traer un JSON; `estudio_flota.py`
+reparte, pero atado a los sweeps de `fv`. Esto es lo que faltaba entre los dos:
+
+```
+python3 scripts/vast_instance.py trabajo --descriptor <json> --prefijo expc-x- --libro <dir> [--seco]
+python3 scripts/vast_instance.py trabajo --estado --libro <dir>
+python3 scripts/vast_instance.py trabajo --apagar expc-x-
+```
+
+Lo que cambia de un uso a otro es **dato**: un descriptor JSON que vive **junto al trabajo**
+(en el experimento, no aquí) con `envia` / `install` / `entorno` / `trabajos[id, run, trae]`.
+`origen` se lee desde el descriptor, y **`run` y `trae` también** (desde donde cae el
+descriptor en la máquina): así un descriptor nunca nombra la carpeta en la que vive.
+
+**Las cinco decisiones** que hay que respetar si se toca, con su porqué en el código:
+
+1. **Una unidad de systemd por trabajo** (`desacoplar-persistente.sh` del coordinador, por
+   `COORD_HOME`), y **el hijo sale siempre con 0**: es `Restart=on-failure`, y ahí otro código
+   es otro alquiler (62 relanzamientos el 2026-09-04).
+2. **Las ofertas se reparten antes, en el padre** (`elegir_ofertas_distintas`): N lanzamientos
+   independientes chocarían en la más barata. Si la asignada desaparece, el hijo busca otra
+   que no sea de ningún hermano.
+3. **El libro** (`<dir>/<id>.json`) se escribe en cada paso, y su esqueleto existe **antes**
+   de alquilar. `--estado` lee de ahí y lo cruza con systemd y con la cuenta.
+4. **Lo traído nunca pisa lo local**: si el destino existe, se queda en `<dir>/<id>/traido/`.
+5. **El trabajo corre desacoplado en la máquina** (`setsid` + fichero de fin) y se pregunta
+   por él con conexiones cortas: una sesión SSH de dos horas que se corta se llevaría el
+   trabajo con ella.
+
+Y lo que no es decisión sino regla de siempre: el payload llega por tar y se comprueba su
+**sha256 en el destino**; el dato viaja como un `envia` más; **ningún secreto** sale de aquí;
+la destrucción va en `finally`, y si falla el libro dice `NO-DESTRUIDA` con el comando.
+
+El **freno** entró en el mismo commit, en el coordinador (`cerrable.mjs`: `vast_instance\.py
+trabajo` en `TRABAJOS` y en `VIGILANTES`, y las `expc-*` cuentan siempre), y el **ejecutor de
+Telegram** en `experimentos-cnn` (`/use exp-vast` → `estado` · `apagar <prefijo>`). Nueve tests
+en `tests/test_trabajo.py`, el primero el caro: **se destruye aunque falle el trabajo**.
+
 ## El almacén: el volumen `datos` del mini (desde el 2026-10-01)
 
 El repo de datos de la flota ya no vive en GitHub: vive en un volumen de 1 GB conectado al
