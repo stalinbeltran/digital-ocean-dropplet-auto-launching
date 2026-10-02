@@ -2522,7 +2522,8 @@ def traer(desc: dict, t: dict, host: str, port: int, apartado: Path) -> tuple[li
 def estado_trabajos(libro_dir: Path) -> None:
     """Lee el DISCO (R12): un renglon por trabajo. Y cruza con systemd y con Vast,
     porque `estado` en el libro dice lo que el trabajo ESCRIBIO, no si sigue vivo."""
-    libros = sorted(libro_dir.glob("*.json"))
+    # el descriptor resuelto vive en el mismo directorio y NO es un trabajo
+    libros = sorted(p for p in libro_dir.glob("*.json") if p.name != "descriptor-resuelto.json")
     if not libros:
         log(f"No hay libro en {libro_dir}: no se ha lanzado nada desde ahi.")
         return
