@@ -2334,6 +2334,14 @@ def correr_un_trabajo(desc: dict, t: dict, prefijo: str, libro_dir: Path, horas:
         libro.paso("subida", payload_mb=round(tar.stat().st_size / 1e6, 2), sha256=huella[:16])
         entorno = "".join(f"export {k}={json.dumps(str(v))}\n"
                           for k, v in (desc.get("entorno") or {}).items())
+        # ⚠ Las vCPU que se PAGAN, no las que se ven. Dentro del contenedor, `nproc` y
+        # `lscpu` cuentan las del HOST: medido el 2026-10-01, 28 vistas en una maquina de
+        # 4 efectivas (fase 1 de kernels) y 24 en una de 12 (`dim-gen`, que corrio con
+        # `--hilos 24` y anoto que esas maquinas tardaron hasta el doble). Vast limita por
+        # cuota, no por cpuset, asi que lo unico fiable es la oferta: `cpu_cores_effective`.
+        vcpu = int(float((libro.d.get("maquina") or {}).get("vcpu") or 0))
+        if vcpu > 0:
+            entorno += f"export TRABAJO_VCPU={vcpu}\n"
         if ssh_script(host, port, f"set -eu\ncd {REMOTO}\n{entorno}{desc['install']}\n",
                       timeout=1800) != 0:
             raise RuntimeError("fallo la instalacion")

@@ -355,6 +355,30 @@ def test_destino_propio_espera_a_un_puerto_que_no_comparta_nadie():
     return [] if hp == ("s", 22187) else [f"devolvio {hp}"]
 
 
+def test_el_trabajo_recibe_las_vcpu_que_se_pagan():
+    """`nproc` dentro de Vast cuenta las del host (28 en una de 4, medido 2026-10-01): el
+    trabajo tiene que recibir `cpu_cores_effective` de la oferta como TRABAJO_VCPU."""
+    mod = cargar()
+    fallos = []
+    with tempfile.TemporaryDirectory() as d:
+        f, libro = montar(Path(d))
+        maquina_de_mentira(mod)
+        visto = {}
+
+        def correr_remoto(h, p, run, hasta, lb):
+            visto["run"] = run
+            return 0
+        mod.correr_remoto = correr_remoto
+        mod.Libro(libro / "a.json").paso("pendiente", id="a", etiqueta="t-a", oferta=11,
+                                         precio_hora=0.05, tope_precio=0.1,
+                                         maquina={"vcpu": 4.0, "cpu": "x"})
+        desc = mod.cargar_descriptor(str(f))
+        mod.correr_un_trabajo(desc, desc["trabajos"][0], "t-", libro, 2.0)
+        if "export TRABAJO_VCPU=4" not in visto.get("run", ""):
+            fallos.append(f"el run no lleva TRABAJO_VCPU=4: {visto.get('run', '')[:120]!r}")
+    return fallos
+
+
 def main():
     pruebas = [
         ("se destruye aunque falle el trabajo o la recogida", test_destruye_aunque_falle_el_trabajo),
@@ -371,6 +395,8 @@ def main():
          test_sellar_reintenta_la_clave_y_para_si_es_otra_maquina),
         ("destino propio: espera a un puerto que no comparta nadie",
          test_destino_propio_espera_a_un_puerto_que_no_comparta_nadie),
+        ("el trabajo recibe las vCPU que se pagan (TRABAJO_VCPU)",
+         test_el_trabajo_recibe_las_vcpu_que_se_pagan),
     ]
     total = 0
     for nombre, prueba in pruebas:

@@ -1025,6 +1025,13 @@ Y lo que no es decisión sino regla de siempre: el payload llega por tar y se co
 **sha256 en el destino**; el dato viaja como un `envia` más; **ningún secreto** sale de aquí;
 la destrucción va en `finally`, y si falla el libro dice `NO-DESTRUIDA` con el comando.
 
+⚠ **Dentro de la máquina, `nproc` miente: cuenta las CPU del HOST, no las que se pagan.**
+Medido el 2026-10-01: 28 vistas en una de 4 efectivas, 24 en una de 12. Vast limita por cuota,
+no por cpuset, así que `sched_getaffinity` tampoco sirve. Por eso el trabajo recibe
+**`TRABAJO_VCPU`** = `cpu_cores_effective` de la oferta, y es lo que hay que usar para repartir
+hilos (`N=${TRABAJO_VCPU:-$(nproc)}`). `dim-gen` corrió con `--hilos $(nproc)` = 24 en máquinas
+de 12 y anotó que esas tardaron hasta el doble. Test en `tests/test_trabajo.py`.
+
 El **freno** entró en el mismo commit, en el coordinador (`cerrable.mjs`: `vast_instance\.py
 trabajo` en `TRABAJOS` y en `VIGILANTES`, y las `expc-*` cuentan siempre), y el **ejecutor de
 Telegram** en `experimentos-cnn` (`/use exp-vast` → `estado` · `apagar <prefijo>`). Nueve tests
