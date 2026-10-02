@@ -12,6 +12,16 @@
       "visto_en": "estudio-c12"
     },
     {
+      "machine_id": 17579,
+      "primer_fallo": "2026-10-02T10:55:43+00:00",
+      "ultimo_fallo": "2026-10-02T10:55:43+00:00",
+      "fallos": 1,
+      "motivos": [
+        "2026-10-02: sshd no contesto en 5 min tras arrancar (instancia 53847625)"
+      ],
+      "visto_en": "expc-bork-k19"
+    },
+    {
       "machine_id": 18343,
       "primer_fallo": "2026-08-25T10:45:11+00:00",
       "ultimo_fallo": "2026-08-25T10:45:11+00:00",
@@ -430,6 +440,16 @@
         "RuntimeError: sshd no contesto en ssh5.vast.ai:38190"
       ],
       "visto_en": "estudio-c6"
+    },
+    {
+      "machine_id": 59091,
+      "primer_fallo": "2026-10-02T10:55:43+00:00",
+      "ultimo_fallo": "2026-10-02T10:55:43+00:00",
+      "fallos": 1,
+      "motivos": [
+        "2026-10-02: sshd no contesto en 5 min tras arrancar (instancia 53847615)"
+      ],
+      "visto_en": "expc-bork-k05"
     },
     {
       "machine_id": 66901,
