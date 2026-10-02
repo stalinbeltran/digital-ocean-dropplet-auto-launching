@@ -122,6 +122,16 @@
       "visto_en": "estudio-wd-v-s5"
     },
     {
+      "machine_id": 31459,
+      "primer_fallo": "2026-10-02T11:02:14+00:00",
+      "ultimo_fallo": "2026-10-02T11:02:14+00:00",
+      "fallos": 1,
+      "motivos": [
+        "2026-10-02: sshd no contesto en 5 min tras arrancar (instancia 53848324, k05 de bor-k)"
+      ],
+      "visto_en": "expc-bork-k05"
+    },
+    {
       "machine_id": 31848,
       "primer_fallo": "2026-08-25T10:42:08+00:00",
       "ultimo_fallo": "2026-08-25T10:42:08+00:00",

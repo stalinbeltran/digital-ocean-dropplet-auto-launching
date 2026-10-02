@@ -2326,8 +2326,12 @@ def correr_un_trabajo(desc: dict, t: dict, prefijo: str, libro_dir: Path, horas:
         if estado != "running":
             raise RuntimeError(f"la instancia acabo en '{estado}', no arranco")
         host, port = destino_propio(iid)
-        if not esperar_ssh(host, port):
-            raise RuntimeError(f"sshd no contesto en {host}:{port}")
+        # 10 min y no los 5 del defecto: medido el 2026-10-02, 3 de 11 alquileres de la
+        # fase 2 de kernels (y 2 de 13 en `dim-gen`) chocaron con los 5 min sin que sshd
+        # contestara -- dos de ellos hosts de Corea del Sur. Esperar 5 min mas cuesta
+        # ~0,005 $; relanzar, otro arranque entero.
+        if not esperar_ssh(host, port, timeout=600):
+            raise RuntimeError(f"sshd no contesto en {host}:{port} (10 min)")
         nonce = f"{etiqueta}-{iid}-{os.urandom(4).hex()}"
         libro.paso("sellada", intentos_clave=sellar(host, port, nonce))
         subir_trabajo(host, port, tar, huella)
