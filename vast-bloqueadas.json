@@ -82,6 +82,16 @@
       "visto_en": "estudio-wd-v-s3"
     },
     {
+      "machine_id": 29756,
+      "primer_fallo": "2026-10-02T23:36:45+00:00",
+      "ultimo_fallo": "2026-10-02T23:36:45+00:00",
+      "fallos": 1,
+      "motivos": [
+        "2026-10-02: no acepto la clave (fase 3 k19)"
+      ],
+      "visto_en": ""
+    },
+    {
       "machine_id": 29917,
       "primer_fallo": "2026-08-26T22:29:40+00:00",
       "ultimo_fallo": "2026-08-26T22:29:40+00:00",
