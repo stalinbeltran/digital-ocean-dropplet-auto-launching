@@ -91,7 +91,7 @@ def maquina_de_mentira(mod, *, falla_run=False, falla_traer=False):
     mod.alquilar = lambda oferta, etiqueta, image, disk: (hecho["alquiladas"].append(oferta["id"]) or 777)
     mod.destruir = lambda iid: hecho["destruidas"].append(iid)
     mod.esperar_estado = lambda iid, t: {"actual_status": "running", "ssh_host": "h", "ssh_port": 1}
-    mod.esperar_ssh = lambda h, p: True
+    mod.esperar_ssh = lambda h, p, timeout=300: True
     mod.destino_propio = lambda iid: ("h", 1)
     mod.sellar = lambda h, p, nonce: 1
     mod.comprobar_sello = lambda h, p, nonce: None
