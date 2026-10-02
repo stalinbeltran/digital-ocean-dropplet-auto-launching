@@ -912,6 +912,16 @@
       "visto_en": "estudio-c3"
     },
     {
+      "machine_id": 149453,
+      "primer_fallo": "2026-10-02T18:31:02+00:00",
+      "ultimo_fallo": "2026-10-02T18:31:02+00:00",
+      "fallos": 1,
+      "motivos": [
+        "2026-10-02: no acepto la clave (bor-ae k05)"
+      ],
+      "visto_en": ""
+    },
+    {
       "machine_id": 152600,
       "primer_fallo": "2026-10-01T22:42:52+00:00",
       "ultimo_fallo": "2026-10-01T22:42:52+00:00",
