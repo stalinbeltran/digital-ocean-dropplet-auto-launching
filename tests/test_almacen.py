@@ -98,6 +98,30 @@ def main() -> int:
              git(desnudo, "config", "receive.denyDeletes")[1].strip() == "true"
              and git(desnudo, "config", "receive.denyNonFastForwards")[1].strip() == "true")
 
+    # --- 1 bis. se reempaqueta solo: la historia no se guarda dos veces -------
+    # (2026-10-03: el volumen se llenó al 100 % con packs gemelos que nadie juntaba)
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        desnudo, log = t / "datos.git", t / "pushes.log"
+        git(t, "init", "-q", "--bare", str(desnudo))
+        mod.preparar_repo_desnudo(desnudo, log)
+        clon = t / "clon"
+        git(t, "clone", "-q", str(desnudo), str(clon))
+        maximo = 0
+        for i in range(7):
+            (clon / f"f{i}.bin").write_bytes(os.urandom(50_000))
+            git(clon, "add", ".")
+            git(clon, "commit", "-q", "-m", f"c{i}")
+            git(clon, "push", "-q", "origin", "HEAD:refs/heads/main")
+            maximo = max(maximo, len(list((desnudo / "objects" / "pack").glob("*.pack"))))
+        caso("siete pushes nunca dejan más de 4 packs (gc --auto tras el push)", maximo <= 4,
+             f"máximo {maximo}")
+        sueltos = [f for d in (desnudo / "objects").iterdir() if len(d.name) == 2 for f in d.iterdir()]
+        caso("...y ningún push queda como objetos sueltos (unpackLimit 1)", not sueltos,
+             f"{len(sueltos)} sueltos")
+        code, out = git(desnudo, "log", "--format=%s", "-1", "refs/heads/main")
+        caso("...y no se pierde nada al reempaquetar", out.strip() == "c6", out.strip())
+
     # --- 2. el alias de ssh, idempotente y sin pisar nada --------------------
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "config"

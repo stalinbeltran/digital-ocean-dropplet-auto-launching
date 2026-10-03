@@ -2001,6 +2001,18 @@ CONFIG_ALMACEN = [
     ("pack.deltaCacheSize", "16m"),
     ("core.packedGitWindowSize", "16m"),
     ("core.packedGitLimit", "64m"),
+    # REEMPAQUETAR SOLO (2026-10-03). El volumen se llenó al 100 % con la historia guardada
+    # DOS veces: cada push dejaba su pack completo (o sus objetos sueltos completos) y nadie
+    # reempaquetaba. Medido: 835 MB → 392 MB con un `repack -a -d` a mano. Con esto cada push
+    # entra como pack (unpackLimit 1: un push pequeño ya no se descompone en sueltos de 4 MB
+    # que el umbral de 300 no llegaría a recoger antes de llenar 1 GB) y al quinto pack el
+    # propio receive-pack corre `gc --auto` en primer plano. gc.pruneExpire=never sigue
+    # mandando: reempaquetar no borra nada.
+    ("receive.unpackLimit", "1"),
+    ("receive.autogc", "true"),
+    ("gc.auto", "300"),
+    ("gc.autoPackLimit", "4"),
+    ("gc.autoDetach", "false"),
 ]
 
 
