@@ -127,3 +127,12 @@ Y con eso la historia de git deja de crecer con binarios, que es el 83 % de §2.
 2. **Si se reescribe la historia** del repo de datos para recuperar el ≈ 42–83 % de §2. Choca
    con «nadie borra» y exige re-clonar en todas las máquinas.
 3. **Borrar las dos copias de seguridad** de `/var/tmp` del mini (~1,2 GB del disco raíz).
+
+## 5. Decidido por el dueño el mismo 2026-10-03
+
+- **No se contrata Spaces** (ni ningún almacén de objetos, por ahora). §3 queda como análisis.
+- **Historia compactada** (§4.2): cada rama es un solo commit con su contenido de ese día, árboles
+  comprobados idénticos; las otras ramas apuntan a la `main` nueva para que un clon viejo sea
+  rechazado al empujar. Almacén: 375 MB → **263 MB (33 %)**. Clones del dev, `~/ws/tema-2` y mini
+  reajustados. Lo que queda es contenido **vigente**: el ≈41 % «probable» de §2 sigue ahí.
+- **Copias de `/var/tmp` del mini borradas** (§4.3).
