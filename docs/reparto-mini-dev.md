@@ -21,7 +21,7 @@ permisos.
 | Claude Code | **no** — en 512 MB lo mata el kernel | sí |
 | bot | Lanzador (`TGL_`) | Coordinador (`TG_`) |
 | repos de trabajo | **sólo `foveal-vision-data`** (2026-09-11) | los cuatro |
-| apps web que aloja | **`sispla-demo`** (:8080, desde el 2026-09-15: la demo que se quiere disponible siempre), **`gauss-p`** (:8030, desde el 2026-09-18), **`graph-simulator`** (:8040, desde el 2026-09-19: el simulador de grafos en 3D, sin puerta y sin estado) | `foveal-vision-web` (:8010), `claude-web` (:8020), `gauss-p` (:8030) |
+| apps web que aloja | **`claude-web`** (:8020, desde el 2026-10-07: la web de las conversaciones, en modo remoto), **`graph-simulator`** (:8040, desde el 2026-09-19: el simulador de grafos en 3D, sin puerta y sin estado). ⚠ `sispla-demo` (:8080) y `gauss-p` (:8030) se **retiraron el 2026-10-07** por orden del dueño | `foveal-vision-web` (:8010), y nada más: medido el 2026-10-07 con `ss -ltnp` y `ufw status` en el dev |
 | **llavero, clave de flota, crear y destruir** | **iguales** | **iguales** |
 
 Las **cuatro** diferencias que quedan, y el motivo de cada una:
@@ -216,6 +216,7 @@ bash: line 1: .venv/bin/python: No such file or directory
 `cloud-init.mini.yaml` no instala `python3-venv` —y hace bien, aquí no se desarrolla
 nunca—, así que no hay ni habrá `.venv`.
 
+⚠ **HISTORIA (2026-09-18 → 2026-10-07): `gauss-p` se retiró del mini el 2026-10-07, así que esto ya no vale y el mini vuelve a no tener `.venv`.** Lo que decía:
 ⚠ **Eso dejó de ser literal el 2026-09-18, y por una excepción declarada:** el servicio
 `gauss-p` (:8030) **sí** instala `python3-venv` y crea un `.venv` en `experimentos-cnn`,
 porque su app es Python y sin venv no hay app. Lo que sigue siendo cierto es el motivo de

@@ -235,9 +235,15 @@ def main() -> int:
     caso("toda orden git sobre el repo va como `datos`, nunca como root",
          'git -C "$R" config' not in script.replace('sudo -u "$U" -H git -C "$R" config', '')
          and 'sudo -u "$U" -H git -C "$R" config' in script)
-    estado = mod.script_estado_almacen(alm)
+    # Con una app de pega: desde el 2026-10-07 el mini no declara ninguna (sispla-demo se
+    # retiró), y el mecanismo tiene que seguir comprobándose para la siguiente.
+    estado = mod.script_estado_almacen(dict(alm, apps={"una-app": "datos"}))
     caso("estado comprueba que cada app apunta al volumen",
-         "NO apunta al volumen" in estado and "sispla-demo" in estado)
+         "NO apunta al volumen" in estado and "una-app" in estado)
+    caso("sin apps declaradas, estado e instalar siguen generándose",
+         bool(mod.script_estado_almacen(dict(alm, apps={})))
+         and bool(mod.script_instalar_almacen(dict(alm, apps={}), "deploy",
+                                              Path("/home/deploy/.ssh/do_flota.pub"))))
 
     print(f"\n{'TODO OK' if not fallos else str(fallos) + ' FALLO(S)'}")
     return 1 if fallos else 0
