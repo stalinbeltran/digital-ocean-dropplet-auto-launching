@@ -344,3 +344,82 @@ Desde el 2026-10-01, **todo dato se guarda en el almacén**: lo que ya iba al re
 va también al repo de datos, en `temporal/<máquina>/<fecha>/`, commiteado y empujado. **Lo
 que no está empujado al almacén, no existe.** Y como nadie borra, antes de meter algo
 grande (>20 MB) se mira `almacen estado`: lo único que puede pasarle al disco es llenarse.
+
+## 7. La mudanza a sfo2 (ejecutada el 2026-10-07)
+
+**Por qué.** nyc1 dejó de ofrecer `s-1vcpu-512mb-10gb` (el mini) y `s-2vcpu-4gb` (el dev):
+medido contra `/v2/sizes` ese día, los dos están en sfo2 (y en ams3, blr1, lon1, sgp1, syd1,
+tor1) y no en nyc1. El dueño pidió mudar la flota **y el volumen, todo en la misma región**.
+Un volumen **no cambia de región** (ni por snapshot), así que se copió el contenido a un
+`datos` **nuevo** en sfo2.
+
+**Lo que queda, y hay que saberlo:**
+
+| | dónde | qué es |
+|---|---|---|
+| `datos` de **sfo2** | conectado al mini (`/mnt/datos`) | **el almacén vivo** |
+| `datos` de **nyc1** | suelto | **copia CONGELADA del 2026-10-07 12:23 UTC** (`main` = `8a06c4f`, 87 commits). Nadie la conecta ni escribe en ella. No se destruye (regla del dueño); 0,10 $/mes |
+| `~/respaldo-almacen-2026-10-07.tgz` | disco del dev de ese día | el volcado que se restauró; muere con ese dev |
+
+⚠ **Con dos `datos` en la cuenta, el NOMBRE ya no identifica el volumen.** Desde `b33f89c`
+todo comando de volumen busca por nombre + región y **se niega** si es ambiguo (antes, un
+`volume destroy datos` sin región borraba el que la API devolviera primero — el de nyc1 en
+la prueba). La región del almacén la **declara** `types/mini.json` (`region`), no
+`DO_REGION`. Y `almacen instalar` ya no espeja de GitHub si falta el repo (sólo con
+`--espejar-desde-github`): en esta mudanza el volumen nuevo venía vacío, y espejar la copia
+congelada —otra historia desde la compactación del 10-03— y restaurar encima las mezclaba.
+`tests/test_volumen_region.py`, 15 casos; 6 fallan con el código anterior.
+
+**La sesión**, desde el dev, salidas recortadas:
+
+```
+dev → (en el mini viejo) commit + push de errores/   ← 1 línea que sólo estaba en su disco
+    ← 54274ae errores: registro del mini rescatado antes de mudarlo a sfo2
+dev → volume create datos --region sfo2 --size-gb 1
+    ← Creado. volume list: datos nyc1 → 605270224 · datos sfo2 → suelto
+dev → (en el mini viejo) for-each-ref + tar --numeric-owner de /mnt/datos → el dev
+    ← main 8a06c4f · 87 commits · 160 pushes; el tar, descomprimido aparte: lo mismo
+dev → volume detach datos --region nyc1 ; destroy mini --yes          12:23:29 → 12:23:55 UTC
+    ← AVISO: telegram-coordinator: la recogida falló; se destruye igual.   ← ver abajo
+dev → launch mini --sin-volumen                                       12:24:02 → 12:28:21 UTC
+    ← s-1vcpu-512mb-10gb · ubuntu-24-04-x64 · sfo2 · tag control
+      Activo. IP pública: 159.65.77.58
+      ERROR: 1 repo(s) no quedaron conectados al almacén.   ← esperado: aún sin volumen
+dev → volume attach datos --droplet mini       ← coge el de sfo2 por la región del droplet
+    ← montado en /mnt/datos (801M libres)
+dev → (en el mini nuevo) sudo tar -C /mnt/datos --numeric-owner -xzf - < respaldo
+dev → remoto mini almacen instalar
+    ← usuario datos creado (git-shell)
+      foveal-vision-data.git ya existe en el volumen: no se toca su contenido
+      foveal-vision-data.git listo: 87 commits, 313M
+dev → remoto mini almacen conectar ; almacen conectar
+    ← (mini) REAJUSTADO al almacén   (dev) la clave de host cambió … al día con el almacén
+dev → almacen estado
+    ← volumen datos: 1 GB en sfo2, conectado al droplet 606937196 · 87 commits · 160 pushes
+dev → almacen probar
+    ← ok ×5
+dev → flota
+    ← Paridad correcta en 2 maquina(s).
+```
+
+| | mini viejo (nyc1) | mini nuevo (sfo2) |
+|---|---|---|
+| refs | `main 8a06c4f` · `dataTests 2c3f28d` · `datos-fechados`/`tema-2 4ff692a` | **idénticas** |
+| commits · `fsck --connectivity-only` | 87 · ok | **87 · ok** |
+| `pushes.log` | 160 líneas | 160 → **161** con el push de `probar`, dueño `datos` |
+| servicios | 5 | los 5 `active`; claude-web ya copia el historial del dev |
+| corte | — | **4 min 52 s** entre `destroy` y el mini nuevo con servicios; ~7 min hasta el almacén restaurado |
+
+**Lo que cambió para el dueño:** la IP del mini (142.93.255.224 → 159.65.77.58) y los
+tokens de claude-web y gauss-p: **todas las URL del mini guardadas en el móvil dejaron de
+valer**; se piden de nuevo al Lanzador (`/use cweb` → `url`, etc.).
+
+⚠ **Hallazgo de la mudanza:** el `pre_destroy` de `telegram-coordinator` corrió en el mini
+viejo y falló con `MODULE_NOT_FOUND: scripts/estado-por-tema.mjs`: la copia del coordinador
+del mini era la de su nacimiento (2026-10-01) y nadie la actualiza. No se perdió nada (el
+historial que importa es el del dev), pero es la forma de siempre: **un mini que no hace
+`pull` corre código de su fecha de nacimiento**. El mini nuevo nació con `main` al día.
+
+**Lo que NO se movió:** el dev de ese día sigue en nyc1 (funciona; su plan sólo dejó de
+poder **crearse** allí). El próximo dev nacerá en sfo2 porque `types/dev.json` lo declara.
+`types/big.json` se queda en nyc1: en sfo2 no hay ningún plan de 8 vCPU / 16 GB.
