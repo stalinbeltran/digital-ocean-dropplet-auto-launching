@@ -76,10 +76,18 @@ def main() -> int:
          svc.get("pre_destroy", "") == "",
          "no tiene nada que recoger: no se une a ninguna tailnet")
 
-    otro = mod.load_service("telegram-coordinator")
+    otro = mod.load_service("foveal-vision-web")
     caso("un servicio que no lo declara se queda a cero",
          otro.get("pre_destroy") == "",
          "el campo existe con defecto vacio, asi que nadie tiene que declararlo")
+
+    # Desde el 2026-10-07 el coordinador SI declara uno: la foto del historial de la web de
+    # lectura, para que el dev siguiente lo restaure. Si alguien lo quita, la ultima respuesta
+    # de claude antes de destruir deja de llegar al almacen.
+    coord = mod.load_service("telegram-coordinator")
+    caso("telegram-coordinator declara pre_destroy (la foto del estado por tema)",
+         "estado-por-tema.mjs --foto" in coord.get("pre_destroy", ""),
+         coord.get("pre_destroy", ""))
 
     # ⚠ El guion se comprueba contra un descriptor PROPIO desde el 2026-09-12.
     # Antes se apoyaba en que `claude-web` declarara un gancho, y al quitarselo

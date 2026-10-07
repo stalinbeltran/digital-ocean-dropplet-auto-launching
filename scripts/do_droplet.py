@@ -2261,6 +2261,75 @@ def almacen_instalar(alm: dict, seco: bool) -> None:
     log("\nAlmacén instalado. Comprueba:  python3 scripts/do_droplet.py almacen estado")
 
 
+# Rutas que la máquina REGENERA sola: el archivador rehace `conversaciones/` desde los
+# transcripts vivos de ~/.claude/projects, y la foto del estado por tema
+# (telegram-coordinator/scripts/estado-por-tema.mjs) rehace `coordinador/` desde data/. Un
+# commit local que sólo toque esto se puede tirar sin perder nada; cualquier otro, no.
+REGENERABLES = ("conversaciones/", "coordinador/")
+
+
+def sincronizar_clon_con_almacen(clon: Path) -> tuple[str, str]:
+    """Deja `main` del clon donde está `origin/main` del almacén, o dice por qué no.
+
+    Devuelve `(estado, detalle)`, con estado en {"al-dia", "reajustado", "sin-pull",
+    "problema"}. Sólo "problema" cuenta como fallo para quien llama.
+
+    ⚠⚠ POR QUÉ NO BASTA `pull --ff-only`. `provision` clona el repo de datos de GitHub, la
+    copia CONGELADA, y desde que la historia del almacén se compactó (2026-10-03) las dos
+    historias no comparten ni un commit: en todo dev nuevo el fast-forward falla. Hasta el
+    2026-10-07 eso era un AVISO con exit 0, el hook del archivador commiteaba sobre la
+    historia vieja, su push era rechazado y lo archivado no llegaba al almacén, en
+    silencio. Medido ese día en un dev recién nacido: `main...origin/main [ahead 758,
+    behind 52]`, sin base común.
+
+    ⚠ La salida obvia -`pull --allow-unrelated-histories`- es una trampa: entraría en el
+    almacén como fast-forward y metería los ~366 MB de la historia vieja (16.342 objetos,
+    medidos ese día), deshaciendo la compactación que ordenó el dueño. Aquí se hace lo
+    contrario: si lo único que tiene el clon y no tiene ningún remoto es REGENERABLE, se
+    reajusta a `origin/main` y se DICE; si hay trabajo que no se puede rehacer, se NIEGA
+    en voz alta (R2) en vez de avisar y seguir. Y una divergencia CON historia común no se
+    decide aquí: es un push que falló, y se resuelve con `pull --rebase` desde quien empuja.
+    Tests con repos git de verdad en tests/test_almacen_sincronizar.py.
+    """
+    _c, rama, _e = _git(clon, "rev-parse", "--abbrev-ref", "HEAD")
+    _c, sucio, _e = _git(clon, "status", "--porcelain")
+    if rama != "main" or sucio:
+        return "sin-pull", (f"fetch hecho; no hago pull (rama {rama}"
+                            f"{', cambios sin commitear' if sucio else ''})")
+    code, _o, err = _git(clon, "pull", "--ff-only", "origin", "main")
+    if code == 0:
+        return "al-dia", "al día con el almacén"
+    # La historia vieja cuenta como guardada si está en GitHub: se trae antes de mirar qué es
+    # local de verdad. Sin remoto `github` el fetch falla y da igual.
+    _git(clon, "fetch", "github")
+    comparten, _o, _e = _git(clon, "merge-base", "HEAD", "origin/main")
+    _c, locales, _e = _git(clon, "rev-list", "HEAD", "--not", "--remotes")
+    n = len(locales.split()) if locales else 0
+    _c, rutas, _e = _git(clon, "log", "--name-only", "--format=", "HEAD", "--not", "--remotes")
+    tocadas = sorted({r.strip() for r in rutas.splitlines() if r.strip()})
+    no_regenerables = [r for r in tocadas if not r.startswith(REGENERABLES)]
+    if comparten == 0:
+        return "problema", (
+            f"NO avanza en fast-forward y comparte historia con el almacén: {n} commit(s) "
+            f"locales sin empujar ({', '.join(tocadas[:5]) or 'sin ficheros'}). Es un push que "
+            f"falló; resuélvelo desde ahí (git pull --rebase && git push) y repite."
+        )
+    if no_regenerables:
+        return "problema", (
+            f"SIN base común con el almacén (clon de la copia congelada de GitHub) y con trabajo "
+            f"local que NO sé regenerar: {', '.join(no_regenerables[:5])}. No lo tiro. Rescátalo a "
+            f"mano: git -C {clon} branch respaldo main && git -C {clon} reset --hard origin/main"
+        )
+    code, _o, err = _git(clon, "reset", "--hard", "origin/main")
+    if code != 0:
+        return "problema", f"no pude reajustar a origin/main: {err.splitlines()[-1] if err else '?'}"
+    que = ", ".join(sorted({r.split("/", 1)[0] + "/" for r in tocadas})) or "nada local"
+    return "reajustado", (
+        f"REAJUSTADO al almacén: el clon venía de GitHub (historia congelada, sin base común) y "
+        f"lo único local eran {n} commit(s) de {que}, que se regeneran solos"
+    )
+
+
 def almacen_conectar(alm: dict, solo_repo: str, maquina: str) -> None:
     """Apunta el `origin` de los repos de datos de ESTA máquina al almacén. Idempotente.
 
@@ -2314,15 +2383,12 @@ def almacen_conectar(alm: dict, solo_repo: str, maquina: str) -> None:
                 f"         origin queda apuntando al almacén igualmente; los push fallarán\n"
                 f"         hasta que el mini conteste (ruidoso, no silencioso).")
             continue
-        _c, rama, _e = _git(clon, "rev-parse", "--abbrev-ref", "HEAD")
-        _c, sucio, _e = _git(clon, "status", "--porcelain")
-        if rama == "main" and not sucio:
-            code, out, err = _git(clon, "pull", "--ff-only", "origin", "main")
-            log(f"  {repo}: {'al día con el almacén' if code == 0 else 'AVISO: no avanza en fast-forward: ' + err.splitlines()[-1]}")
-        else:
-            log(f"  {repo}: fetch hecho; no hago pull (rama {rama}{', cambios sin commitear' if sucio else ''})")
+        estado, detalle = sincronizar_clon_con_almacen(clon)
+        log(f"  {repo}: {detalle}")
+        if estado == "problema":
+            problemas += 1
     if problemas:
-        die(f"{problemas} repo(s) no pudieron hablar con el almacén. La causa está arriba.")
+        die(f"{problemas} repo(s) no quedaron conectados al almacén. La causa está arriba.")
 
 
 def script_estado_almacen(alm: dict) -> str:

@@ -185,6 +185,21 @@ def main() -> int:
             sin_conectar.append(t.stem)
     caso("todo tipo que clona el repo de datos se conecta al almacén",
          not sin_conectar, ", ".join(sin_conectar))
+    # Y desde el 2026-10-07, todo tipo que corra el coordinador RESTAURA el historial de la web
+    # de lectura en su post, DESPUES de conectar (la restauracion se niega si el clon no esta
+    # conectado al almacen). Sin esto, un dev nuevo nace con la web vacia y nadie se entera.
+    sin_restaurar = []
+    for t in sorted((ROOT / "types").glob("*.json")):
+        d = json.loads(t.read_text(encoding="utf-8"))
+        if "telegram-coordinator" not in (d.get("services") or []):
+            continue
+        post_t = d.get("post") or []
+        i_c = next((i for i, c in enumerate(post_t) if "almacen conectar" in c), -1)
+        i_r = next((i for i, c in enumerate(post_t) if "estado-por-tema.mjs --restaurar" in c), -1)
+        if not (0 <= i_c < i_r):
+            sin_restaurar.append(t.stem)
+    caso("todo tipo con el coordinador restaura el historial en su post, después de conectar",
+         not sin_restaurar, ", ".join(sin_restaurar))
     alm = mod.almacen_declarado()
     caso("almacen_declarado() lee el tipo", alm["monte"] == "/mnt/datos" and alm["repos"])
 

@@ -4,5 +4,7 @@
   "install": "npm ci",
   "start": "npm start",
   "env_prefix": "TG_",
-  "atiende": true
+  "atiende": true,
+  "pre_destroy": "node scripts/estado-por-tema.mjs --foto",
+  "notas": "pre_destroy DESDE EL 2026-10-07: antes de destruir, la maquina empuja al almacen la FOTO del historial de la web de lectura (data/mensajes, redactado; scripts/estado-por-tema.mjs) para que el dev siguiente lo restaure en su post. Es una COMODIDAD, no la regla: la foto sale tambien en cada turno de `c` por el hook del archivador, y un destroy desde la consola de DO no pasa por aqui. Lo unico que SOLO esto recoge es la ultima respuesta de claude, que ningun hook llega a ver (el log la anota despues del SessionEnd)."
 }
