@@ -15,7 +15,7 @@
 
 ## 1. Qué es, en una frase
 
-Un volumen de bloques de DigitalOcean (`datos`, 1 GB, `nyc1`, **0,10 $/mes**) conectado al
+Un volumen de bloques de DigitalOcean (`datos`, 1 GB, `sfo2` desde el 2026-10-07 —ver §7—, **0,10 $/mes**) conectado al
 mini y montado en `/mnt/datos`, que guarda **repos git desnudos** servidos por SSH desde un
 usuario sin shell. `foveal-vision-data` —el repo de datos de siempre— vive ahí como origen;
 cada máquina de la flota apunta su `origin` al mini, y GitHub queda como copia congelada.
@@ -27,7 +27,7 @@ borran ramas ni se reescribe historia, y un fichero borrado en un commit sigue a
 
 | pieza | dónde | qué hace |
 |---|---|---|
-| el volumen | DigitalOcean, `nyc1`, 1 GB | de la cuenta, no del droplet: **sobrevive a destruir el mini** |
+| el volumen | DigitalOcean, `sfo2` (desde el 2026-10-07; nació en `nyc1`, ver §7), 1 GB | de la cuenta, no del droplet: **sobrevive a destruir el mini** |
 | `types/mini.json` → `"volume": "datos"` | lanzador | `launch mini` lo conecta al crear el droplet y lo monta en `/mnt/datos` con `nofail` en fstab |
 | `types/mini.json` → `"almacen"` | lanzador | DATO: qué repos se espejan (`repos`) y qué carpetas de apps pasan al volumen (`apps`) |
 | `do_droplet.py almacen instalar` | corre EN el mini (su `post`) | usuario `datos` con `git-shell`, clave de flota con `restrict`, repos desnudos en `/mnt/datos/git/`, config + hook «nadie borra», carpetas de apps enlazadas. **Idempotente**: en un mini rehecho no vuelve a espejar nada |

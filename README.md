@@ -238,7 +238,7 @@ droplet. El resto tiene valores por defecto razonables:
 | `DO_MAX_PRICE_MONTHLY` | No — `100` | Freno de coste en $/mes: por encima, `launch` pide `--accept-cost`. `0` = sin freno |
 | `DO_SIZE` | No — `s-2vcpu-4gb` | Plan de la máquina si no usas un tipo. Míralos con `sizes` |
 | `DO_IMAGE` | No — `ubuntu-24-04-x64` | Sistema operativo. Míralos con `images` |
-| `DO_REGION` | No — `nyc1` | Centro de datos. Míralos con `regions` |
+| `DO_REGION` | No — `sfo2` (desde el 2026-10-07; antes `nyc1`, que dejó de ofrecer los planes del mini y del dev) | Centro de datos. Míralos con `regions` |
 | `DO_DROPLET_NAME` | No — `proyecto-01` | Nombre del droplet; también lo puedes pasar como argumento a `launch` |
 | `DO_TAG` | No — `ephemeral` | Etiqueta para poder limpiarlos todos de golpe |
 | `DO_CLOUD_INIT` | No — `cloud-init.yaml` | Plantilla de primer arranque. Ver [La máquina de control](#la-máquina-de-control-lanzar-droplets-desde-el-móvil) |
@@ -327,7 +327,7 @@ vivo** de la API, para que no haya números viejos en un fichero:
 ```
 dev  ·  s-2vcpu-4gb  ·  $24.00/mes ($0.0357/h)
   El droplet de trabajo de siempre: 2 vCPU compartidas y 4 GB de RAM.
-  imagen ubuntu-24-04-x64 · región nyc1 (de .env) · tag ephemeral (de .env)
+  imagen ubuntu-24-04-x64 · región sfo2 (del tipo) · tag ephemeral (de .env)
 
 gpu-h100  ·  gpu-h100x1-80gb  ·  $3,281.04/mes ($4.4100/h)
   NVIDIA H100 con 80 GB de VRAM, 20 vCPU y 240 GB de RAM.
@@ -456,7 +456,7 @@ Es un fichero, nunca código. `types/loquesea.json`:
   "descripcion": "Para qué sirve esta máquina.",
   "size": "s-4vcpu-8gb",
   "image": "ubuntu-24-04-x64",
-  "region": "nyc1",
+  "region": "sfo2",
   "cloud_init": "cloud-init.yaml",
   "tag": "ephemeral",
   "notas": "Lo que quieras que se imprima al lanzarlo."

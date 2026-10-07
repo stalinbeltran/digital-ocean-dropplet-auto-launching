@@ -30,7 +30,9 @@ API = "https://api.digitalocean.com"
 
 # Valores por defecto; cualquiera se puede sobrescribir desde .env
 DEFAULTS = {
-    "DO_REGION": "nyc1",
+    # sfo2 desde el 2026-10-07: nyc1 dejó de ofrecer s-1vcpu-512mb-10gb (el mini) y
+    # s-2vcpu-4gb (el dev); medido contra /v2/sizes ese día. Un tipo puede fijar la suya.
+    "DO_REGION": "sfo2",
     "DO_SIZE": "s-2vcpu-4gb",
     "DO_IMAGE": "ubuntu-24-04-x64",
     "DO_DROPLET_NAME": "proyecto-01",
@@ -1409,7 +1411,10 @@ def cmd_launch(args: argparse.Namespace) -> None:
         args.volume or tipo.get("volume") or cfg("DO_VOLUME"))
     vol = None
     if vol_name:
-        vol = find_volume(vol_name)
+        # Primero en la región de la máquina (la identidad es nombre + región); si
+        # no está ahí pero sí en otra, el aviso de abajo dice dónde, en vez de un
+        # «no existe» que mandaría a crear otro.
+        vol = find_volume(vol_name, maquina["region"]) or find_volume(vol_name)
         if not vol:
             die(
                 f"No existe el volumen '{vol_name}'. No se ha creado ningún droplet.\n"
@@ -1885,7 +1890,27 @@ def volumes(region: str = "") -> list[dict]:
 
 
 def find_volume(name: str, region: str = "") -> dict | None:
-    return next((v for v in volumes(region) if v["name"] == name), None)
+    """El volumen con ese nombre (en esa región, si se da).
+
+    ⚠ El NOMBRE solo no identifica un volumen: DigitalOcean admite el mismo en dos
+    regiones, y desde el 2026-10-07 hay dos `datos` (el de nyc1, congelado, y el de
+    sfo2, el almacén vivo). La identidad es nombre + región. Si sin región hay más de
+    uno, se MUERE nombrándolos: coger «el primero que devuelva la API» es actuar sobre
+    el volumen equivocado sin decirlo — y aquí actuar es attach, resize o destroy.
+    """
+    candidatos = [v for v in volumes(region) if v["name"] == name]
+    if len(candidatos) > 1:
+        lista = "\n".join(
+            f"    {v['region']['slug']}: {v['size_gigabytes']} GB, "
+            + (f"conectado a {v['droplet_ids'][0]}" if v.get("droplet_ids") else "suelto")
+            for v in candidatos
+        )
+        die(
+            f"Hay {len(candidatos)} volúmenes llamados '{name}', en regiones distintas:\n"
+            f"{lista}\n"
+            "  Di cuál con --region <región>. No se ha tocado nada."
+        )
+    return candidatos[0] if candidatos else None
 
 
 def volume_device(name: str) -> str:
@@ -2072,6 +2097,9 @@ def almacen_declarado() -> dict:
         )
     return {
         "volumen": vol,
+        # La región del almacén es la del mini, que la DECLARA su tipo (R4): con dos
+        # `datos` en la cuenta, el nombre solo ya no dice cuál es.
+        "region": tipo.get("region") or cfg("DO_REGION"),
         "monte": volume_mount_point(vol),
         "repos": list(alm["repos"]),
         "apps": dict(alm.get("apps") or {}),
@@ -2132,7 +2160,7 @@ def almacen_en_esta_maquina(alm: dict) -> bool:
     return os.path.isdir(f"{alm['monte']}/git")
 
 
-def script_instalar_almacen(alm: dict, dev_user: str, pub: Path) -> str:
+def script_instalar_almacen(alm: dict, dev_user: str, pub: Path, espejar: bool = False) -> str:
     """El script (root) que deja el mini sirviendo los repos del volumen. Idempotente.
 
     Se construye aquí y no se escribe a mano para que el hook y la config salgan de los
@@ -2168,11 +2196,28 @@ def script_instalar_almacen(alm: dict, dev_user: str, pub: Path) -> str:
         # los directorios del volumen
         'install -d -m 755 -o "$U" -g "$U" "$GITD"',
         'install -d -m 750 -o "$U" -g "$U" "$LOGD"',
+        # -R: tras restaurar un volcado el log puede venir con el uid de OTRA máquina, y
+        # el hook escribe con `|| true`: el registro de pushes se perdería sin un error.
+        'chown -R "$U:$U" "$LOGD"',
         'install -d -m 755 -o "$DEV" -g "$DEV" "$APPS"',
     ]
     for repo in alm["repos"]:
         bare = f"{git_dir}/{repo}.git"
         url = f"https://github.com/{alm['github']}/{repo}.git"
+        if not espejar:
+            # ⚠ Sin --espejar-desde-github, un repo que FALTA es un fallo, no una
+            # invitación a clonar: GitHub es la copia congelada del 2026-10-01 y desde la
+            # compactación del 10-03 no comparte historia con el almacén. Espejarla en un
+            # volumen recién creado (p.ej. al mudar de región, 2026-10-07) y restaurar
+            # después el volcado encima mezclaría dos historias. La primera vez ya pasó.
+            lineas += [
+                f"R={shq(bare)}",
+                'if [ ! -d "$R" ]; then',
+                f'  echo "  {repo}.git NO está en el volumen. ¿Restauraste el volcado? '
+                f'Si de verdad es la primera vez: almacen instalar --espejar-desde-github" >&2',
+                "  exit 1",
+                "fi",
+            ]
         lineas += [
             f"R={shq(bare)}",
             'if [ ! -d "$R" ]; then',
@@ -2233,7 +2278,7 @@ def script_instalar_almacen(alm: dict, dev_user: str, pub: Path) -> str:
     return "\n".join(lineas) + "\n"
 
 
-def almacen_instalar(alm: dict, seco: bool) -> None:
+def almacen_instalar(alm: dict, seco: bool, espejar: bool = False) -> None:
     """Deja el mini sirviendo los repos del volumen. Corre DENTRO del mini, como el usuario
     de desarrollo (que tiene sudo): es el `post` de su tipo, y también se puede repetir.
 
@@ -2242,7 +2287,7 @@ def almacen_instalar(alm: dict, seco: bool) -> None:
     """
     dev_user = cfg("DO_DEV_USER")
     pub = ruta_publica(ruta_clave_flota())
-    script = script_instalar_almacen(alm, dev_user, pub)
+    script = script_instalar_almacen(alm, dev_user, pub, espejar)
     if seco:
         log("SECO: esto es lo que se ejecutaría como root en el mini, y no se ejecuta:\n")
         log(script)
@@ -2445,9 +2490,9 @@ def script_estado_almacen(alm: dict) -> str:
 def almacen_estado(alm: dict, maquina: str) -> None:
     """Qué hay en el almacén y si está entero: montaje, fstab, usuario, repos con su regla,
     pushes registrados y apps. Desde cualquier máquina; sale != 0 si falta algo."""
-    vol = find_volume(alm["volumen"])
+    vol = find_volume(alm["volumen"], alm["region"])
     if not vol:
-        die(f"No existe el volumen '{alm['volumen']}' en la cuenta.")
+        die(f"No existe el volumen '{alm['volumen']}' en {alm['region']}.")
     duenos = vol.get("droplet_ids") or []
     log(f"volumen   {vol['name']}: {vol['size_gigabytes']} GB en {vol['region']['slug']}, "
         f"{'conectado al droplet ' + str(duenos[0]) if duenos else 'SIN CONECTAR'}")
@@ -2513,7 +2558,7 @@ def cmd_almacen(args: argparse.Namespace) -> None:
     alm = almacen_declarado()
     accion = args.action
     if accion == "instalar":
-        almacen_instalar(alm, args.seco)
+        almacen_instalar(alm, args.seco, args.espejar_desde_github)
     elif accion == "conectar":
         almacen_conectar(alm, args.repo or "", args.maquina or "")
     elif accion == "estado":
@@ -2547,7 +2592,7 @@ def cmd_volume(args: argparse.Namespace) -> None:
 
     if accion == "create":
         region = args.region or cfg("DO_REGION")
-        existente = find_volume(name)
+        existente = find_volume(name, region)
         if existente:
             log(
                 f"Ya existe '{name}' ({existente['size_gigabytes']} GB en "
@@ -2571,13 +2616,21 @@ def cmd_volume(args: argparse.Namespace) -> None:
         log(f"Creado (id {vol['id']}). Conéctalo con: volume attach {name} --droplet <nombre>")
         return
 
-    vol = find_volume(name)
-    if not vol:
-        die(f"No existe el volumen '{name}'. Míralos con: volume list")
-
     if accion == "attach":
+        # El droplet primero: su región dice cuál de los homónimos es (sólo se puede
+        # conectar uno de la misma región).
         droplet_name = args.droplet or cfg("DO_DROPLET_NAME")
         droplet, ip, port = resolve_target(droplet_name, args.port or 0)
+        vol = find_volume(name, args.region or droplet["region"]["slug"]) or find_volume(name)
+        if not vol:
+            die(f"No existe el volumen '{name}'. Míralos con: volume list")
+    else:
+        vol = find_volume(name, args.region or "")
+        if not vol:
+            die(f"No existe el volumen '{name}'"
+                + (f" en {args.region}" if args.region else "") + ". Míralos con: volume list")
+
+    if accion == "attach":
         if droplet["region"]["slug"] != vol["region"]["slug"]:
             die(
                 f"El volumen está en {vol['region']['slug']} y el droplet en "
@@ -6214,7 +6267,11 @@ def main() -> None:
     p.add_argument("name", nargs="?", help="nombre del volumen (o DO_VOLUME de .env)")
     p.add_argument("--droplet", help="droplet al que conectarlo (por defecto DO_DROPLET_NAME)")
     p.add_argument("--port", type=int)
-    p.add_argument("--region", help="sólo en create; por defecto DO_REGION")
+    p.add_argument(
+        "--region",
+        help="en create, dónde (por defecto DO_REGION); en el resto, CUÁL de los volúmenes "
+        "con ese nombre, si hay más de uno (en attach, por defecto la del droplet)",
+    )
     p.add_argument("--size-gb", type=int, help="en create (por defecto DO_VOLUME_SIZE_GB) y en resize (sólo crece)")
     p.add_argument("--description", help="sólo en create")
     p.add_argument(
@@ -6235,6 +6292,11 @@ def main() -> None:
     p.add_argument(
         "--seco", action="store_true",
         help="en instalar: enseña el script que correría como root y no toca nada",
+    )
+    p.add_argument(
+        "--espejar-desde-github", action="store_true",
+        help="en instalar: si falta un repo en el volumen, clonarlo de GitHub. Sin esto, "
+        "falta = fallo (GitHub es la copia congelada; lo normal es restaurar el volcado)",
     )
     p.set_defaults(func=cmd_almacen)
 
