@@ -200,6 +200,12 @@ def main() -> int:
             sin_restaurar.append(t.stem)
     caso("todo tipo con el coordinador restaura el historial en su post, después de conectar",
          not sin_restaurar, ", ".join(sin_restaurar))
+    # Desde el 2026-10-07 la web de lectura vive en el MINI, en modo remoto (una sola app,
+    # visible aunque el dev no exista). Si vuelve al dev, habría dos apps y la del dev muere con él.
+    cweb = json.loads((ROOT / "services" / "claude-web.json").read_text(encoding="utf-8"))
+    caso("claude-web va en el mini y NO en el dev",
+         "claude-web" in (mini.get("services") or []) and "claude-web" not in (dev.get("services") or []))
+    caso("...y se instala en modo remoto", "--remoto" in cweb.get("install", ""), cweb.get("install", ""))
     alm = mod.almacen_declarado()
     caso("almacen_declarado() lee el tipo", alm["monte"] == "/mnt/datos" and alm["repos"])
 

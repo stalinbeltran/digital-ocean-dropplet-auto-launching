@@ -12,7 +12,8 @@
     "telegram-launcher",
     "sispla-demo",
     "gauss-p",
-    "graph-simulator"
+    "graph-simulator",
+    "claude-web"
   ],
   "make_launcher": true,
   "post": [

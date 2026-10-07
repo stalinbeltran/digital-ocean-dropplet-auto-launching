@@ -10,8 +10,7 @@
   ],
   "services": [
     "telegram-coordinator",
-    "foveal-vision-web",
-    "claude-web"
+    "foveal-vision-web"
   ],
   "make_launcher": true,
   "post": [
