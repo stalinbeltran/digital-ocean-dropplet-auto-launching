@@ -198,6 +198,14 @@ def main() -> int:
         i_r = next((i for i, c in enumerate(post_t) if "estado-por-tema.mjs --restaurar" in c), -1)
         if not (0 <= i_c < i_r):
             sin_restaurar.append(t.stem)
+    # El revisor de rizo-2 (experimentos-cnn) RESTAURA sus pesos y su caché del almacén al arrancar: su
+    # `reponer.sh` va en el post del dev DESPUÉS de conectar, o arranca sin ellos y entrena ~2 h (2026-10-16).
+    post_dev = dev.get("post") or []
+    i_c = next((i for i, c in enumerate(post_dev) if "almacen conectar" in c), -1)
+    i_rev = next((i for i, c in enumerate(post_dev) if "web/reponer.sh" in c), -1)
+    caso("el dev repone el revisor de rizo-2 en su post, después de conectar", 0 <= i_c < i_rev,
+         f"conectar={i_c} reponer={i_rev}")
+    caso("...y clona experimentos-cnn, que es donde vive", "stalinbeltran/experimentos-cnn" in dev.get("repos", []))
     caso("todo tipo con el coordinador restaura el historial en su post, después de conectar",
          not sin_restaurar, ", ".join(sin_restaurar))
     # Desde el 2026-10-07 la web de lectura vive en el MINI, en modo remoto (una sola app,
