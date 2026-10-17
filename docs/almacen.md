@@ -423,3 +423,52 @@ historial que importa es el del dev), pero es la forma de siempre: **un mini que
 **Lo que NO se movió:** el dev de ese día sigue en nyc1 (funciona; su plan sólo dejó de
 poder **crearse** allí). El próximo dev nacerá en sfo2 porque `types/dev.json` lo declara.
 `types/big.json` se queda en nyc1: en sfo2 no hay ningún plan de 8 vCPU / 16 GB.
+
+## 8. La basura de git: se limpia sola desde el 2026-10-17
+
+**Lo que pasó.** El volumen (868 MB entonces) se llenó al 100 % la madrugada del 2026-10-17. No
+era historia: era un `objects/pack/tmp_pack_*` de **265 MiB** con hora 01:16, la misma que un push
+que **sí entró** (01:16:24 en `pushes.log`). Los `tmp_pack_*` los crea `pack-objects`
+(`builtin/pack-objects.c:1196`, git 2.43), así que lo más probable *(deducido de horas y código,
+no reproducido)* es el `gc --auto` que `receive.autogc` corre tras el push: un repack escribe el
+pack nuevo **entero** antes de borrar los viejos, necesita libre tanto como ocupan los packs, y
+había ~540 MB de repo en 868. Murió a mitad y dejó el pack a medias. Y **nada lo iba a borrar**:
+git limpia sus temporales en `git prune` con la caducidad de `gc.pruneExpire`, que aquí es
+`never`. El fallo se alimenta a sí mismo: con el disco lleno los push mueren antes de llegar a
+cualquier hook.
+
+**Lo que hay ahora** (`8c84e6e`), instalado por `almacen instalar`:
+
+- `/usr/local/sbin/almacen-basura`, que corre **cron cada hora (min 23) como `datos`**: borra
+  temporales de git (`tmp_*`, `.tmp-*`) bajo `objects/` con **más de 60 min sin escribirse** y
+  apunta cada borrado en `/mnt/datos/log/basura.log`. Nunca un objeto del repo: un temporal no
+  llegó a serlo. Quien escribe un temporal le cambia el mtime en cada bloque, y un repack entero
+  tarda ~1 min (medido ese día).
+- `almacen estado` enseña por repo la **basura** (vieja = la limpieza no corre = falla), el
+  **margen del gc** (libre < packs = el gc automático morirá a mitad = falla; se arregla con
+  `volume resize`) y si la **limpieza** está instalada.
+
+**Medido en el mini el 2026-10-17**, con un temporal falso de 1 byte fechado 2 h atrás:
+
+```
+$ python3 scripts/do_droplet.py almacen estado
+          basura: 0 MB, 1 temporal(es) de git con más de 60 min: la limpieza NO está corriendo (…)
+          margen gc: cabe (libres 1235 MB >= packs 535 MB)
+limpieza  cron cada hora (/etc/cron.d/almacen-basura)
+ERROR: Al almacén le falta algo (arriba está qué).
+$ sudo -u datos /usr/local/sbin/almacen-basura      # lo mismo que corre cron
+$ cat /mnt/datos/log/basura.log
+2026-10-17T13:31:23Z borrado /mnt/datos/git/foveal-vision-data.git/objects/pack/tmp_pack_PRUEBA
+$ python3 scripts/do_droplet.py almacen estado
+          basura: ninguna
+```
+
+⚠ **No visto todavía: que cron lo dispare SOLO.** Se comprueba después de un :23 con
+`sudo journalctl -u cron | grep almacen-basura` en el mini (debe salir `(datos) CMD (…)`).
+
+⚠ **El margen es la regla que hay que vigilar al crecer**: con el volumen a 2 GB, el gc
+automático cabe mientras el repo no pase de ~1 GB. `estado` lo dice antes de que muerda.
+
+8 casos en `tests/test_almacen.py`; la limpieza se prueba **ejecutando** el script que se
+instala contra ficheros reales (borra los temporales viejos; no toca uno reciente, ni un pack
+de verdad, ni nada fuera de `objects/`).
