@@ -291,7 +291,8 @@ def main() -> int:
          and mod.script_limpiar_basura("/mnt/datos/git", "/mnt/datos/log/basura.log") in script)
     estado0 = mod.script_estado_almacen(dict(alm, apps={}))
     caso("estado enseña la basura y falla si hay vieja (la limpieza no corre)",
-         "basura:" in estado0 and f"-mmin +{mod.ALMACEN_BASURA_MIN}" in estado0
+         "basura:" in estado0 and f"-mmin +{mod.ALMACEN_BASURA_ALARMA_MIN}" in estado0
+         and mod.ALMACEN_BASURA_ALARMA_MIN >= mod.ALMACEN_BASURA_MIN + 60
          and "la limpieza NO está corriendo" in estado0)
     caso("estado falla si el gc automático no cabe (libre < packs)",
          "margen gc: NO CABE" in estado0 and '[ "$lk" -lt "$pk" ]' in estado0)

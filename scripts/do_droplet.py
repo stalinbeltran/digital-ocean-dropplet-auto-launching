@@ -2057,6 +2057,9 @@ CONFIG_ALMACEN = [
 ALMACEN_BASURA_MIN = 60
 ALMACEN_BASURA_BIN = "/usr/local/sbin/almacen-basura"
 ALMACEN_BASURA_CRON = "/etc/cron.d/almacen-basura"
+# `estado` sólo grita con basura más vieja que caducidad + una vuelta de cron: antes de eso,
+# un temporal muerto puede seguir ahí sin que la limpieza esté rota (falsa alarma = freno ignorado).
+ALMACEN_BASURA_ALARMA_MIN = ALMACEN_BASURA_MIN + 60
 
 
 def script_limpiar_basura(git_dir: str, log: str) -> str:
@@ -2523,9 +2526,9 @@ def script_estado_almacen(alm: dict) -> str:
             "  bk=$(find \"$r/objects\" -type f \\( -name 'tmp_*' -o -name '.tmp-*' \\) "
             "-exec du -ck {} + 2>/dev/null | tail -1 | cut -f1); bk=${bk:-0}",
             "  bv=$(find \"$r/objects\" -type f \\( -name 'tmp_*' -o -name '.tmp-*' \\) "
-            f"-mmin +{ALMACEN_BASURA_MIN} 2>/dev/null | wc -l)",
+            f"-mmin +{ALMACEN_BASURA_ALARMA_MIN} 2>/dev/null | wc -l)",
             '  if [ "$bv" -gt 0 ]; then',
-            f'    echo "          basura: $((bk / 1024)) MB, $bv temporal(es) de git con más de {ALMACEN_BASURA_MIN} min: '
+            f'    echo "          basura: $((bk / 1024)) MB, $bv temporal(es) de git con más de {ALMACEN_BASURA_ALARMA_MIN} min: '
             f'la limpieza NO está corriendo (sudo {ALMACEN_BASURA_BIN}; ¿falta {ALMACEN_BASURA_CRON}? -> almacen instalar)"; ok=0',
             '  elif [ "$bk" -gt 0 ]; then',
             '    echo "          basura: $((bk / 1024)) MB en temporales recientes (un gc o un push en curso)"',
