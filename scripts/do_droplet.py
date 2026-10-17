@@ -2040,6 +2040,42 @@ CONFIG_ALMACEN = [
     ("gc.autoDetach", "false"),
 ]
 
+# LA BASURA DE GIT, que con «nadie borra» no limpia nadie (2026-10-17). Un `gc` o un push que
+# muere a mitad deja su pack a medias como `objects/pack/tmp_pack_*` (o `.tmp-*`), y git sólo
+# lo borra en `git prune` con la caducidad de `gc.pruneExpire` — que aquí es `never`. Medido
+# ese día: un `tmp_pack` de 265 MiB de las 01:16, la misma hora que un push que SÍ entró, o sea
+# el `gc --auto` de detrás (los `tmp_pack_*` los crea pack-objects) quedándose sin disco: un
+# repack necesita libre tanto como ocupan los packs, y el volumen de 868 MB tenía 540 de repo.
+# Era el 33 % del repo y dejó el disco al 100 %: el fallo se alimenta a sí mismo.
+#
+# No es «borrar datos»: un temporal nunca llegó a ser un objeto del repo (git lo llama
+# `garbage` en `count-objects -v`). Caducidad: 60 min sin escribirse. Quien lo está
+# escribiendo le cambia el mtime en cada bloque, así que un temporal vivo nunca es tan viejo,
+# y un repack del repo entero tarda ~1 min (medido el 2026-10-17, 540 MB en el mini).
+# Lo corre CRON y no un hook a propósito: con el disco lleno el push muere antes de llegar a
+# ningún hook, y la limpieza es justo lo que hace falta entonces.
+ALMACEN_BASURA_MIN = 60
+ALMACEN_BASURA_BIN = "/usr/local/sbin/almacen-basura"
+ALMACEN_BASURA_CRON = "/etc/cron.d/almacen-basura"
+
+
+def script_limpiar_basura(git_dir: str, log: str) -> str:
+    """El script que borra los temporales muertos de git en los repos del almacén y apunta
+    cada borrado. Es el MISMO texto que se instala y que corre el test contra ficheros reales."""
+    return (
+        "#!/bin/sh\n"
+        "# Lo instala `do_droplet.py almacen instalar`; lo corre cron cada hora como `datos`.\n"
+        f"# Borra SOLO temporales de git (tmp_* / .tmp-*) con más de {ALMACEN_BASURA_MIN} min sin\n"
+        "# escribirse: lo que deja un gc o un push muerto a mitad. Nunca un objeto del repo.\n"
+        f"find {shq(git_dir)} -path '*.git/objects/*' -type f "
+        r"\( -name 'tmp_*' -o -name '.tmp-*' \) "
+        f"-mmin +{ALMACEN_BASURA_MIN} -print -delete 2>/dev/null |\n"
+        "while read -r f; do\n"
+        f'  echo "$(date -u +%FT%TZ) borrado $f" >> {shq(log)}\n'
+        "done\n"
+        "exit 0\n"
+    )
+
 
 def hook_pre_receive(log: str) -> str:
     """El hook que hace cumplir «nadie borra» y apunta cada push SEGÚN OCURRE (R12).
@@ -2200,6 +2236,14 @@ def script_instalar_almacen(alm: dict, dev_user: str, pub: Path, espejar: bool =
         # el hook escribe con `|| true`: el registro de pushes se perdería sin un error.
         'chown -R "$U:$U" "$LOGD"',
         'install -d -m 755 -o "$DEV" -g "$DEV" "$APPS"',
+        # la limpieza de la basura de git, cada hora (ver ALMACEN_BASURA_MIN)
+        f"cat > {ALMACEN_BASURA_BIN} <<'BASURA'\n"
+        + script_limpiar_basura(git_dir, f"{log_dir}/basura.log") + "BASURA",
+        f"chmod 755 {ALMACEN_BASURA_BIN}",
+        f"printf 'SHELL=/bin/sh\\nPATH=/usr/bin:/bin\\n23 * * * * %s %s\\n' \"$U\" "
+        f"{shq(ALMACEN_BASURA_BIN)} > {ALMACEN_BASURA_CRON}",
+        f"chmod 644 {ALMACEN_BASURA_CRON}",
+        f'echo "  basura de git: {ALMACEN_BASURA_BIN} cada hora (cron), log en $LOGD/basura.log"',
     ]
     for repo in alm["repos"]:
         bare = f"{git_dir}/{repo}.git"
@@ -2474,7 +2518,35 @@ def script_estado_almacen(alm: dict) -> str:
             "  else",
             '    echo "          nadie borra: NO"; ok=0',
             "  fi",
+            # La basura de git (ver ALMACEN_BASURA_MIN): la que pasa de la caducidad es un
+            # fallo, porque significa que la limpieza de cron no está corriendo.
+            "  bk=$(find \"$r/objects\" -type f \\( -name 'tmp_*' -o -name '.tmp-*' \\) "
+            "-exec du -ck {} + 2>/dev/null | tail -1 | cut -f1); bk=${bk:-0}",
+            "  bv=$(find \"$r/objects\" -type f \\( -name 'tmp_*' -o -name '.tmp-*' \\) "
+            f"-mmin +{ALMACEN_BASURA_MIN} 2>/dev/null | wc -l)",
+            '  if [ "$bv" -gt 0 ]; then',
+            f'    echo "          basura: $((bk / 1024)) MB, $bv temporal(es) de git con más de {ALMACEN_BASURA_MIN} min: '
+            f'la limpieza NO está corriendo (sudo {ALMACEN_BASURA_BIN}; ¿falta {ALMACEN_BASURA_CRON}? -> almacen instalar)"; ok=0',
+            '  elif [ "$bk" -gt 0 ]; then',
+            '    echo "          basura: $((bk / 1024)) MB en temporales recientes (un gc o un push en curso)"',
+            "  else",
+            '    echo "          basura: ninguna"',
+            "  fi",
+            # El margen del gc automático: un repack escribe el pack nuevo entero ANTES de
+            # borrar los viejos, así que necesita libre al menos lo que ocupan los packs. Sin
+            # eso muere a mitad, deja un tmp_pack y llena el disco (2026-10-17).
+            "  pk=$(find \"$r/objects/pack\" -name 'pack-*' -type f -exec du -ck {} + 2>/dev/null "
+            "| tail -1 | cut -f1); pk=${pk:-0}",
+            '  lk=$(df -Pk "$M" | awk \'NR==2{print $4}\')',
+            '  if [ "$lk" -lt "$pk" ]; then',
+            '    echo "          margen gc: NO CABE — libres $((lk / 1024)) MB < packs $((pk / 1024)) MB: el gc automático '
+            'morirá a mitad y dejará basura. Amplía: volume resize"; ok=0',
+            "  else",
+            '    echo "          margen gc: cabe (libres $((lk / 1024)) MB >= packs $((pk / 1024)) MB)"',
+            "  fi",
             "done",
+            f'[ -f {ALMACEN_BASURA_CRON} ] && echo "limpieza  cron cada hora ({ALMACEN_BASURA_CRON})" '
+            f'|| {{ echo "limpieza  NO instalada ({ALMACEN_BASURA_CRON} falta): almacen instalar"; ok=0; }}',
             'if [ -f "$M/log/pushes.log" ]; then',
             '  echo "pushes    $(wc -l < "$M/log/pushes.log") registrados; los ultimos:"',
             '  tail -3 "$M/log/pushes.log" | sed "s/^/          /"',

@@ -122,6 +122,48 @@ def main() -> int:
         code, out = git(desnudo, "log", "--format=%s", "-1", "refs/heads/main")
         caso("...y no se pierde nada al reempaquetar", out.strip() == "c6", out.strip())
 
+    # --- 1 ter. la basura de git se limpia sola, y SÓLO la basura -------------
+    # (2026-10-17: un tmp_pack de 265 MiB de un gc muerto llenó el volumen; con
+    # gc.pruneExpire=never git no lo iba a borrar nunca). Se ejecuta el MISMO script
+    # que se instala, contra ficheros de verdad.
+    import time as _time
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        gitd, logb = t / "git", t / "basura.log"
+        pack = gitd / "datos.git" / "objects" / "pack"
+        pack.mkdir(parents=True)
+        viejo = _time.time() - 2 * 3600
+        ficheros = {
+            "tmp_viejo": pack / "tmp_pack_AbC123",
+            "punto_viejo": pack / ".tmp-4242-pack-deadbeef.pack",
+            "tmp_obj_viejo": gitd / "datos.git" / "objects" / "tmp_obj_XyZ",
+            "tmp_fresco": pack / "tmp_pack_Fresco",
+            "pack_viejo": pack / "pack-1234.pack",
+            "idx_viejo": pack / "pack-1234.idx",
+            "fuera_de_objects": gitd / "datos.git" / "tmp_config",
+        }
+        for nombre, f in ficheros.items():
+            f.write_bytes(b"x" * 10)
+            if nombre != "tmp_fresco":
+                os.utime(f, (viejo, viejo))
+        guion = t / "almacen-basura"
+        guion.write_text(mod.script_limpiar_basura(str(gitd), str(logb)), encoding="utf-8")
+        p = subprocess.run(["sh", str(guion)], capture_output=True, text=True)
+        caso("la limpieza sale con 0", p.returncode == 0, p.stderr.strip())
+        vivos = {n for n, f in ficheros.items() if f.exists()}
+        caso("borra los temporales de git viejos (tmp_*, .tmp-*)",
+             not vivos & {"tmp_viejo", "punto_viejo", "tmp_obj_viejo"}, ", ".join(sorted(vivos)))
+        caso("...NO toca un temporal reciente (un gc en curso)", "tmp_fresco" in vivos)
+        caso("...NO toca un pack de verdad, por viejo que sea",
+             {"pack_viejo", "idx_viejo"} <= vivos)
+        caso("...NO toca nada fuera de objects/", "fuera_de_objects" in vivos)
+        lineas = logb.read_text().splitlines() if logb.exists() else []
+        caso("...y apunta cada borrado en el log", len(lineas) == 3 and all("borrado" in l for l in lineas),
+             f"{len(lineas)} líneas")
+        p = subprocess.run(["sh", str(guion)], capture_output=True, text=True)
+        caso("sin nada que borrar, sale con 0 y no escribe", p.returncode == 0
+             and len(logb.read_text().splitlines()) == 3)
+
     # --- 2. el alias de ssh, idempotente y sin pisar nada --------------------
     with tempfile.TemporaryDirectory() as tmp:
         config = Path(tmp) / "config"
@@ -243,6 +285,17 @@ def main() -> int:
     caso("toda orden git sobre el repo va como `datos`, nunca como root",
          'git -C "$R" config' not in script.replace('sudo -u "$U" -H git -C "$R" config', '')
          and 'sudo -u "$U" -H git -C "$R" config' in script)
+    caso("instalar deja la limpieza de basura en cron, cada hora y como `datos`",
+         mod.ALMACEN_BASURA_CRON in script and mod.ALMACEN_BASURA_BIN in script
+         and "23 * * * * %s %s" in script and '"$U"' in script
+         and mod.script_limpiar_basura("/mnt/datos/git", "/mnt/datos/log/basura.log") in script)
+    estado0 = mod.script_estado_almacen(dict(alm, apps={}))
+    caso("estado enseña la basura y falla si hay vieja (la limpieza no corre)",
+         "basura:" in estado0 and f"-mmin +{mod.ALMACEN_BASURA_MIN}" in estado0
+         and "la limpieza NO está corriendo" in estado0)
+    caso("estado falla si el gc automático no cabe (libre < packs)",
+         "margen gc: NO CABE" in estado0 and '[ "$lk" -lt "$pk" ]' in estado0)
+    caso("estado falla si la limpieza no está instalada", "limpieza  NO instalada" in estado0)
     # Con una app de pega: desde el 2026-10-07 el mini no declara ninguna (sispla-demo se
     # retiró), y el mecanismo tiene que seguir comprobándose para la siguiente.
     estado = mod.script_estado_almacen(dict(alm, apps={"una-app": "datos"}))
